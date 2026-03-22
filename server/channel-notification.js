@@ -49,7 +49,7 @@ export function buildChannelNotificationParams(event) {
       quoted_message_id: event?.quoted_message_id,
       session_type: event?.session_type,
       msg_type: event?.msg_type,
-      ts: formatTimestamp(event?.message_created_at),
+      ts: formatTimestamp(event?.created_at),
       mention_user_ids: Array.isArray(event?.mention_user_ids) ? event.mention_user_ids : [],
       owner_id: event?.owner_id,
       agent_id: event?.agent_id,
