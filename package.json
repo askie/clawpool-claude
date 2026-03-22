@@ -1,0 +1,29 @@
+{
+  "name": "@dhfpub/clawpool-claude",
+  "version": "0.1.0",
+  "description": "Claude Code channel plugin for Aibot ClawPool",
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "hooks",
+    "scripts",
+    "skills",
+    ".claude-plugin"
+  ],
+  "scripts": {
+    "prepublishOnly": "npm run build",
+    "clean": "node -e \"const fs=require('node:fs'); fs.rmSync('dist', { recursive: true, force: true });\"",
+    "build": "npm run clean && esbuild server/main.js --bundle --platform=node --format=cjs --target=node20 --outfile=dist/main.cjs",
+    "test": "node --test server/*.test.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.18.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.0"
+  }
+}

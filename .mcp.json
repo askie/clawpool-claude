@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "clawpool-claude": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/dist/main.cjs"
+      ],
+      "cwd": "${CLAUDE_PLUGIN_ROOT}"
+    }
+  }
+}

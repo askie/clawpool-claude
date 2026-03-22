@@ -1,0 +1,18 @@
+{
+  "name": "clawpool",
+  "version": "0.1.0",
+  "description": "Claude Code channel plugin for Aibot ClawPool over the Agent API WebSocket.",
+  "author": {
+    "name": "Aibot"
+  },
+  "homepage": "https://github.com/askie/aibot/tree/main/claude_plugins/clawpool",
+  "repository": "https://github.com/askie/aibot",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "plugin",
+    "channel",
+    "clawpool",
+    "aibot"
+  ]
+}
