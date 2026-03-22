@@ -1,6 +1,6 @@
 {
   "name": "@dhfpub/clawpool-claude",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Claude Code channel plugin for Aibot ClawPool",
   "type": "module",
   "publishConfig": {
