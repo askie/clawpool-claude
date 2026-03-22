@@ -11,7 +11,8 @@
     "hooks",
     "scripts",
     "skills",
-    ".claude-plugin"
+    ".claude-plugin",
+    "start.sh"
   ],
   "scripts": {
     "prepublishOnly": "npm run build",

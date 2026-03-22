@@ -416,8 +416,8 @@ async function dispatchChannelNotification(event) {
 
 function buildStatusHints() {
   const hints = [
-    "Development channel startup requires running Claude from a workspace that contains .mcp.json with a clawpool-claude entry: cd /tmp/claude-clawpool-claude-<account>-workspace && CLAUDE_PLUGIN_DATA=/abs/path/to/claude-data/clawpool-claude claude --plugin-dir /abs/path/to/claude_plugins/clawpool-claude --dangerously-load-development-channels server:clawpool-claude",
-    "Use ./scripts/setup-claude-clawpool-claude-debug.sh to prepare that /tmp workspace and launch Claude in one step. Do not add --channels server:clawpool-claude for the bare .mcp.json server.",
+    "Development channel startup requires running Claude from a workspace that contains .mcp.json with a clawpool-claude entry: cd /tmp/claude-clawpool-claude-<account>-workspace && CLAUDE_PLUGIN_DATA=/abs/path/to/claude-data/clawpool-claude claude --plugin-dir /abs/path/to/clawpool-claude --dangerously-load-development-channels server:clawpool-claude",
+    "Use ./start.sh to prepare config and launch Claude in one step. Do not add --channels server:clawpool-claude for the bare .mcp.json server.",
     "Team and Enterprise orgs must also enable channelsEnabled or channel notifications will not arrive.",
   ];
 
@@ -429,7 +429,7 @@ function buildStatusHints() {
   }
 
   if (!configStore.isConfigured()) {
-    hints.unshift("Clawpool is not configured. Run /clawpool-claude:configure.");
+    hints.unshift("Clawpool is not configured. Run /clawpool:configure.");
   } else if (!latestClientStatus.authed) {
     hints.unshift("Clawpool is configured but not authenticated. Check ws_url, agent_id, api_key, and backend reachability.");
   }
@@ -456,7 +456,7 @@ async function sendPairingMessage(event) {
   const text = [
     "This sender is not allowlisted for the Claude Clawpool channel.",
     `Pairing code: ${pair.code}`,
-    "Ask the Claude Code user to run /clawpool-claude:access pair <code> with this code to approve the sender.",
+    "Ask the Claude Code user to run /clawpool:access pair <code> with this code to approve the sender.",
   ].join("\n");
 
   await aibotClient.sendText({

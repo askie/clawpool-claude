@@ -55,7 +55,7 @@ function formatPermissionSuggestions(requestID, suggestions) {
   const lines = ["Rule suggestions:"];
   suggestions.forEach((suggestion, index) => {
     lines.push(`${index + 1}. ${stringifyCompact(suggestion, 180)}`);
-    lines.push(`   Apply: /clawpool-claude-approval ${requestID} allow-rule ${index + 1}`);
+    lines.push(`   Apply: /clawpool-approval ${requestID} allow-rule ${index + 1}`);
   });
   return lines;
 }
@@ -66,8 +66,8 @@ export function buildApprovalRequestText(request) {
     "Claude needs permission to continue this ClawPool turn.",
     `Request ID: ${requestID}`,
     ...formatToolDetails(request),
-    `Approve once: /clawpool-claude-approval ${requestID} allow`,
-    `Deny: /clawpool-claude-approval ${requestID} deny optional reason`,
+    `Approve once: /clawpool-approval ${requestID} allow`,
+    `Deny: /clawpool-approval ${requestID} deny optional reason`,
     ...formatPermissionSuggestions(requestID, request.permission_suggestions),
   ];
   return lines.join("\n");

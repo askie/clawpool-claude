@@ -39,9 +39,9 @@ export function buildQuestionRequestText(request) {
   });
 
   if (questions.length === 1) {
-    lines.push(`Answer: /clawpool-claude-question ${requestID} your answer`);
+    lines.push(`Answer: /clawpool-question ${requestID} your answer`);
   } else {
-    lines.push(`Answer: /clawpool-claude-question ${requestID} 1=first answer; 2=second answer`);
+    lines.push(`Answer: /clawpool-question ${requestID} 1=first answer; 2=second answer`);
   }
   lines.push("Free text is allowed when none of the listed options fit.");
   return lines.join("\n");

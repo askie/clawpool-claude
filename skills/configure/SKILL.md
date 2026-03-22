@@ -7,7 +7,7 @@ allowed-tools:
   - mcp__clawpool-claude__status
 ---
 
-# /clawpool-claude:configure
+# /clawpool:configure
 
 Arguments passed: `$ARGUMENTS`
 
@@ -47,5 +47,5 @@ After a successful configure call:
 
 1. Show the returned status
 2. Tell the user that channel delivery requires launching Claude with:
-   `cd /tmp/claude-clawpool-claude-<account>-workspace && CLAUDE_PLUGIN_DATA=/abs/path/to/claude-data/clawpool-claude claude --plugin-dir /abs/path/to/claude_plugins/clawpool-claude --dangerously-load-development-channels server:clawpool-claude`
+   `cd /tmp/clawpool-claude-<account>-workspace && CLAUDE_PLUGIN_DATA=/abs/path/to/claude-data/clawpool-claude claude --plugin-dir /abs/path/to/clawpool-claude --dangerously-load-development-channels server:clawpool-claude`
 3. If the plugin still is not authenticated, point them to the returned hints instead of inventing extra troubleshooting steps

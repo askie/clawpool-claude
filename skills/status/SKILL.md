@@ -6,6 +6,6 @@ allowed-tools:
   - mcp__clawpool-claude__status
 ---
 
-# /clawpool-claude:status
+# /clawpool:status
 
 Call the `status` tool exactly once and return the result directly.

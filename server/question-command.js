@@ -1,7 +1,7 @@
 const usageText = [
   "usage:",
-  "/clawpool-claude-question <request_id> <answer>",
-  "/clawpool-claude-question <request_id> 1=first answer; 2=second answer",
+  "/clawpool-question <request_id> <answer>",
+  "/clawpool-question <request_id> 1=first answer; 2=second answer",
 ].join("\n");
 
 function normalizeString(value) {
@@ -39,7 +39,7 @@ function parseMappedAnswers(payload) {
 
 export function parseQuestionResponseCommand(text) {
   const trimmed = normalizeString(text);
-  if (!trimmed.startsWith("/clawpool-claude-question")) {
+  if (!trimmed.startsWith("/clawpool-question")) {
     return {
       matched: false,
     };
