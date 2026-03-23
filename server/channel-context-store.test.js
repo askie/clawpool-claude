@@ -12,6 +12,7 @@ test("channel context store persists and matches by session and transcript", asy
   await store.put({
     session_id: "session-1",
     transcript_path: "/tmp/transcript-1.jsonl",
+    cwd: "/repo/a",
     updated_at: Date.now(),
     context: {
       chat_id: "chat-1",
@@ -24,6 +25,7 @@ test("channel context store persists and matches by session and transcript", asy
   const matched = await store.getMatchingContext({
     sessionID: "session-1",
     transcriptPath: "/tmp/transcript-1.jsonl",
+    workingDir: "/repo/a",
     maxAgeMs: 60_000,
   });
   assert.equal(matched.chat_id, "chat-1");
@@ -31,6 +33,7 @@ test("channel context store persists and matches by session and transcript", asy
   const mismatched = await store.getMatchingContext({
     sessionID: "session-1",
     transcriptPath: "/tmp/transcript-2.jsonl",
+    workingDir: "/repo/a",
     maxAgeMs: 60_000,
   });
   assert.equal(mismatched, null);
@@ -43,6 +46,7 @@ test("channel context store exposes mismatch and stale inspection states", async
   await store.put({
     session_id: "session-2",
     transcript_path: "/tmp/transcript-2.jsonl",
+    cwd: "/repo/b",
     updated_at: Date.now() - 120_000,
     context: {
       chat_id: "chat-2",
@@ -55,13 +59,23 @@ test("channel context store exposes mismatch and stale inspection states", async
   const mismatched = await store.inspectMatchingContext({
     sessionID: "session-2",
     transcriptPath: "/tmp/transcript-3.jsonl",
+    workingDir: "/repo/b",
     maxAgeMs: 60_000,
   });
   assert.equal(mismatched.status, "transcript_mismatch");
 
+  const cwdMismatched = await store.inspectMatchingContext({
+    sessionID: "session-2",
+    transcriptPath: "/tmp/transcript-2.jsonl",
+    workingDir: "/repo/c",
+    maxAgeMs: 300_000,
+  });
+  assert.equal(cwdMismatched.status, "cwd_mismatch");
+
   const stale = await store.inspectMatchingContext({
     sessionID: "session-2",
     transcriptPath: "/tmp/transcript-2.jsonl",
+    workingDir: "/repo/b",
     maxAgeMs: 60_000,
   });
   assert.equal(stale.status, "stale");

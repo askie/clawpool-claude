@@ -15,6 +15,7 @@ test("hook channel context resolver prefers stored session context", async () =>
   await store.put({
     session_id: "session-1",
     transcript_path: transcriptPath,
+    cwd: "/repo/a",
     updated_at: Date.now(),
     context: {
       chat_id: "chat-1",
@@ -28,6 +29,7 @@ test("hook channel context resolver prefers stored session context", async () =>
     sessionContextStore: store,
     sessionID: "session-1",
     transcriptPath,
+    workingDir: "/repo/a",
     maxAgeMs: 60_000,
   });
   assert.equal(resolution.status, "resolved");
@@ -53,6 +55,7 @@ test("hook channel context resolver allows transcript fallback for a single claw
     sessionContextStore: store,
     sessionID: "session-9",
     transcriptPath,
+    workingDir: "/repo/a",
     maxAgeMs: 60_000,
   });
   assert.equal(resolution.status, "resolved");
@@ -82,8 +85,39 @@ test("hook channel context resolver refuses ambiguous transcript fallback", asyn
     sessionContextStore: store,
     sessionID: "session-10",
     transcriptPath,
+    workingDir: "/repo/a",
     maxAgeMs: 60_000,
   });
   assert.equal(resolution.status, "unresolved");
   assert.equal(resolution.reason, "transcript_ambiguous");
+});
+
+test("hook channel context resolver rejects stored context from a different working directory", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-context-resolution-"));
+  const transcriptPath = path.join(dir, "transcript.jsonl");
+  await writeFile(transcriptPath, "", "utf8");
+
+  const store = new ChannelContextStore(dir);
+  await store.put({
+    session_id: "session-11",
+    transcript_path: transcriptPath,
+    cwd: "/repo/a",
+    updated_at: Date.now(),
+    context: {
+      chat_id: "chat-11",
+      event_id: "evt-11",
+      message_id: "msg-11",
+      sender_id: "u-11",
+    },
+  });
+
+  const resolution = await resolveHookChannelContext({
+    sessionContextStore: store,
+    sessionID: "session-11",
+    transcriptPath,
+    workingDir: "/repo/b",
+    maxAgeMs: 60_000,
+  });
+  assert.equal(resolution.status, "unresolved");
+  assert.equal(resolution.reason, "session_context_cwd_mismatch");
 });

@@ -15,11 +15,13 @@ export async function resolveHookChannelContext({
   sessionContextStore,
   sessionID,
   transcriptPath,
+  workingDir,
   maxAgeMs,
 }) {
   const sessionInspection = await sessionContextStore.inspectMatchingContext({
     sessionID,
     transcriptPath,
+    workingDir,
     maxAgeMs,
   });
   if (sessionInspection.status === "matched" && sessionInspection.context?.chat_id) {
@@ -61,6 +63,13 @@ export async function resolveHookChannelContext({
 
   if (sessionInspection.status === "transcript_mismatch") {
     return buildUnresolvedResult("session_context_transcript_mismatch", {
+      sessionStatus: sessionInspection.status,
+      transcriptStatus: transcriptResolution.status,
+    });
+  }
+
+  if (sessionInspection.status === "cwd_mismatch") {
+    return buildUnresolvedResult("session_context_cwd_mismatch", {
       sessionStatus: sessionInspection.status,
       transcriptStatus: transcriptResolution.status,
     });

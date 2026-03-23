@@ -20,6 +20,7 @@ function normalizeContext(input) {
   const context = input.context ?? {};
   const sessionID = normalizeString(input.session_id);
   const transcriptPath = normalizeString(input.transcript_path);
+  const cwd = normalizeString(input.cwd);
   const chatID = normalizeString(context.chat_id);
   if (!sessionID || !transcriptPath || !chatID) {
     return null;
@@ -29,6 +30,7 @@ function normalizeContext(input) {
     schema_version: schemaVersion,
     session_id: sessionID,
     transcript_path: transcriptPath,
+    cwd,
     updated_at: Number(input.updated_at ?? Date.now()),
     context: {
       raw_tag: normalizeString(context.raw_tag),
@@ -78,10 +80,11 @@ export class ChannelContextStore {
     return normalizeContext(stored);
   }
 
-  async getMatchingContext({ sessionID, transcriptPath, maxAgeMs }) {
+  async getMatchingContext({ sessionID, transcriptPath, workingDir, maxAgeMs }) {
     const inspection = await this.inspectMatchingContext({
       sessionID,
       transcriptPath,
+      workingDir,
       maxAgeMs,
     });
     if (inspection.status !== "matched") {
@@ -90,7 +93,7 @@ export class ChannelContextStore {
     return inspection.context;
   }
 
-  async inspectMatchingContext({ sessionID, transcriptPath, maxAgeMs }) {
+  async inspectMatchingContext({ sessionID, transcriptPath, workingDir, maxAgeMs }) {
     const stored = await this.get(sessionID);
     if (!stored) {
       return {
@@ -101,6 +104,12 @@ export class ChannelContextStore {
     if (normalizeString(transcriptPath) && stored.transcript_path !== normalizeString(transcriptPath)) {
       return {
         status: "transcript_mismatch",
+        context: null,
+      };
+    }
+    if (normalizeString(workingDir) && stored.cwd !== normalizeString(workingDir)) {
+      return {
+        status: "cwd_mismatch",
         context: null,
       };
     }

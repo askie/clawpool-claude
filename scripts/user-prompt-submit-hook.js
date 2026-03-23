@@ -37,10 +37,13 @@ async function main() {
   await store.put({
     session_id: input.session_id,
     transcript_path: input.transcript_path,
+    cwd: input.cwd,
     updated_at: Date.now(),
     context,
   });
-  logDebug(`stored session=${String(input.session_id ?? "")} chat_id=${context.chat_id}`);
+  logDebug(
+    `stored session=${String(input.session_id ?? "")} cwd=${String(input.cwd ?? "")} chat_id=${context.chat_id}`,
+  );
   process.stdout.write("{}\n");
 }
 

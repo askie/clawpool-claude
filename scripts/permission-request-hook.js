@@ -83,10 +83,11 @@ async function main() {
     sessionContextStore,
     sessionID: input.session_id,
     transcriptPath: input.transcript_path,
+    workingDir: input.cwd,
     maxAgeMs: recentChannelContextMaxAgeMs,
   });
   logDebug(
-    `context session=${String(input.session_id ?? "")} transcript=${String(input.transcript_path ?? "")} status=${contextResolution.status} reason=${contextResolution.reason || ""} source=${contextResolution.source || ""}`,
+    `context session=${String(input.session_id ?? "")} cwd=${String(input.cwd ?? "")} transcript=${String(input.transcript_path ?? "")} status=${contextResolution.status} reason=${contextResolution.reason || ""} source=${contextResolution.source || ""}`,
   );
   if (contextResolution.status !== "resolved" || !contextResolution.context?.chat_id) {
     process.stderr.write(
