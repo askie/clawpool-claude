@@ -169,6 +169,14 @@ export class DaemonRuntime {
           status: current.worker_status,
         };
       }
+      const workerID = normalizeString(binding.worker_id);
+      if (workerID) {
+        const existingRuntime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
+        const existingPid = Number(existingRuntime?.pid ?? 0);
+        if (existingPid > 0 && this.isProcessRunning(existingPid)) {
+          return { worker_id: workerID, status: "starting" };
+        }
+      }
     }
 
     await this.bindingRegistry.markWorkerStarting(binding.aibot_session_id, {
