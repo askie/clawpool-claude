@@ -1,4 +1,5 @@
-import { ensurePluginDataDir } from "./paths.js";
+import path from "node:path";
+import { mkdir } from "node:fs/promises";
 import { readJSONFile, writeJSONFileAtomic } from "./json-file.js";
 
 export const DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT = 1200;
@@ -36,13 +37,13 @@ function normalizeConfigShape(input = {}) {
   };
 }
 
-function applyEnvOverrides(config) {
+function applyEnvOverrides(config, env = process.env) {
   const next = { ...config };
-  const wsURL = normalizeString(process.env.CLAWPOOL_WS_URL);
-  const agentID = normalizeString(process.env.CLAWPOOL_AGENT_ID);
-  const apiKey = normalizeString(process.env.CLAWPOOL_API_KEY);
+  const wsURL = normalizeString(env.CLAWPOOL_WS_URL);
+  const agentID = normalizeString(env.CLAWPOOL_AGENT_ID);
+  const apiKey = normalizeString(env.CLAWPOOL_API_KEY);
   const outboundTextChunkLimit = normalizePositiveInt(
-    process.env.CLAWPOOL_OUTBOUND_TEXT_CHUNK_LIMIT,
+    env.CLAWPOOL_OUTBOUND_TEXT_CHUNK_LIMIT,
     next.outbound_text_chunk_limit,
   );
   if (wsURL) {
@@ -89,15 +90,16 @@ function redactAPIKey(apiKey) {
 }
 
 export class ConfigStore {
-  constructor(filePath) {
+  constructor(filePath, { env = process.env } = {}) {
     this.filePath = filePath;
+    this.env = env;
     this.config = { ...defaultConfig };
   }
 
   async load() {
-    await ensurePluginDataDir();
+    await mkdir(path.dirname(this.filePath), { recursive: true });
     const stored = await readJSONFile(this.filePath, defaultConfig);
-    this.config = normalizeConfigShape(applyEnvOverrides(stored));
+    this.config = normalizeConfigShape(applyEnvOverrides(stored, this.env));
     validateConfig(this.config);
     return this.get();
   }
@@ -138,9 +140,9 @@ export class ConfigStore {
       ...input,
     });
     validateConfig(next);
-    await ensurePluginDataDir();
+    await mkdir(path.dirname(this.filePath), { recursive: true });
     await writeJSONFileAtomic(this.filePath, next);
-    this.config = applyEnvOverrides(next);
+    this.config = applyEnvOverrides(next, this.env);
     validateConfig(this.config);
     return this.getStatus();
   }

@@ -7,7 +7,6 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { AccessStore } from "./access-store.js";
-import { AibotClient } from "./aibot-client.js";
 import { uploadReplyFileToAgentMedia } from "./agent-api-media.js";
 import { parseApprovalDecisionCommand } from "./approval-command.js";
 import { ApprovalStore } from "./approval-store.js";
@@ -154,11 +153,11 @@ let approvalPollTimer = null;
 let questionPollTimer = null;
 
 let latestClientStatus = {
-  configured: false,
+  configured: daemonModeEnabled,
   connecting: false,
-  connected: false,
-  authed: false,
-  last_error: "",
+  connected: daemonModeEnabled,
+  authed: daemonModeEnabled,
+  last_error: daemonModeEnabled ? "" : "worker must be started by clawpool-claude daemon",
 };
 
 function logInfo(message) {
@@ -239,24 +238,6 @@ const resultTimeouts = new ResultTimeoutManager({
   onTimeout: onResultTimeout,
 });
 
-const aibotClient = new AibotClient({
-  onStatus(status) {
-    latestClientStatus = status;
-    logDebug(
-      `status configured=${status.configured} connecting=${status.connecting} connected=${status.connected} authed=${status.authed} last_error=${status.last_error || ""}`,
-    );
-  },
-  async onEventMessage(payload) {
-    await handleInboundEvent(payload);
-  },
-  async onEventStop(payload) {
-    await handleStopEvent(payload);
-  },
-  async onEventRevoke(payload) {
-    await handleRevokeEvent(payload);
-  },
-});
-
 const workerBridgeClient = new WorkerBridgeClient({
   bridgeURL: daemonBridgeURL,
   token: daemonBridgeToken,
@@ -282,84 +263,68 @@ function isDaemonBridgeActive() {
   return daemonModeEnabled && workerBridgeClient.isConfigured();
 }
 
-async function sendTextOutbound(payload) {
-  if (isDaemonBridgeActive()) {
-    return workerBridgeClient.sendText({
-      event_id: payload.eventID,
-      session_id: payload.sessionID,
-      text: payload.text,
-      quoted_message_id: payload.quotedMessageID,
-      client_msg_id: payload.clientMsgID,
-      extra: payload.extra,
-    });
+function requireDaemonBridge() {
+  if (!isDaemonBridgeActive()) {
+    throw new Error("clawpool-claude worker must be started by clawpool-claude daemon");
   }
-  return aibotClient.sendText(payload);
+}
+
+async function sendTextOutbound(payload) {
+  requireDaemonBridge();
+  return workerBridgeClient.sendText({
+    event_id: payload.eventID,
+    session_id: payload.sessionID,
+    text: payload.text,
+    quoted_message_id: payload.quotedMessageID,
+    client_msg_id: payload.clientMsgID,
+    extra: payload.extra,
+  });
 }
 
 async function sendMediaOutbound(payload) {
-  if (isDaemonBridgeActive()) {
-    return workerBridgeClient.sendMedia({
-      event_id: payload.eventID,
-      session_id: payload.sessionID,
-      media_url: payload.mediaURL,
-      caption: payload.caption,
-      quoted_message_id: payload.quotedMessageID,
-      client_msg_id: payload.clientMsgID,
-      extra: payload.extra,
-    });
-  }
-  return aibotClient.sendMedia(payload);
+  requireDaemonBridge();
+  return workerBridgeClient.sendMedia({
+    event_id: payload.eventID,
+    session_id: payload.sessionID,
+    media_url: payload.mediaURL,
+    caption: payload.caption,
+    quoted_message_id: payload.quotedMessageID,
+    client_msg_id: payload.clientMsgID,
+    extra: payload.extra,
+  });
 }
 
 async function deleteMessageOutbound(sessionID, messageID) {
-  if (isDaemonBridgeActive()) {
-    return workerBridgeClient.deleteMessage({
-      session_id: sessionID,
-      msg_id: messageID,
-    });
-  }
-  return aibotClient.deleteMessage(sessionID, messageID);
+  requireDaemonBridge();
+  return workerBridgeClient.deleteMessage({
+    session_id: sessionID,
+    msg_id: messageID,
+  });
 }
 
 async function ackEventOutbound(eventID, { sessionID, msgID, receivedAt = Date.now() } = {}) {
-  if (isDaemonBridgeActive()) {
-    return workerBridgeClient.ackEvent({
-      event_id: eventID,
-      session_id: sessionID,
-      msg_id: msgID,
-      received_at: Math.floor(receivedAt),
-    });
-  }
-  aibotClient.ackEvent(eventID, {
-    sessionID,
-    msgID,
-    receivedAt,
+  requireDaemonBridge();
+  return workerBridgeClient.ackEvent({
+    event_id: eventID,
+    session_id: sessionID,
+    msg_id: msgID,
+    received_at: Math.floor(receivedAt),
   });
-  return { ok: true };
 }
 
 async function sendEventResultOutbound(payload) {
-  if (isDaemonBridgeActive()) {
-    return workerBridgeClient.sendEventResult(payload);
-  }
-  aibotClient.sendEventResult(payload);
-  return { ok: true };
+  requireDaemonBridge();
+  return workerBridgeClient.sendEventResult(payload);
 }
 
 async function sendEventStopAckOutbound(payload) {
-  if (isDaemonBridgeActive()) {
-    return workerBridgeClient.sendEventStopAck(payload);
-  }
-  aibotClient.sendEventStopAck(payload);
-  return { ok: true };
+  requireDaemonBridge();
+  return workerBridgeClient.sendEventStopAck(payload);
 }
 
 async function sendEventStopResultOutbound(payload) {
-  if (isDaemonBridgeActive()) {
-    return workerBridgeClient.sendEventStopResult(payload);
-  }
-  aibotClient.sendEventStopResult(payload);
-  return { ok: true };
+  requireDaemonBridge();
+  return workerBridgeClient.sendEventStopResult(payload);
 }
 
 async function setSessionComposingOutbound({
@@ -369,23 +334,14 @@ async function setSessionComposingOutbound({
   refMsgID = "",
   refEventID = "",
 }) {
-  if (isDaemonBridgeActive()) {
-    return workerBridgeClient.setSessionComposing({
-      session_id: sessionID,
-      active,
-      ttl_ms: ttlMs,
-      ref_msg_id: refMsgID,
-      ref_event_id: refEventID,
-    });
-  }
-  aibotClient.setSessionComposing({
-    sessionID,
+  requireDaemonBridge();
+  return workerBridgeClient.setSessionComposing({
+    session_id: sessionID,
     active,
-    ttlMs,
-    refMsgID,
-    refEventID,
+    ttl_ms: ttlMs,
+    ref_msg_id: refMsgID,
+    ref_event_id: refEventID,
   });
-  return { ok: true };
 }
 
 function resendAck(event) {
@@ -541,16 +497,13 @@ async function dispatchChannelNotification(event) {
 
 function buildStatusHints() {
   const hints = [
-    "Open Claude through the clawpool-claude command so the channel and plugin are loaded together.",
-    "Team and Enterprise orgs must also enable channelsEnabled or channel notifications will not arrive.",
+    "This worker is managed by clawpool-claude daemon.",
+    "Use the daemon CLI to change ws_url, agent_id, or api_key.",
+    "Send open <目录> from ClawPool to let daemon start or recover a Claude session.",
   ];
 
-  if (isDaemonBridgeActive()) {
-    hints.unshift("This worker is running under the clawpool-claude daemon bridge.");
-  } else if (!configStore.isConfigured()) {
-    hints.unshift("Clawpool is not configured. Run /clawpool:configure.");
-  } else if (!latestClientStatus.authed) {
-    hints.unshift("Clawpool is configured but not authenticated. Check ws_url, agent_id, api_key, and backend reachability.");
+  if (!isDaemonBridgeActive()) {
+    hints.unshift("This worker must be started by clawpool-claude daemon.");
   }
 
   return hints;
@@ -902,10 +855,6 @@ async function dispatchQuestionRequest(request) {
 }
 
 async function pumpApprovalRequests() {
-  if (!isDaemonBridgeActive() && !latestClientStatus.authed) {
-    return;
-  }
-
   const pending = await approvalStore.listPendingDispatches();
   for (const request of pending) {
     try {
@@ -918,10 +867,6 @@ async function pumpApprovalRequests() {
 }
 
 async function pumpQuestionRequests() {
-  if (!isDaemonBridgeActive() && !latestClientStatus.authed) {
-    return;
-  }
-
   const pending = await questionStore.listPendingDispatches();
   for (const request of pending) {
     try {
@@ -1346,17 +1291,8 @@ async function handleCompleteTool(args) {
 }
 
 async function handleConfigureTool(args) {
-  const status = await configStore.update({
-    ws_url: normalizeString(args.ws_url),
-    agent_id: normalizeString(args.agent_id),
-    api_key: normalizeString(args.api_key),
-    outbound_text_chunk_limit: args.outbound_text_chunk_limit,
-  });
-  await aibotClient.reconfigure(configStore.getConnectionConfig());
-  return toolTextResult({
-    ...status,
-    hints: buildStatusHints(),
-  });
+  void args;
+  throw new Error("configure is daemon-only now. Use the clawpool-claude CLI on the host.");
 }
 
 async function handleStatusTool() {
@@ -1524,22 +1460,8 @@ const toolDefinitions = [
     },
   },
   {
-    name: "configure",
-    description: "Configure the clawpool-claude websocket endpoint, agent id, and api key.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        ws_url: { type: "string" },
-        agent_id: { type: "string" },
-        api_key: { type: "string" },
-        outbound_text_chunk_limit: { type: "integer" },
-      },
-      required: ["ws_url", "agent_id", "api_key"],
-    },
-  },
-  {
     name: "status",
-    description: "Show clawpool-claude configuration, access policy, websocket status, and startup hints.",
+    description: "Show clawpool-claude configuration, access policy, daemon bridge status, and startup hints.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -1639,8 +1561,6 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
       return handleDeleteMessageTool(args);
     case "complete":
       return handleCompleteTool(args);
-    case "configure":
-      return handleConfigureTool(args);
     case "status":
       return handleStatusTool();
     case "access_pair":
@@ -1685,7 +1605,6 @@ async function shutdown() {
     }
     return;
   }
-  await aibotClient.stop();
 }
 
 async function restoreEventState() {
@@ -1724,45 +1643,38 @@ async function replayRestoredEvents(entries) {
 }
 
 async function bootstrap() {
+  requireDaemonBridge();
   await configStore.load();
   await accessStore.load();
   await approvalStore.init();
   await questionStore.init();
   const restoredEntries = await restoreEventState();
   await mcp.connect(new StdioServerTransport());
-  if (daemonModeEnabled && workerBridgeClient.isConfigured()) {
-    if (workerControlServer) {
-      await workerControlServer.start();
-    }
-    await workerBridgeClient.registerWorker({
-      worker_id: normalizeOptionalString(process.env.CLAWPOOL_WORKER_ID),
-      aibot_session_id: normalizeOptionalString(process.env.CLAWPOOL_AIBOT_SESSION_ID),
-      claude_session_id: normalizeOptionalString(process.env.CLAWPOOL_CLAUDE_SESSION_ID),
-      cwd: process.cwd(),
-      plugin_data_dir: normalizeOptionalString(process.env.CLAUDE_PLUGIN_DATA),
-      worker_control_url: workerControlServer?.getURL?.() ?? "",
-      worker_control_token: workerControlServer?.token ?? "",
-      pid: process.pid,
-    });
-    await workerBridgeClient.sendStatusUpdate({
-      worker_id: normalizeOptionalString(process.env.CLAWPOOL_WORKER_ID),
-      aibot_session_id: normalizeOptionalString(process.env.CLAWPOOL_AIBOT_SESSION_ID),
-      claude_session_id: normalizeOptionalString(process.env.CLAWPOOL_CLAUDE_SESSION_ID),
-      worker_control_url: workerControlServer?.getURL?.() ?? "",
-      worker_control_token: workerControlServer?.token ?? "",
-      status: "ready",
-    });
-    startApprovalPump();
-    startQuestionPump();
-    await replayRestoredEvents(restoredEntries);
-    logInfo("worker started in daemon bridge mode");
-    return;
+  if (workerControlServer) {
+    await workerControlServer.start();
   }
-  await aibotClient.start(configStore.getConnectionConfig());
+  await workerBridgeClient.registerWorker({
+    worker_id: normalizeOptionalString(process.env.CLAWPOOL_WORKER_ID),
+    aibot_session_id: normalizeOptionalString(process.env.CLAWPOOL_AIBOT_SESSION_ID),
+    claude_session_id: normalizeOptionalString(process.env.CLAWPOOL_CLAUDE_SESSION_ID),
+    cwd: process.cwd(),
+    plugin_data_dir: normalizeOptionalString(process.env.CLAUDE_PLUGIN_DATA),
+    worker_control_url: workerControlServer?.getURL?.() ?? "",
+    worker_control_token: workerControlServer?.token ?? "",
+    pid: process.pid,
+  });
+  await workerBridgeClient.sendStatusUpdate({
+    worker_id: normalizeOptionalString(process.env.CLAWPOOL_WORKER_ID),
+    aibot_session_id: normalizeOptionalString(process.env.CLAWPOOL_AIBOT_SESSION_ID),
+    claude_session_id: normalizeOptionalString(process.env.CLAWPOOL_CLAUDE_SESSION_ID),
+    worker_control_url: workerControlServer?.getURL?.() ?? "",
+    worker_control_token: workerControlServer?.token ?? "",
+    status: "ready",
+  });
   startApprovalPump();
   startQuestionPump();
   await replayRestoredEvents(restoredEntries);
-  logInfo("server started");
+  logInfo("worker started in daemon bridge mode");
 }
 
 process.once("SIGINT", () => {

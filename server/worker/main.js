@@ -19,8 +19,8 @@ export async function run(argv = []) {
     return 0;
   }
 
-  print("clawpool-claude worker 命令已就绪。");
-  return 0;
+  print("不要手动运行 worker。Claude 会话会在 daemon 调度下自动加载它。");
+  return 1;
 }
 
 export async function main(argv = process.argv.slice(2)) {

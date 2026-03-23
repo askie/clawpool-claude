@@ -66,7 +66,9 @@ export async function run(argv = [], env = process.env) {
   };
 
   const dataDir = resolveDaemonDataDir(runtimeEnv);
-  const configStore = new ConfigStore(resolveDaemonConfigPath(runtimeEnv));
+  const configStore = new ConfigStore(resolveDaemonConfigPath(runtimeEnv), {
+    env: runtimeEnv,
+  });
   const bindingRegistry = new BindingRegistry(resolveBindingRegistryPath(runtimeEnv));
   await configStore.load();
   if (options.wsUrl || options.agentId || options.apiKey || options.chunkLimit) {

@@ -32,10 +32,93 @@ test("cli run routes worker subcommand", async () => {
 
   try {
     const exitCode = await run(["worker"], {});
-    assert.equal(exitCode, 0);
-    assert.match(outputs.join(""), /worker 命令已就绪/u);
+    assert.equal(exitCode, 1);
+    assert.match(outputs.join(""), /不要手动运行 worker/u);
   } finally {
     process.stdout.write = originalStdoutWrite;
+  }
+});
+
+test("default cli path persists daemon config without starting daemon when --no-launch is used", async () => {
+  const outputs = [];
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-default-cli-"));
+  const originalStdoutWrite = process.stdout.write;
+  process.stdout.write = (chunk) => {
+    outputs.push(String(chunk));
+    return true;
+  };
+
+  try {
+    const exitCode = await run([
+      "--no-launch",
+      "--data-dir",
+      tempDir,
+      "--ws-url",
+      "ws://127.0.0.1:8888/ws",
+      "--agent-id",
+      "agent-default",
+      "--api-key",
+      "key-default",
+    ], {});
+    assert.equal(exitCode, 0);
+    assert.match(outputs.join(""), /daemon 还没有启动/u);
+
+    const config = JSON.parse(
+      await readFile(path.join(tempDir, "daemon-config.json"), "utf8"),
+    );
+    assert.equal(config.ws_url, "ws://127.0.0.1:8888/ws");
+    assert.equal(config.agent_id, "agent-default");
+    assert.equal(config.api_key, "key-default");
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+  }
+});
+
+test("default cli path does not leak host process env into daemon config writes", async () => {
+  const outputs = [];
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-env-cli-"));
+  const originalStdoutWrite = process.stdout.write;
+  const originalAgentID = process.env.CLAWPOOL_AGENT_ID;
+  const originalAPIKey = process.env.CLAWPOOL_API_KEY;
+  process.stdout.write = (chunk) => {
+    outputs.push(String(chunk));
+    return true;
+  };
+  process.env.CLAWPOOL_AGENT_ID = "stale-agent";
+  process.env.CLAWPOOL_API_KEY = "stale-key";
+
+  try {
+    const exitCode = await run([
+      "--no-launch",
+      "--data-dir",
+      tempDir,
+      "--ws-url",
+      "ws://127.0.0.1:8899/ws",
+      "--agent-id",
+      "fresh-agent",
+      "--api-key",
+      "fresh-key",
+    ], {});
+    assert.equal(exitCode, 0);
+    assert.match(outputs.join(""), /fresh-agent/u);
+
+    const config = JSON.parse(
+      await readFile(path.join(tempDir, "daemon-config.json"), "utf8"),
+    );
+    assert.equal(config.agent_id, "fresh-agent");
+    assert.equal(config.api_key, "fresh-key");
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+    if (originalAgentID === undefined) {
+      delete process.env.CLAWPOOL_AGENT_ID;
+    } else {
+      process.env.CLAWPOOL_AGENT_ID = originalAgentID;
+    }
+    if (originalAPIKey === undefined) {
+      delete process.env.CLAWPOOL_API_KEY;
+    } else {
+      process.env.CLAWPOOL_API_KEY = originalAPIKey;
+    }
   }
 });
 

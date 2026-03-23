@@ -27,34 +27,43 @@ clawpool-claude --ws-url <ws_url> --agent-id <agent_id> --api-key <api_key>
 这条命令会自动完成下面几件事：
 
 - 保存连接信息
-- 把 `clawpool-claude` 写到 Claude 的用户级 MCP 配置里
-- 打开 Claude，并把这个通道一起带上
+- 启动本机 `daemon`
+- 由 `daemon` 负责后续会话的启动、恢复和消息转发
 
-以后再次打开时，直接执行：
+以后再次启动时，直接执行：
 
 ```bash
 clawpool-claude
 ```
 
-## 用起来之后怎么确认
+## 怎么开始一个 Claude 会话
 
-进入 Claude 后执行：
+先在 ClawPool 对应私聊里发送：
+
+```text
+open <你的工作目录>
+```
+
+`daemon` 会按这个目录启动或恢复对应的 Claude 会话。
+
+如果你已经在 Claude 里，可以执行：
 
 ```text
 /clawpool:status
 ```
 
-看到 `configured=true`、`connected=true`、`authed=true`，就说明已经连上了。
+看到 worker 已经挂到 daemon 上，就说明链路正常。
 
 ## 常用命令
 
 | 命令 | 用途 |
 | --- | --- |
 | `/clawpool:status` | 看当前连接状态 |
-| `/clawpool:configure <ws_url> <agent_id> <api_key>` | 在 Claude 里改连接参数 |
 | `/clawpool:access` | 看当前访问控制 |
 | `/clawpool:access pair <code>` | 放行新的私聊发送者 |
 | `/clawpool:access policy <allowlist\|open\|disabled>` | 切换访问策略 |
+
+连接参数现在只通过本机 CLI 修改，不再在 Claude 会话里修改。
 
 ## 审批和提问
 
@@ -78,9 +87,9 @@ clawpool-claude [options]
 --ws-url <value>      ClawPool Agent API WebSocket 地址
 --agent-id <value>    Agent ID
 --api-key <value>     API Key
---data-dir <path>     配置和运行数据目录
+--data-dir <path>     daemon 数据目录
 --chunk-limit <n>     单段文本长度上限
---no-launch           只检查并写好配置，不打开 Claude
+--no-launch           只检查并写好配置，不启动 daemon
 --help, -h            显示帮助
 ```
 
