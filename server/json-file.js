@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { chmod, readFile, rename, writeFile } from "node:fs/promises";
 
 export async function readJSONFile(filePath, fallbackValue) {
@@ -16,7 +17,7 @@ export async function readJSONFile(filePath, fallbackValue) {
 }
 
 export async function writeJSONFileAtomic(filePath, value, { mode = 0o600 } = {}) {
-  const tmpPath = `${filePath}.tmp`;
+  const tmpPath = `${filePath}.${randomUUID()}.tmp`;
   const text = `${JSON.stringify(value, null, 2)}\n`;
   await writeFile(tmpPath, text, {
     encoding: "utf8",
