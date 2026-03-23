@@ -28,6 +28,17 @@ function makeWorkerProcessManager(calls) {
     getWorkerRuntime(workerID) {
       return runtimes.get(workerID) ?? null;
     },
+    markWorkerRuntimeStopped(workerID, { exitCode = 0, exitSignal = "" } = {}) {
+      const runtime = runtimes.get(workerID);
+      if (!runtime) {
+        return null;
+      }
+      runtime.status = "stopped";
+      runtime.exit_code = exitCode;
+      runtime.exit_signal = exitSignal;
+      calls.push({ kind: "mark_stopped", workerID, exitCode, exitSignal });
+      return { ...runtime };
+    },
     async spawnWorker(input) {
       const runtime = {
         worker_id: input.workerID,
@@ -1572,4 +1583,89 @@ test("daemon runtime fails persisted in-flight events after restart recovery", a
   );
   assert.equal(restartedStore.getPendingEvent("evt-8b"), null);
   assert.equal(restartedStore.getRememberedSessionID("evt-8b"), "");
+});
+
+test("daemon runtime reconciles an exited worker and fails delivered pending events", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-exit",
+    claude_session_id: "claude-exit",
+    cwd: tempDir,
+    worker_id: "worker-exit",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-exit",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-exit",
+    session_id: "chat-exit",
+    msg_id: "msg-exit",
+    sender_id: "sender-exit",
+    content: "26",
+  });
+  await deliveryStore.markPendingEventDelivered("evt-exit", "worker-exit");
+
+  const workerProcessManager = makeWorkerProcessManager(workerCalls);
+  workerProcessManager.getWorkerRuntime = () => ({
+    worker_id: "worker-exit",
+    aibot_session_id: "chat-exit",
+    pid: 43210,
+    status: "ready",
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    isProcessRunning() {
+      return false;
+    },
+  });
+
+  const changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-exit"),
+  );
+
+  assert.equal(changed, true);
+  assert.equal(registry.getByAibotSessionID("chat-exit")?.worker_status, "stopped");
+  assert.equal(deliveryStore.getPendingEvent("evt-exit"), null);
+  assert.equal(
+    sent.some(
+      (item) =>
+        item.kind === "text"
+        && item.payload.eventID === "evt-exit"
+        && /没有处理完成/u.test(item.payload.text),
+    ),
+    true,
+  );
+  assert.deepEqual(
+    sent.find(
+      (item) => item.kind === "event_result" && item.payload.event_id === "evt-exit",
+    )?.payload,
+    {
+      event_id: "evt-exit",
+      status: "failed",
+      code: "worker_interrupted",
+      msg: "worker interrupted while processing event",
+    },
+  );
 });

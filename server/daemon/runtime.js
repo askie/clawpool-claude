@@ -6,6 +6,7 @@ import { MessageDeliveryStore } from "./message-delivery-store.js";
 import { resolveWorkerPluginDataDir } from "./daemon-paths.js";
 import { WorkerControlClient } from "./worker-control-client.js";
 import { claudeSessionExists as defaultClaudeSessionExists } from "./claude-session-store.js";
+import { isProcessRunning as defaultIsProcessRunning } from "../process-control.js";
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -65,6 +66,8 @@ export class DaemonRuntime {
     claudeSessionExists = defaultClaudeSessionExists,
     messageDeliveryStore = null,
     logger = null,
+    workerRuntimeHealthCheckMs = 1000,
+    isProcessRunning = defaultIsProcessRunning,
   }) {
     this.env = env;
     this.bindingRegistry = bindingRegistry;
@@ -84,6 +87,19 @@ export class DaemonRuntime {
       ? messageDeliveryStore
       : new MessageDeliveryStore();
     this.logger = logger;
+    this.workerRuntimeHealthCheckMs = Number.isFinite(Number(workerRuntimeHealthCheckMs))
+      ? Math.max(0, Math.floor(Number(workerRuntimeHealthCheckMs)))
+      : 1000;
+    this.isProcessRunning = typeof isProcessRunning === "function"
+      ? isProcessRunning
+      : defaultIsProcessRunning;
+    this.workerRuntimeHealthCheckTimer = null;
+    if (this.workerRuntimeHealthCheckMs > 0) {
+      this.workerRuntimeHealthCheckTimer = setInterval(() => {
+        void this.reconcileWorkerProcesses();
+      }, this.workerRuntimeHealthCheckMs);
+      this.workerRuntimeHealthCheckTimer.unref?.();
+    }
   }
 
   trace(fields, level = "info") {
@@ -91,6 +107,13 @@ export class DaemonRuntime {
       component: "daemon.runtime",
       ...fields,
     }, { level });
+  }
+
+  async close() {
+    if (this.workerRuntimeHealthCheckTimer) {
+      clearInterval(this.workerRuntimeHealthCheckTimer);
+      this.workerRuntimeHealthCheckTimer = null;
+    }
   }
 
   async reply(event, text, extra = {}) {
@@ -366,6 +389,64 @@ export class DaemonRuntime {
       status: "failed",
       code: "worker_interrupted",
     }, "error");
+  }
+
+  async reconcileWorkerProcesses() {
+    const bindings = this.bindingRegistry?.listBindings?.() ?? [];
+    for (const binding of bindings) {
+      await this.reconcileWorkerProcess(binding);
+    }
+  }
+
+  async reconcileWorkerProcess(binding) {
+    const sessionID = normalizeString(binding?.aibot_session_id);
+    const workerID = normalizeString(binding?.worker_id);
+    const workerStatus = normalizeString(binding?.worker_status);
+    if (
+      !sessionID
+      || !workerID
+      || !["starting", "connected", "ready"].includes(workerStatus)
+    ) {
+      return false;
+    }
+
+    const runtime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
+    if (!runtime) {
+      return false;
+    }
+
+    const pid = Number(runtime.pid ?? 0);
+    if (!Number.isFinite(pid) || pid <= 0 || this.isProcessRunning(pid)) {
+      return false;
+    }
+
+    this.workerProcessManager?.markWorkerRuntimeStopped?.(workerID, {
+      exitCode: Number(runtime.exit_code ?? 0),
+      exitSignal: normalizeString(runtime.exit_signal) || "worker_exited",
+    });
+
+    const previousBinding = this.bindingRegistry.getByAibotSessionID(sessionID) ?? binding;
+    if (
+      normalizeString(previousBinding?.worker_id) !== workerID
+      || ["stopped", "failed"].includes(normalizeString(previousBinding?.worker_status))
+    ) {
+      return false;
+    }
+
+    this.trace({
+      stage: "worker_process_exit_detected",
+      session_id: sessionID,
+      worker_id: workerID,
+      pid,
+      previous_status: workerStatus,
+    }, "error");
+
+    const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
+      updatedAt: Date.now(),
+      lastStoppedAt: Date.now(),
+    });
+    await this.handleWorkerStatusUpdate(previousBinding, nextBinding);
+    return true;
   }
 
   async handleWorkerStatusUpdate(previousBinding, nextBinding) {
