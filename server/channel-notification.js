@@ -66,8 +66,19 @@ export function shouldReplayRestoredEvent(event) {
   return (
     normalizeString(event?.event_id) !== "" &&
     event?.acked === true &&
+    Number(event?.notification_dispatched_at ?? 0) <= 0 &&
     !event?.completed &&
     !event?.stopped &&
     !event?.result_intent
   );
+}
+
+export function collectReplayableRestoredEvents(entries, { lookupCurrentEvent = null } = {}) {
+  const currentLookup = typeof lookupCurrentEvent === "function"
+    ? lookupCurrentEvent
+    : () => null;
+
+  return (Array.isArray(entries) ? entries : [])
+    .map((entry) => currentLookup(normalizeString(entry?.event_id)) ?? entry)
+    .filter((entry) => shouldReplayRestoredEvent(entry));
 }

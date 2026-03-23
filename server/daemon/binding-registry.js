@@ -20,6 +20,7 @@ function normalizeWorkerStatus(value) {
   const normalized = normalizeString(value);
   if (
     normalized === "starting" ||
+    normalized === "connected" ||
     normalized === "ready" ||
     normalized === "stopped" ||
     normalized === "failed"
@@ -127,12 +128,35 @@ export class BindingRegistry {
     return { ...normalized };
   }
 
-  async markWorkerStarting(aibotSessionID, { workerID = "", updatedAt = Date.now(), lastStartedAt = Date.now() } = {}) {
+  async markWorkerStarting(aibotSessionID, {
+    workerID = "",
+    workerControlURL = "",
+    workerControlToken = "",
+    updatedAt = Date.now(),
+    lastStartedAt = Date.now(),
+  } = {}) {
     return this.updateBinding(aibotSessionID, {
       worker_id: workerID,
       worker_status: "starting",
-      worker_control_url: "",
-      worker_control_token: "",
+      worker_control_url: workerControlURL,
+      worker_control_token: workerControlToken,
+      updated_at: updatedAt,
+      last_started_at: lastStartedAt,
+    });
+  }
+
+  async markWorkerConnected(aibotSessionID, {
+    workerID = "",
+    workerControlURL = "",
+    workerControlToken = "",
+    updatedAt = Date.now(),
+    lastStartedAt = Date.now(),
+  } = {}) {
+    return this.updateBinding(aibotSessionID, {
+      worker_id: workerID,
+      worker_status: "connected",
+      worker_control_url: workerControlURL,
+      worker_control_token: workerControlToken,
       updated_at: updatedAt,
       last_started_at: lastStartedAt,
     });

@@ -32,6 +32,22 @@ function formatBindingSummary(binding) {
   ].join("\n");
 }
 
+function buildPendingEventRecord(rawPayload) {
+  return {
+    eventID: normalizeString(rawPayload?.event_id),
+    sessionID: normalizeString(rawPayload?.session_id),
+    msgID: normalizeString(rawPayload?.msg_id),
+    rawPayload: { ...(rawPayload ?? {}) },
+    delivery_attempts: 0,
+    delivery_state: "pending",
+    last_worker_id: "",
+  };
+}
+
+function buildInterruptedEventNotice() {
+  return "Claude 刚刚中断了，这条消息没有处理完成。请再发一次。";
+}
+
 export class DaemonRuntime {
   constructor({
     env = process.env,
@@ -53,6 +69,7 @@ export class DaemonRuntime {
           token: binding.worker_control_token,
         });
     this.eventSessionIndex = new Map();
+    this.pendingEvents = new Map();
   }
 
   async reply(event, text, extra = {}) {
@@ -81,11 +98,38 @@ export class DaemonRuntime {
       };
     }
 
-    const runtime = binding.worker_id
-      ? this.workerProcessManager.getWorkerRuntime(binding.worker_id)
-      : null;
-    if (runtime && runtime.status !== "stopped") {
-      return runtime;
+    if (binding.worker_status === "connected" && binding.worker_control_url && binding.worker_control_token) {
+      const current = await this.waitForWorkerBridgeState(binding.aibot_session_id);
+      if (
+        current &&
+        current.worker_status === "ready" &&
+        current.worker_control_url &&
+        current.worker_control_token
+      ) {
+        return {
+          worker_id: current.worker_id,
+          status: "ready",
+        };
+      }
+      return {
+        worker_id: binding.worker_id,
+        status: "connected",
+      };
+    }
+
+    if (binding.worker_status === "starting") {
+      const current = await this.waitForWorkerBridgeState(binding.aibot_session_id);
+      if (
+        current &&
+        current.worker_status === "ready" &&
+        current.worker_control_url &&
+        current.worker_control_token
+      ) {
+        return {
+          worker_id: current.worker_id,
+          status: current.worker_status,
+        };
+      }
     }
 
     await this.bindingRegistry.markWorkerStarting(binding.aibot_session_id, {
@@ -101,14 +145,40 @@ export class DaemonRuntime {
       workerID: binding.worker_id || randomUUID(),
       bridgeURL: this.bridgeServer.getURL(),
       bridgeToken: this.bridgeServer.token,
+      resumeSession: true,
     });
   }
 
-  async waitForReadyBinding(aibotSessionID, { timeoutMs = 5000, intervalMs = 100 } = {}) {
+  async waitForReadyBinding(aibotSessionID, { timeoutMs = 15000, intervalMs = 100 } = {}) {
     const deadlineAt = Date.now() + timeoutMs;
     while (Date.now() < deadlineAt) {
       const current = this.bindingRegistry.getByAibotSessionID(aibotSessionID);
       if (current && current.worker_status === "ready" && current.worker_control_url && current.worker_control_token) {
+        return current;
+      }
+      await sleep(intervalMs);
+    }
+    return this.bindingRegistry.getByAibotSessionID(aibotSessionID);
+  }
+
+  async waitForWorkerBridgeState(
+    aibotSessionID,
+    { timeoutMs = 1500, intervalMs = 100 } = {},
+  ) {
+    const deadlineAt = Date.now() + timeoutMs;
+    while (Date.now() < deadlineAt) {
+      const current = this.bindingRegistry.getByAibotSessionID(aibotSessionID);
+      if (!current) {
+        return null;
+      }
+      if (
+        current.worker_status === "ready" &&
+        current.worker_control_url &&
+        current.worker_control_token
+      ) {
+        return current;
+      }
+      if (current.worker_status === "stopped" || current.worker_status === "failed") {
         return current;
       }
       await sleep(intervalMs);
@@ -140,17 +210,148 @@ export class DaemonRuntime {
     return client.deliverRevoke(rawPayload);
   }
 
+  trackPendingEvent(rawPayload) {
+    const record = buildPendingEventRecord(rawPayload);
+    if (!record.eventID || !record.sessionID) {
+      return null;
+    }
+    const existing = this.pendingEvents.get(record.eventID);
+    if (existing) {
+      return existing;
+    }
+    this.pendingEvents.set(record.eventID, record);
+    return record;
+  }
+
+  markPendingEventDelivered(eventID, binding) {
+    const record = this.pendingEvents.get(normalizeString(eventID));
+    if (!record) {
+      return null;
+    }
+    record.delivery_attempts += 1;
+    record.delivery_state = "delivered";
+    record.last_worker_id = normalizeString(binding?.worker_id);
+    return record;
+  }
+
+  markPendingEventInterrupted(eventID) {
+    const record = this.pendingEvents.get(normalizeString(eventID));
+    if (!record) {
+      return null;
+    }
+    record.delivery_state = "interrupted";
+    return record;
+  }
+
+  clearPendingEvent(eventID) {
+    this.pendingEvents.delete(normalizeString(eventID));
+  }
+
+  listPendingEventsForSession(sessionID) {
+    const normalizedSessionID = normalizeString(sessionID);
+    if (!normalizedSessionID) {
+      return [];
+    }
+    return Array.from(this.pendingEvents.values())
+      .filter((record) => record.sessionID === normalizedSessionID);
+  }
+
+  async flushPendingSessionEvents(sessionID, binding) {
+    const normalizedSessionID = normalizeString(sessionID);
+    if (
+      !normalizedSessionID ||
+      !binding?.worker_control_url ||
+      !binding?.worker_control_token
+    ) {
+      return;
+    }
+
+    for (const record of this.listPendingEventsForSession(normalizedSessionID)) {
+      if (record.delivery_state !== "pending") {
+        continue;
+      }
+      try {
+        await this.deliverEventToWorker(binding, record.rawPayload);
+        this.markPendingEventDelivered(record.eventID, binding);
+      } catch {
+        return;
+      }
+    }
+  }
+
+  async failPendingEvent(record) {
+    if (!record?.eventID || !record?.sessionID) {
+      return;
+    }
+    try {
+      await this.aibotClient.sendText({
+        eventID: record.eventID,
+        sessionID: record.sessionID,
+        text: buildInterruptedEventNotice(),
+        quotedMessageID: record.msgID,
+        extra: {
+          reply_source: "daemon_worker_interrupted",
+        },
+      });
+    } catch {
+      // best effort only
+    }
+    try {
+      this.aibotClient.sendEventResult({
+        event_id: record.eventID,
+        status: "failed",
+        code: "worker_interrupted",
+        msg: "worker interrupted while processing event",
+      });
+    } catch {
+      // best effort only
+    }
+    this.clearPendingEvent(record.eventID);
+  }
+
+  async handleWorkerStatusUpdate(previousBinding, nextBinding) {
+    const sessionID = normalizeString(nextBinding?.aibot_session_id || previousBinding?.aibot_session_id);
+    const nextStatus = normalizeString(nextBinding?.worker_status);
+    if (!sessionID || !nextStatus) {
+      return;
+    }
+
+    if (nextStatus === "ready" && nextBinding?.worker_control_url && nextBinding?.worker_control_token) {
+      await this.flushPendingSessionEvents(sessionID, nextBinding);
+    }
+
+    if (nextStatus !== "stopped" && nextStatus !== "failed") {
+      return;
+    }
+
+    const previousWorkerID = normalizeString(previousBinding?.worker_id);
+    for (const record of this.listPendingEventsForSession(sessionID)) {
+      if (record.delivery_state !== "delivered") {
+        continue;
+      }
+      if (previousWorkerID && normalizeString(record.last_worker_id) !== previousWorkerID) {
+        continue;
+      }
+      this.markPendingEventInterrupted(record.eventID);
+      await this.failPendingEvent(record);
+    }
+  }
+
+  async handleEventCompleted(eventID) {
+    this.clearPendingEvent(eventID);
+  }
+
   async deliverWithRecovery(aibotSessionID, rawPayload, deliverFn) {
     const binding = this.bindingRegistry.getByAibotSessionID(aibotSessionID);
     if (!binding) {
-      return false;
+      return null;
     }
 
     let readyBinding = binding;
-    if (binding.worker_control_url && binding.worker_control_token) {
+    if (binding.worker_status === "ready" && binding.worker_control_url && binding.worker_control_token) {
       try {
         await deliverFn.call(this, binding, rawPayload);
-        return true;
+        return binding;
       } catch {
         readyBinding = await this.bindingRegistry.markWorkerStarting(binding.aibot_session_id, {
           workerID: binding.worker_id || randomUUID(),
@@ -161,12 +362,16 @@ export class DaemonRuntime {
     }
 
     readyBinding = await this.ensureReadyBinding(readyBinding.aibot_session_id);
-    if (!readyBinding?.worker_control_url || !readyBinding?.worker_control_token) {
-      return false;
+    if (
+      readyBinding?.worker_status !== "ready" ||
+      !readyBinding?.worker_control_url ||
+      !readyBinding?.worker_control_token
+    ) {
+      return null;
     }
 
     await deliverFn.call(this, readyBinding, rawPayload);
-    return true;
+    return readyBinding;
   }
 
   async ensureReadyBinding(aibotSessionID) {
@@ -176,13 +381,15 @@ export class DaemonRuntime {
     }
 
     let readyBinding = binding;
-    if (binding.worker_control_url && binding.worker_control_token) {
+    if (binding.worker_status === "ready" && binding.worker_control_url && binding.worker_control_token) {
       return binding;
     }
 
-    const runtime = await this.ensureWorker(binding);
-    if (!readyBinding.worker_control_url || !readyBinding.worker_control_token || runtime?.status === "starting") {
-      readyBinding = await this.waitForReadyBinding(aibotSessionID);
+    const nextRuntime = await this.ensureWorker(binding);
+    if (!readyBinding.worker_control_url || !readyBinding.worker_control_token || nextRuntime?.status === "starting") {
+      readyBinding = await this.waitForWorkerBridgeState(aibotSessionID, {
+        timeoutMs: 15000,
+      });
     }
     return readyBinding ?? binding;
   }
@@ -335,12 +542,16 @@ export class DaemonRuntime {
       return;
     }
 
-    const delivered = await this.deliverWithRecovery(
+    const pending = this.trackPendingEvent(rawPayload);
+    const deliveredBinding = await this.deliverWithRecovery(
       binding.aibot_session_id,
       rawPayload,
       this.deliverEventToWorker,
     );
-    if (delivered) {
+    if (deliveredBinding) {
+      if (pending) {
+        this.markPendingEventDelivered(pending.eventID, deliveredBinding);
+      }
       return;
     }
 

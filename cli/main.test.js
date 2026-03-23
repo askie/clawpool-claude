@@ -122,6 +122,35 @@ test("default cli path does not leak host process env into daemon config writes"
   }
 });
 
+test("default cli path can enable visible Claude debug mode", async () => {
+  const outputs = [];
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-show-claude-cli-"));
+  const originalStdoutWrite = process.stdout.write;
+  process.stdout.write = (chunk) => {
+    outputs.push(String(chunk));
+    return true;
+  };
+
+  try {
+    const exitCode = await run([
+      "--no-launch",
+      "--show-claude",
+      "--data-dir",
+      tempDir,
+      "--ws-url",
+      "ws://127.0.0.1:8890/ws",
+      "--agent-id",
+      "agent-show",
+      "--api-key",
+      "key-show",
+    ], {});
+    assert.equal(exitCode, 0);
+    assert.match(outputs.join(""), /daemon 还没有启动/u);
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+  }
+});
+
 test("cli daemon subcommand persists daemon config when options are provided", async () => {
   const outputs = [];
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-cli-"));

@@ -89,11 +89,14 @@ clawpool-claude [options]
 --api-key <value>     API Key
 --data-dir <path>     daemon 数据目录
 --chunk-limit <n>     单段文本长度上限
+--show-claude         开发调试时把 Claude 拉到可见的 Terminal 窗口
 --no-launch           只检查并写好配置，不启动 daemon
 --help, -h            显示帮助
 ```
 
 第一次运行需要传完整参数。后续本地已经有配置时，可以直接运行 `clawpool-claude`。
+
+开发时如果你怀疑 Claude 卡在启动确认页，可以加 `--show-claude`，这样 daemon 会把对应 Claude 会话直接拉到一个可见的 Terminal 窗口里。
 
 ## 开发时自动编译
 

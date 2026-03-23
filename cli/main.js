@@ -16,12 +16,13 @@ function usage() {
   默认命令会写好 daemon 配置，并启动 clawpool-claude daemon。
   daemon 是唯一对接 ClawPool 的常驻服务，Claude 会话由 daemon 按需拉起。
 
-选项:
+  选项:
   --ws-url <value>      ClawPool Agent API WebSocket 地址
   --agent-id <value>    Agent ID
   --api-key <value>     API Key
   --data-dir <path>     daemon 数据目录，默认 ~/.claude/clawpool-claude-daemon
   --chunk-limit <n>     单段文本长度上限，默认 1200
+  --show-claude         开发调试时把 Claude 拉到可见的 Terminal 窗口
   --no-launch           只检查并写好配置，不启动 daemon
   --help, -h            显示帮助
 
@@ -37,6 +38,7 @@ function parseArgs(argv) {
     apiKey: "",
     dataDir: "",
     chunkLimit: "",
+    showClaude: false,
     noLaunch: false,
     help: false,
   };
@@ -49,6 +51,10 @@ function parseArgs(argv) {
     }
     if (current === "--no-launch") {
       options.noLaunch = true;
+      continue;
+    }
+    if (current === "--show-claude") {
+      options.showClaude = true;
       continue;
     }
     const next = argv[index + 1];
@@ -110,6 +116,7 @@ function buildRuntimeEnv(options, env) {
   return {
     ...env,
     ...(options.dataDir ? { CLAWPOOL_DAEMON_DATA_DIR: options.dataDir } : {}),
+    ...(options.showClaude ? { CLAWPOOL_SHOW_CLAUDE_WINDOW: "1" } : {}),
   };
 }
 

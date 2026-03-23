@@ -29,12 +29,22 @@ test("binding registry creates and updates fixed bindings", async () => {
   assert.equal(ready.worker_status, "ready");
   assert.equal(ready.last_started_at, 10);
 
-  const failed = await registry.markWorkerFailed("chat-1", {
-    lastStoppedAt: 12,
+  const connected = await registry.markWorkerConnected("chat-1", {
+    workerID: "worker-1",
+    workerControlURL: "http://127.0.0.1:9000",
+    workerControlToken: "token-1",
+    lastStartedAt: 12,
     updatedAt: 13,
   });
+  assert.equal(connected.worker_status, "connected");
+  assert.equal(connected.worker_control_url, "http://127.0.0.1:9000");
+
+  const failed = await registry.markWorkerFailed("chat-1", {
+    lastStoppedAt: 14,
+    updatedAt: 15,
+  });
   assert.equal(failed.worker_status, "failed");
-  assert.equal(failed.last_stopped_at, 12);
+  assert.equal(failed.last_stopped_at, 14);
 
   const loaded = new BindingRegistry(path.join(dir, "binding-registry.json"));
   await loaded.load();

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildChannelNotificationParams,
+  collectReplayableRestoredEvents,
   shouldReplayRestoredEvent,
 } from "./channel-notification.js";
 
@@ -38,11 +39,17 @@ test("buildChannelNotificationParams preserves stored inbound meta", () => {
   assert.equal(params.meta.ts, "2023-11-14T22:13:20.000Z");
 });
 
-test("shouldReplayRestoredEvent only replays unresolved acked events without terminal intent", () => {
+test("shouldReplayRestoredEvent only replays unresolved acked events that were never sent to Claude", () => {
   assert.equal(shouldReplayRestoredEvent({
     event_id: "evt-replay",
     acked: true,
   }), true);
+
+  assert.equal(shouldReplayRestoredEvent({
+    event_id: "evt-already-sent",
+    acked: true,
+    notification_dispatched_at: Date.now(),
+  }), false);
 
   assert.equal(shouldReplayRestoredEvent({
     event_id: "evt-intent",
@@ -64,4 +71,43 @@ test("shouldReplayRestoredEvent only replays unresolved acked events without ter
     event_id: "evt-unacked",
     acked: false,
   }), false);
+});
+
+test("collectReplayableRestoredEvents re-checks current state before replaying", () => {
+  const replayable = collectReplayableRestoredEvents([
+    {
+      event_id: "evt-stale",
+      acked: true,
+    },
+    {
+      event_id: "evt-live",
+      acked: true,
+    },
+  ], {
+    lookupCurrentEvent(eventID) {
+      if (eventID === "evt-stale") {
+        return {
+          event_id: "evt-stale",
+          acked: true,
+          completed: {
+            status: "failed",
+          },
+        };
+      }
+      if (eventID === "evt-live") {
+        return {
+          event_id: "evt-live",
+          acked: true,
+        };
+      }
+      return null;
+    },
+  });
+
+  assert.deepEqual(replayable, [
+    {
+      event_id: "evt-live",
+      acked: true,
+    },
+  ]);
 });

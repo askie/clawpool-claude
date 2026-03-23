@@ -1,5 +1,5 @@
 {
-  "name": "clawpool",
+  "name": "clawpool-daemon",
   "version": "0.1.0",
   "description": "Claude Code channel plugin for Aibot ClawPool over the Agent API WebSocket.",
   "author": {

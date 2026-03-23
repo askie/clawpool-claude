@@ -1,6 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildWorkerEnvironment } from "./daemon/worker-process.js";
+import os from "node:os";
+import path from "node:path";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { setTimeout as sleep } from "node:timers/promises";
+import {
+  buildWorkerClaudeArgs,
+  buildWorkerEnvironment,
+  createVisibleClaudeLaunchScript,
+  WorkerProcessManager,
+} from "./daemon/worker-process.js";
 
 test("buildWorkerEnvironment passes daemon connection config to worker", () => {
   const env = buildWorkerEnvironment({
@@ -30,4 +39,136 @@ test("buildWorkerEnvironment passes daemon connection config to worker", () => {
   assert.equal(env.CLAWPOOL_AGENT_ID, "agent-1");
   assert.equal(env.CLAWPOOL_API_KEY, "secret-key");
   assert.equal(env.CLAWPOOL_OUTBOUND_TEXT_CHUNK_LIMIT, "2048");
+});
+
+test("buildWorkerClaudeArgs launches Claude with plugin-dir development channel args", () => {
+  assert.deepEqual(
+    buildWorkerClaudeArgs({
+      packageRoot: "/tmp/clawpool-claude-plugin",
+      aibotSessionID: "chat-1",
+      claudeSessionID: "claude-1",
+    }),
+    [
+      "--name",
+      "clawpool-chat-1",
+      "--plugin-dir",
+      "/tmp/clawpool-claude-plugin",
+      "--dangerously-skip-permissions",
+      "--session-id",
+      "claude-1",
+      "--dangerously-load-development-channels",
+      "server:clawpool-claude",
+    ],
+  );
+});
+
+test("buildWorkerClaudeArgs resumes an existing Claude session by id", () => {
+  assert.deepEqual(
+    buildWorkerClaudeArgs({
+      packageRoot: "/tmp/clawpool-claude-plugin",
+      aibotSessionID: "chat-1",
+      claudeSessionID: "claude-1",
+      resumeSession: true,
+    }),
+    [
+      "--name",
+      "clawpool-chat-1",
+      "--plugin-dir",
+      "/tmp/clawpool-claude-plugin",
+      "--dangerously-skip-permissions",
+      "--resume",
+      "claude-1",
+      "--dangerously-load-development-channels",
+      "server:clawpool-claude",
+    ],
+  );
+});
+
+test("spawnWorker feeds a startup enter key to Claude stdin", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-startup-input-"));
+  const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
+  const outputPath = path.join(tempDir, "stdin-output.txt");
+
+  await writeFile(fakeClaudePath, `#!/usr/bin/env node
+import { writeFile } from "node:fs/promises";
+
+const chunks = [];
+for await (const chunk of process.stdin) {
+  chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+}
+await writeFile(process.env.TEST_OUTPUT_PATH, Buffer.concat(chunks).toString("utf8"), "utf8");
+`, "utf8");
+  await chmod(fakeClaudePath, 0o755);
+
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAUDE_BIN: fakeClaudePath,
+      TEST_OUTPUT_PATH: outputPath,
+    },
+    packageRoot: tempDir,
+  });
+
+  await manager.spawnWorker({
+    aibotSessionID: "chat-startup-enter",
+    cwd: tempDir,
+    pluginDataDir: path.join(tempDir, "plugin-data"),
+    claudeSessionID: "claude-startup-enter",
+    workerID: "worker-startup-enter",
+  });
+
+  let actual = "";
+  for (let index = 0; index < 20; index += 1) {
+    try {
+      actual = await readFile(outputPath, "utf8");
+      break;
+    } catch {
+      await sleep(100);
+    }
+  }
+
+  assert.equal(actual, "\n");
+});
+
+test("createVisibleClaudeLaunchScript writes terminal launch wrapper with pid file", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-visible-launch-script-"));
+  const logsDir = path.join(tempDir, "logs");
+  const result = await createVisibleClaudeLaunchScript({
+    logsDir,
+    workerID: "worker-visible",
+    cwd: "/tmp/demo path",
+    command: "/usr/local/bin/claude",
+    args: [
+      "--name",
+      "clawpool-chat-visible",
+      "--plugin-dir",
+      "/tmp/clawpool-claude-plugin",
+      "--dangerously-skip-permissions",
+      "--session-id",
+      "session-1",
+      "--dangerously-load-development-channels",
+      "server:clawpool-claude",
+    ],
+    env: {
+      CLAUDE_PLUGIN_DATA: "/tmp/plugin data",
+      CLAWPOOL_AIBOT_SESSION_ID: "chat-visible",
+    },
+  });
+
+  const script = await readFile(result.scriptPath, "utf8");
+  const expectScript = await readFile(result.expectPath, "utf8");
+  assert.match(result.scriptPath, /worker-visible\.launch\.command$/u);
+  assert.match(result.expectPath, /worker-visible\.launch\.expect$/u);
+  assert.match(result.pidPath, /worker-visible\.pid$/u);
+  assert.match(script, /clawpool-claude worker-visible/u);
+  assert.match(script, /echo \$\$ >/u);
+  assert.match(script, /exec \/usr\/bin\/expect '.*worker-visible\.launch\.expect'/u);
+  assert.match(script, /export CLAUDE_PLUGIN_DATA='\/tmp\/plugin data'/u);
+  assert.match(script, /cd '\/tmp\/demo path'/u);
+  assert.match(expectScript, /set timeout -1/u);
+  assert.match(expectScript, /log_file -a \{.*worker-visible\.out\.log\}/u);
+  assert.match(expectScript, /spawn -noecho \{\*\}\$claude_command/u);
+  assert.match(expectScript, /-re \{Enter\.\*confirm\}/u);
+  assert.match(expectScript, /send -- "\\r"/u);
+  assert.match(expectScript, /set claude_command \[list \{\/usr\/local\/bin\/claude\} \{--name\} \{clawpool-chat-visible\} \{--plugin-dir\} \{\/tmp\/clawpool-claude-plugin\} \{--dangerously-skip-permissions\} \{--session-id\} \{session-1\} \{--dangerously-load-development-channels\} \{server:clawpool-claude\}\]/u);
 });

@@ -15,12 +15,13 @@ function usage() {
 说明:
   常驻 daemon。负责对接 aibot、维护固定绑定，并调度 Claude worker。
 
-选项:
+  选项:
   --ws-url <value>      Aibot WebSocket 地址
   --agent-id <value>    Agent ID
   --api-key <value>     API Key
   --chunk-limit <n>     单段文本长度上限
   --data-dir <path>     daemon 数据目录
+  --show-claude         开发调试时把 Claude 拉到可见的 Terminal 窗口
   --exit-after-ready    启动后立刻退出，用于检查配置
 `;
 }
@@ -33,6 +34,7 @@ function parseArgs(argv) {
   return {
     help: argv.includes("--help") || argv.includes("-h"),
     exitAfterReady: argv.includes("--exit-after-ready"),
+    showClaude: argv.includes("--show-claude"),
     wsUrl: readOption(argv, "--ws-url"),
     agentId: readOption(argv, "--agent-id"),
     apiKey: readOption(argv, "--api-key"),
@@ -53,6 +55,38 @@ function readOption(argv, name) {
   return value;
 }
 
+function normalizeString(value) {
+  return String(value ?? "").trim();
+}
+
+export function shouldNotifyWorkerReady(previousBinding, nextBinding) {
+  if (!nextBinding || normalizeString(nextBinding.worker_status) !== "ready") {
+    return false;
+  }
+  return normalizeString(previousBinding?.worker_status) !== "ready";
+}
+
+export function buildWorkerReadyNoticeText(binding) {
+  const cwd = normalizeString(binding?.cwd);
+  if (!cwd) {
+    return "Claude 已就绪，可以开始对话。";
+  }
+  return `Claude 已就绪，可以开始对话。\n目录: ${cwd}`;
+}
+
+export async function notifyWorkerReady(aibotClient, binding) {
+  if (!aibotClient || !binding) {
+    return null;
+  }
+  return aibotClient.sendText({
+    sessionID: binding.aibot_session_id,
+    text: buildWorkerReadyNoticeText(binding),
+    extra: {
+      reply_source: "daemon_worker_ready",
+    },
+  });
+}
+
 export async function run(argv = [], env = process.env) {
   const options = parseArgs(argv);
   if (options.help) {
@@ -63,6 +97,7 @@ export async function run(argv = [], env = process.env) {
   const runtimeEnv = {
     ...env,
     ...(options.dataDir ? { CLAWPOOL_DAEMON_DATA_DIR: options.dataDir } : {}),
+    ...(options.showClaude ? { CLAWPOOL_SHOW_CLAUDE_WINDOW: "1" } : {}),
   };
 
   const dataDir = resolveDaemonDataDir(runtimeEnv);
@@ -84,6 +119,8 @@ export async function run(argv = [], env = process.env) {
     env: runtimeEnv,
     connectionConfig: configStore.getConnectionConfig(),
   });
+  let aibotClient = null;
+  let runtime = null;
 
   const bridgeServer = new WorkerBridgeServer({
     onRegisterWorker: async (payload) => {
@@ -96,7 +133,7 @@ export async function run(argv = [], env = process.env) {
       if (!existing) {
         return { ok: false, reason: "binding_not_found" };
       }
-      await bindingRegistry.markWorkerReady(aibotSessionID, {
+      await bindingRegistry.markWorkerStarting(aibotSessionID, {
         workerID,
         workerControlURL: String(payload?.worker_control_url ?? "").trim(),
         workerControlToken: String(payload?.worker_control_token ?? "").trim(),
@@ -111,18 +148,28 @@ export async function run(argv = [], env = process.env) {
       if (!aibotSessionID || !status) {
         throw new Error("aibot_session_id and status are required");
       }
+      const previousBinding = bindingRegistry.getByAibotSessionID(aibotSessionID);
+      let nextBinding = null;
       if (status === "failed") {
-        await bindingRegistry.markWorkerFailed(aibotSessionID, {
+        nextBinding = await bindingRegistry.markWorkerFailed(aibotSessionID, {
           updatedAt: Date.now(),
           lastStoppedAt: Date.now(),
         });
       } else if (status === "stopped") {
-        await bindingRegistry.markWorkerStopped(aibotSessionID, {
+        nextBinding = await bindingRegistry.markWorkerStopped(aibotSessionID, {
           updatedAt: Date.now(),
           lastStoppedAt: Date.now(),
         });
+      } else if (status === "connected") {
+        nextBinding = await bindingRegistry.markWorkerConnected(aibotSessionID, {
+          workerID: String(payload?.worker_id ?? "").trim(),
+          workerControlURL: String(payload?.worker_control_url ?? "").trim(),
+          workerControlToken: String(payload?.worker_control_token ?? "").trim(),
+          updatedAt: Date.now(),
+          lastStartedAt: Date.now(),
+        });
       } else {
-        await bindingRegistry.markWorkerReady(aibotSessionID, {
+        nextBinding = await bindingRegistry.markWorkerReady(aibotSessionID, {
           workerID: String(payload?.worker_id ?? "").trim(),
           workerControlURL: String(payload?.worker_control_url ?? "").trim(),
           workerControlToken: String(payload?.worker_control_token ?? "").trim(),
@@ -130,6 +177,10 @@ export async function run(argv = [], env = process.env) {
           lastStartedAt: Date.now(),
         });
       }
+      if (shouldNotifyWorkerReady(previousBinding, nextBinding)) {
+        await notifyWorkerReady(aibotClient, nextBinding);
+      }
+      await runtime?.handleWorkerStatusUpdate?.(previousBinding, nextBinding);
       return { ok: true };
     },
     onSendText: async (payload) => aibotClient.sendText({
@@ -163,6 +214,7 @@ export async function run(argv = [], env = process.env) {
     },
     onSendEventResult: async (payload) => {
       aibotClient.sendEventResult(payload);
+      await runtime?.handleEventCompleted?.(payload?.event_id);
       return { ok: true };
     },
     onSendEventStopAck: async (payload) => {
@@ -186,8 +238,8 @@ export async function run(argv = [], env = process.env) {
   });
   await bridgeServer.start();
 
-  const aibotClient = new AibotClient();
-  const runtime = new DaemonRuntime({
+  aibotClient = new AibotClient();
+  runtime = new DaemonRuntime({
     env: runtimeEnv,
     bindingRegistry,
     workerProcessManager,

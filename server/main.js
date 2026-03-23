@@ -36,6 +36,7 @@ import {
 import { saveEventEntry, loadEventEntries } from "./event-state-persistence.js";
 import {
   buildChannelNotificationParams,
+  collectReplayableRestoredEvents,
   shouldReplayRestoredEvent,
 } from "./channel-notification.js";
 import {
@@ -59,6 +60,9 @@ const composingKeepaliveTimers = new Map();
 const daemonBridgeURL = normalizeOptionalString(process.env.CLAWPOOL_DAEMON_BRIDGE_URL);
 const daemonBridgeToken = normalizeOptionalString(process.env.CLAWPOOL_DAEMON_BRIDGE_TOKEN);
 const daemonModeEnabled = process.env.CLAWPOOL_DAEMON_MODE === "1" && daemonBridgeURL && daemonBridgeToken;
+let workerReadyReported = false;
+let workerReadyPromise = null;
+let restoredEntriesForReadyReplay = [];
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -557,8 +561,9 @@ async function sendAccessStatusMessage(sessionID, text, clientMsgID) {
   });
 }
 
-async function handleDuplicateEvent(event) {
+async function handleDuplicateEvent(event, rawPayload = {}) {
   logInfo(`duplicate inbound event handled event=${event.event_id}`);
+  void rawPayload;
 
   if (event.acked) {
     resendAck(event);
@@ -934,7 +939,7 @@ async function handleInboundEvent(rawPayload) {
 
   let event = registration.event;
   if (registration.duplicate) {
-    await handleDuplicateEvent(event);
+    await handleDuplicateEvent(event, rawPayload);
     return;
   }
 
@@ -1546,11 +1551,15 @@ const toolDefinitions = [
   },
 ];
 
-mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: toolDefinitions,
-}));
+mcp.setRequestHandler(ListToolsRequestSchema, async () => {
+  await reportWorkerReadyOnce();
+  return {
+    tools: toolDefinitions,
+  };
+});
 
 mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
+  await reportWorkerReadyOnce();
   const name = normalizeString(request.params.name);
   const args = request.params.arguments ?? {};
 
@@ -1630,7 +1639,11 @@ async function restoreEventState() {
 }
 
 async function replayRestoredEvents(entries) {
-  const replayable = entries.filter((entry) => shouldReplayRestoredEvent(entry));
+  const replayable = collectReplayableRestoredEvents(entries, {
+    lookupCurrentEvent(eventID) {
+      return eventState.get(eventID);
+    },
+  });
   for (const entry of replayable) {
     try {
       await persistEventChannelContext(sessionContextStore, entry);
@@ -1642,14 +1655,43 @@ async function replayRestoredEvents(entries) {
   }
 }
 
+async function reportWorkerReadyOnce() {
+  if (!daemonModeEnabled || !workerBridgeClient.isConfigured() || workerReadyReported) {
+    return;
+  }
+  if (workerReadyPromise) {
+    await workerReadyPromise;
+    return;
+  }
+
+  workerReadyPromise = (async () => {
+    await workerBridgeClient.sendStatusUpdate({
+      worker_id: normalizeOptionalString(process.env.CLAWPOOL_WORKER_ID),
+      aibot_session_id: normalizeOptionalString(process.env.CLAWPOOL_AIBOT_SESSION_ID),
+      claude_session_id: normalizeOptionalString(process.env.CLAWPOOL_CLAUDE_SESSION_ID),
+      worker_control_url: workerControlServer?.getURL?.() ?? "",
+      worker_control_token: workerControlServer?.token ?? "",
+      status: "ready",
+    });
+    workerReadyReported = true;
+    restoredEntriesForReadyReplay = [];
+    logInfo("worker ready after MCP tools handshake");
+  })();
+
+  try {
+    await workerReadyPromise;
+  } finally {
+    workerReadyPromise = null;
+  }
+}
+
 async function bootstrap() {
   requireDaemonBridge();
   await configStore.load();
   await accessStore.load();
   await approvalStore.init();
   await questionStore.init();
-  const restoredEntries = await restoreEventState();
-  await mcp.connect(new StdioServerTransport());
+  restoredEntriesForReadyReplay = await restoreEventState();
   if (workerControlServer) {
     await workerControlServer.start();
   }
@@ -1663,18 +1705,18 @@ async function bootstrap() {
     worker_control_token: workerControlServer?.token ?? "",
     pid: process.pid,
   });
+  await mcp.connect(new StdioServerTransport());
   await workerBridgeClient.sendStatusUpdate({
     worker_id: normalizeOptionalString(process.env.CLAWPOOL_WORKER_ID),
     aibot_session_id: normalizeOptionalString(process.env.CLAWPOOL_AIBOT_SESSION_ID),
     claude_session_id: normalizeOptionalString(process.env.CLAWPOOL_CLAUDE_SESSION_ID),
     worker_control_url: workerControlServer?.getURL?.() ?? "",
     worker_control_token: workerControlServer?.token ?? "",
-    status: "ready",
+    status: "connected",
   });
   startApprovalPump();
   startQuestionPump();
-  await replayRestoredEvents(restoredEntries);
-  logInfo("worker started in daemon bridge mode");
+  logInfo("worker connected in daemon bridge mode");
 }
 
 process.once("SIGINT", () => {
