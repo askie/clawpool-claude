@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { BindingRegistry } from "./daemon/binding-registry.js";
+import { MessageDeliveryStore } from "./daemon/message-delivery-store.js";
 import { DaemonRuntime } from "./daemon/runtime.js";
 
 function makeAibotClient(sent) {
@@ -1160,6 +1161,244 @@ test("daemon runtime can forward stop and revoke by remembered event route", asy
   ]);
 });
 
+test("daemon runtime keeps remembered event routes across runtime restart", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const deliveredStops = [];
+  const deliveredEvents = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const messageDeliveryStateFile = path.join(tempDir, "message-delivery-state.json");
+
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-7b",
+    claude_session_id: "claude-7b",
+    cwd: tempDir,
+    worker_id: "worker-7b",
+    worker_status: "ready",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+    worker_control_url: "http://127.0.0.1:9995",
+    worker_control_token: "token-7b",
+  });
+
+  const firstStore = new MessageDeliveryStore(messageDeliveryStateFile);
+  await firstStore.load();
+  const firstRuntime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: firstStore,
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          deliveredEvents.push(payload);
+          return { ok: true };
+        },
+        async deliverStop(payload) {
+          deliveredStops.push(payload);
+          return { ok: true };
+        },
+        async deliverRevoke() {
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await firstRuntime.handleEvent({
+    event_id: "evt-7b",
+    session_id: "chat-7b",
+    msg_id: "msg-7b",
+    sender_id: "sender-7b",
+    content: "remember route after restart",
+  });
+
+  const restartedRegistry = new BindingRegistry(bindingFile);
+  await restartedRegistry.load();
+  const restartedStore = new MessageDeliveryStore(messageDeliveryStateFile);
+  await restartedStore.load();
+  const restartedRuntime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: restartedRegistry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: restartedStore,
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          deliveredEvents.push(payload);
+          return { ok: true };
+        },
+        async deliverStop(payload) {
+          deliveredStops.push(payload);
+          return { ok: true };
+        },
+        async deliverRevoke() {
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await restartedRuntime.handleStopEvent({
+    event_id: "evt-7b",
+    stop_id: "stop-7b",
+  });
+
+  assert.equal(deliveredEvents.length, 1);
+  assert.deepEqual(deliveredStops, [
+    {
+      event_id: "evt-7b",
+      stop_id: "stop-7b",
+    },
+  ]);
+});
+
+test("daemon runtime keeps pending events across runtime restart and flushes after worker is ready", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const delivered = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const messageDeliveryStateFile = path.join(tempDir, "message-delivery-state.json");
+
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-7c",
+    claude_session_id: "claude-7c",
+    cwd: tempDir,
+    worker_id: "worker-7c",
+    worker_status: "stopped",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const firstStore = new MessageDeliveryStore(messageDeliveryStateFile);
+  await firstStore.load();
+  const firstRuntime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: {
+      getWorkerRuntime() {
+        return null;
+      },
+      async spawnWorker(input) {
+        workerCalls.push({ kind: "spawn", input });
+        return {
+          worker_id: input.workerID,
+          status: "starting",
+        };
+      },
+      async stopWorker() {
+        return true;
+      },
+    },
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: firstStore,
+    async claudeSessionExists() {
+      return true;
+    },
+    workerControlClientFactory(binding) {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          delivered.push({
+            via: binding.worker_control_url,
+            payload,
+          });
+          return { ok: true };
+        },
+      };
+    },
+  });
+  firstRuntime.waitForWorkerBridgeState = async () => registry.getByAibotSessionID("chat-7c");
+
+  await firstRuntime.handleEvent({
+    event_id: "evt-7c",
+    session_id: "chat-7c",
+    msg_id: "msg-7c",
+    sender_id: "sender-7c",
+    content: "keep pending across restart",
+  });
+
+  assert.equal(delivered.length, 0);
+
+  const restartedRegistry = new BindingRegistry(bindingFile);
+  await restartedRegistry.load();
+  const restartedStore = new MessageDeliveryStore(messageDeliveryStateFile);
+  await restartedStore.load();
+  const restartedRuntime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: restartedRegistry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: restartedStore,
+    workerControlClientFactory(binding) {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          delivered.push({
+            via: binding.worker_control_url,
+            payload,
+          });
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  const previousBinding = restartedRegistry.getByAibotSessionID("chat-7c");
+  const readyBinding = await restartedRegistry.markWorkerReady("chat-7c", {
+    workerID: "worker-7c",
+    workerControlURL: "http://127.0.0.1:99951",
+    workerControlToken: "token-7c",
+    updatedAt: Date.now(),
+    lastStartedAt: Date.now(),
+  });
+  await restartedRuntime.handleWorkerStatusUpdate(previousBinding, readyBinding);
+
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].payload.event_id, "evt-7c");
+  assert.equal(delivered[0].via, "http://127.0.0.1:99951");
+});
+
 test("daemon runtime fails an unfinished event when worker stops mid-processing", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
@@ -1234,4 +1473,103 @@ test("daemon runtime fails an unfinished event when worker stops mid-processing"
       msg: "worker interrupted while processing event",
     },
   );
+});
+
+test("daemon runtime fails persisted in-flight events after restart recovery", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const firstSent = [];
+  const secondSent = [];
+  const workerCalls = [];
+  const delivered = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const messageDeliveryStateFile = path.join(tempDir, "message-delivery-state.json");
+
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-8b",
+    claude_session_id: "claude-8b",
+    cwd: tempDir,
+    worker_id: "worker-8b",
+    worker_status: "ready",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+    worker_control_url: "http://127.0.0.1:9987",
+    worker_control_token: "token-8b",
+  });
+
+  const firstStore = new MessageDeliveryStore(messageDeliveryStateFile);
+  await firstStore.load();
+  const firstRuntime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient(firstSent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: firstStore,
+    workerControlClientFactory(binding) {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          delivered.push({
+            via: binding.worker_control_url,
+            payload,
+          });
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await firstRuntime.handleEvent({
+    event_id: "evt-8b",
+    session_id: "chat-8b",
+    msg_id: "msg-8b",
+    sender_id: "sender-8b",
+    content: "restart while in flight",
+  });
+
+  const restartedRegistry = new BindingRegistry(bindingFile);
+  await restartedRegistry.load();
+  await restartedRegistry.resetTransientWorkerStates();
+  const restartedStore = new MessageDeliveryStore(messageDeliveryStateFile);
+  await restartedStore.load();
+  const restartedRuntime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: restartedRegistry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient(secondSent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: restartedStore,
+  });
+
+  await restartedRuntime.recoverPersistedDeliveryState();
+
+  assert.equal(delivered.length, 1);
+  assert.equal(
+    secondSent.some((item) => item.kind === "text" && /没有处理完成/u.test(item.payload.text)),
+    true,
+  );
+  assert.deepEqual(
+    secondSent.find((item) => item.kind === "event_result")?.payload,
+    {
+      event_id: "evt-8b",
+      status: "failed",
+      code: "worker_interrupted",
+      msg: "worker interrupted while processing event",
+    },
+  );
+  assert.equal(restartedStore.getPendingEvent("evt-8b"), null);
+  assert.equal(restartedStore.getRememberedSessionID("evt-8b"), "");
 });

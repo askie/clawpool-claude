@@ -1,14 +1,12 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { readJSONFile, writeJSONFileAtomic } from "../json-file.js";
-
-const schemaVersion = 1;
+import { SessionBindingStore } from "./session-binding-store.js";
+import { WorkerRuntimeStore } from "./worker-runtime-store.js";
 
 function normalizeString(value) {
   return String(value ?? "").trim();
 }
 
-function normalizeTimestamp(value, fallbackValue = Date.now()) {
+function normalizeTimestamp(value, fallbackValue = 0) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) {
     return Math.floor(fallbackValue);
@@ -16,116 +14,85 @@ function normalizeTimestamp(value, fallbackValue = Date.now()) {
   return Math.floor(numeric);
 }
 
-function normalizeWorkerStatus(value) {
-  const normalized = normalizeString(value);
-  if (
-    normalized === "starting" ||
-    normalized === "connected" ||
-    normalized === "ready" ||
-    normalized === "stopped" ||
-    normalized === "failed"
-  ) {
-    return normalized;
-  }
-  return "starting";
+function resolveWorkerRuntimeStorePath(bindingFilePath) {
+  const parsed = path.parse(bindingFilePath);
+  return path.join(parsed.dir, `${parsed.name}.worker-runtimes${parsed.ext || ".json"}`);
 }
 
-function normalizeBinding(input) {
-  if (!input || typeof input !== "object") {
-    return null;
-  }
-
-  const aibotSessionID = normalizeString(input.aibot_session_id);
-  const claudeSessionID = normalizeString(input.claude_session_id);
-  const cwd = normalizeString(input.cwd);
-  if (!aibotSessionID || !claudeSessionID || !cwd) {
+function mergeBindingWithRuntime(binding, runtime) {
+  if (!binding) {
     return null;
   }
 
   return {
-    schema_version: schemaVersion,
-    aibot_session_id: aibotSessionID,
-    claude_session_id: claudeSessionID,
-    cwd,
-    worker_id: normalizeString(input.worker_id),
-    worker_status: normalizeWorkerStatus(input.worker_status),
-    plugin_data_dir: normalizeString(input.plugin_data_dir),
-    worker_control_url: normalizeString(input.worker_control_url),
-    worker_control_token: normalizeString(input.worker_control_token),
-    created_at: normalizeTimestamp(input.created_at),
-    updated_at: normalizeTimestamp(input.updated_at),
-    last_started_at: normalizeTimestamp(input.last_started_at, 0),
-    last_stopped_at: normalizeTimestamp(input.last_stopped_at, 0),
-  };
-}
-
-function normalizeRegistry(input) {
-  const bindings = {};
-  if (!input || typeof input !== "object" || Number(input.schema_version) !== schemaVersion) {
-    return {
-      schema_version: schemaVersion,
-      bindings,
-    };
-  }
-
-  for (const [key, rawBinding] of Object.entries(input.bindings ?? {})) {
-    const normalizedKey = normalizeString(key);
-    const binding = normalizeBinding(rawBinding);
-    if (!normalizedKey || !binding || binding.aibot_session_id !== normalizedKey) {
-      continue;
-    }
-    bindings[normalizedKey] = binding;
-  }
-
-  return {
-    schema_version: schemaVersion,
-    bindings,
+    ...binding,
+    worker_id: normalizeString(runtime?.worker_id),
+    worker_status: normalizeString(runtime?.worker_status) || "stopped",
+    worker_control_url: normalizeString(runtime?.worker_control_url),
+    worker_control_token: normalizeString(runtime?.worker_control_token),
+    updated_at: Math.max(
+      normalizeTimestamp(binding.updated_at),
+      normalizeTimestamp(runtime?.updated_at),
+    ),
+    last_started_at: normalizeTimestamp(runtime?.last_started_at),
+    last_stopped_at: normalizeTimestamp(runtime?.last_stopped_at),
   };
 }
 
 export class BindingRegistry {
-  constructor(filePath) {
-    this.filePath = filePath;
-    this.state = normalizeRegistry(null);
+  constructor(filePathOrOptions) {
+    const options = typeof filePathOrOptions === "string"
+      ? {
+          bindingFilePath: filePathOrOptions,
+          workerRuntimeFilePath: resolveWorkerRuntimeStorePath(filePathOrOptions),
+        }
+      : (filePathOrOptions ?? {});
+    this.bindingStore = new SessionBindingStore(options.bindingFilePath);
+    this.workerRuntimeStore = new WorkerRuntimeStore(
+      options.workerRuntimeFilePath || resolveWorkerRuntimeStorePath(options.bindingFilePath),
+    );
   }
 
   async load() {
-    const stored = await readJSONFile(this.filePath, null);
-    this.state = normalizeRegistry(stored);
+    await Promise.all([
+      this.bindingStore.load(),
+      this.workerRuntimeStore.load(),
+    ]);
     return this.listBindings();
   }
 
   listBindings() {
-    return Object.values(this.state.bindings)
-      .map((binding) => ({ ...binding }))
+    return this.bindingStore.list()
+      .map((binding) => mergeBindingWithRuntime(
+        binding,
+        this.workerRuntimeStore.get(binding.aibot_session_id),
+      ))
       .sort((left, right) => left.aibot_session_id.localeCompare(right.aibot_session_id));
   }
 
   getByAibotSessionID(aibotSessionID) {
-    const normalized = normalizeString(aibotSessionID);
-    if (!normalized) {
+    const binding = this.bindingStore.get(aibotSessionID);
+    if (!binding) {
       return null;
     }
-    const binding = this.state.bindings[normalized];
-    return binding ? { ...binding } : null;
+    return mergeBindingWithRuntime(
+      binding,
+      this.workerRuntimeStore.get(binding.aibot_session_id),
+    );
   }
 
   async createBinding(input) {
-    const normalized = normalizeBinding({
-      ...input,
+    const binding = await this.bindingStore.create(input);
+    const runtime = await this.workerRuntimeStore.createOrUpdate(binding.aibot_session_id, {
+      worker_id: input.worker_id,
       worker_status: input.worker_status || "starting",
-      created_at: input.created_at ?? Date.now(),
+      worker_control_url: input.worker_control_url,
+      worker_control_token: input.worker_control_token,
       updated_at: input.updated_at ?? Date.now(),
+      last_started_at: input.last_started_at ?? 0,
+      last_stopped_at: input.last_stopped_at ?? 0,
     });
-    if (!normalized) {
-      throw new Error("valid binding is required");
-    }
-    if (this.state.bindings[normalized.aibot_session_id]) {
-      throw new Error("binding already exists for aibot_session_id");
-    }
-    this.state.bindings[normalized.aibot_session_id] = normalized;
-    await this.save();
-    return { ...normalized };
+    return mergeBindingWithRuntime(binding, runtime);
   }
 
   async markWorkerStarting(aibotSessionID, {
@@ -135,7 +102,11 @@ export class BindingRegistry {
     updatedAt = Date.now(),
     lastStartedAt = Date.now(),
   } = {}) {
-    return this.updateBinding(aibotSessionID, {
+    const binding = this.bindingStore.get(aibotSessionID);
+    if (!binding) {
+      throw new Error("binding not found");
+    }
+    const runtime = await this.workerRuntimeStore.createOrUpdate(aibotSessionID, {
       worker_id: workerID,
       worker_status: "starting",
       worker_control_url: workerControlURL,
@@ -143,6 +114,7 @@ export class BindingRegistry {
       updated_at: updatedAt,
       last_started_at: lastStartedAt,
     });
+    return mergeBindingWithRuntime(binding, runtime);
   }
 
   async markWorkerConnected(aibotSessionID, {
@@ -152,7 +124,11 @@ export class BindingRegistry {
     updatedAt = Date.now(),
     lastStartedAt = Date.now(),
   } = {}) {
-    return this.updateBinding(aibotSessionID, {
+    const binding = this.bindingStore.get(aibotSessionID);
+    if (!binding) {
+      throw new Error("binding not found");
+    }
+    const runtime = await this.workerRuntimeStore.createOrUpdate(aibotSessionID, {
       worker_id: workerID,
       worker_status: "connected",
       worker_control_url: workerControlURL,
@@ -160,6 +136,7 @@ export class BindingRegistry {
       updated_at: updatedAt,
       last_started_at: lastStartedAt,
     });
+    return mergeBindingWithRuntime(binding, runtime);
   }
 
   async markWorkerReady(aibotSessionID, {
@@ -169,7 +146,11 @@ export class BindingRegistry {
     updatedAt = Date.now(),
     lastStartedAt = Date.now(),
   } = {}) {
-    return this.updateBinding(aibotSessionID, {
+    const binding = this.bindingStore.get(aibotSessionID);
+    if (!binding) {
+      throw new Error("binding not found");
+    }
+    const runtime = await this.workerRuntimeStore.createOrUpdate(aibotSessionID, {
       worker_id: workerID,
       worker_status: "ready",
       worker_control_url: workerControlURL,
@@ -177,85 +158,50 @@ export class BindingRegistry {
       updated_at: updatedAt,
       last_started_at: lastStartedAt,
     });
+    return mergeBindingWithRuntime(binding, runtime);
   }
 
   async markWorkerStopped(aibotSessionID, { updatedAt = Date.now(), lastStoppedAt = Date.now() } = {}) {
-    return this.updateBinding(aibotSessionID, {
+    const binding = this.bindingStore.get(aibotSessionID);
+    if (!binding) {
+      throw new Error("binding not found");
+    }
+    const runtime = await this.workerRuntimeStore.createOrUpdate(aibotSessionID, {
       worker_status: "stopped",
       worker_control_url: "",
       worker_control_token: "",
       updated_at: updatedAt,
       last_stopped_at: lastStoppedAt,
     });
+    return mergeBindingWithRuntime(binding, runtime);
   }
 
   async markWorkerFailed(aibotSessionID, { updatedAt = Date.now(), lastStoppedAt = Date.now() } = {}) {
-    return this.updateBinding(aibotSessionID, {
+    const binding = this.bindingStore.get(aibotSessionID);
+    if (!binding) {
+      throw new Error("binding not found");
+    }
+    const runtime = await this.workerRuntimeStore.createOrUpdate(aibotSessionID, {
       worker_status: "failed",
       worker_control_url: "",
       worker_control_token: "",
       updated_at: updatedAt,
       last_stopped_at: lastStoppedAt,
     });
-  }
-
-  async updateBinding(aibotSessionID, patch) {
-    const normalizedSessionID = normalizeString(aibotSessionID);
-    const existing = this.state.bindings[normalizedSessionID];
-    if (!existing) {
-      throw new Error("binding not found");
-    }
-    const next = normalizeBinding({
-      ...existing,
-      ...patch,
-      aibot_session_id: existing.aibot_session_id,
-      claude_session_id: existing.claude_session_id,
-      cwd: existing.cwd,
-      plugin_data_dir: patch.plugin_data_dir ?? existing.plugin_data_dir,
-      created_at: existing.created_at,
-    });
-    this.state.bindings[normalizedSessionID] = next;
-    await this.save();
-    return { ...next };
-  }
-
-  async save() {
-    await mkdir(path.dirname(this.filePath), { recursive: true });
-    await writeJSONFileAtomic(this.filePath, this.state);
+    return mergeBindingWithRuntime(binding, runtime);
   }
 
   async resetTransientWorkerStates({
     updatedAt = Date.now(),
     lastStoppedAt = Date.now(),
   } = {}) {
-    let changed = false;
-
-    for (const [sessionID, existing] of Object.entries(this.state.bindings)) {
-      const shouldResetStatus = existing.worker_status === "starting"
-        || existing.worker_status === "connected"
-        || existing.worker_status === "ready";
-      const hasWorkerControl = Boolean(existing.worker_control_url || existing.worker_control_token);
-
-      if (!shouldResetStatus && !hasWorkerControl) {
-        continue;
-      }
-
-      this.state.bindings[sessionID] = normalizeBinding({
-        ...existing,
-        worker_status: shouldResetStatus ? "stopped" : existing.worker_status,
-        worker_control_url: "",
-        worker_control_token: "",
-        updated_at: updatedAt,
-        last_stopped_at: shouldResetStatus ? lastStoppedAt : existing.last_stopped_at,
-      });
-      changed = true;
-    }
-
+    const changed = await this.workerRuntimeStore.resetTransientStates({
+      updatedAt,
+      lastStoppedAt,
+    });
     if (!changed) {
       return [];
     }
-
-    await this.save();
     return this.listBindings();
   }
 }

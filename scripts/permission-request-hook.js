@@ -4,6 +4,7 @@ import { AccessStore } from "../server/access-store.js";
 import { resolveHookChannelContext } from "../server/channel-context-resolution.js";
 import { ChannelContextStore } from "../server/channel-context-store.js";
 import { ApprovalStore } from "../server/approval-store.js";
+import { writeTraceStderr } from "../server/logging.js";
 import {
   resolveAccessPath,
   resolveApprovalNotificationsDir,
@@ -20,6 +21,15 @@ function logDebug(message) {
     return;
   }
   process.stderr.write(`[permission-request-hook] ${message}\n`);
+}
+
+function trace(fields) {
+  writeTraceStderr({
+    component: "hook.permission_request",
+    ...fields,
+  }, {
+    env: process.env,
+  });
 }
 
 function sleep(delayMs) {
@@ -66,6 +76,10 @@ async function main() {
     typeof input.tool_input.answers === "object" &&
     Object.keys(input.tool_input.answers).length > 0
   ) {
+    trace({
+      stage: "ask_user_question_allowed",
+      session_id: input.session_id,
+    });
     logDebug("allowing AskUserQuestion because remote answers are already present");
     writeResult(buildPermissionResult({ behavior: "allow" }));
     return;
@@ -90,6 +104,12 @@ async function main() {
     `context session=${String(input.session_id ?? "")} cwd=${String(input.cwd ?? "")} transcript=${String(input.transcript_path ?? "")} status=${contextResolution.status} reason=${contextResolution.reason || ""} source=${contextResolution.source || ""}`,
   );
   if (contextResolution.status !== "resolved" || !contextResolution.context?.chat_id) {
+    trace({
+      stage: "channel_context_missing",
+      session_id: input.session_id,
+      tool_name: input.tool_name,
+      reason: contextResolution.reason || "no_channel_context",
+    });
     process.stderr.write(
       `permission-request-hook bridge skipped: ${contextResolution.reason || "no_channel_context"}\n`,
     );
@@ -113,6 +133,14 @@ async function main() {
     permission_suggestions: input.permission_suggestions ?? [],
     channel_context: contextResolution.context,
   });
+  trace({
+    stage: "approval_request_created",
+    request_id: request.request_id,
+    event_id: request.channel_context.event_id,
+    chat_id: request.channel_context.chat_id,
+    session_id: request.session_id,
+    tool_name: request.tool_name,
+  });
   logDebug(
     `created request_id=${request.request_id} chat_id=${request.channel_context.chat_id} tool=${String(input.tool_name ?? "")}`,
   );
@@ -121,6 +149,14 @@ async function main() {
   while (Date.now() < deadlineAt) {
     const current = await approvalStore.getRequest(request.request_id);
     if (current?.status === "resolved" && current.decision) {
+      trace({
+        stage: "approval_request_resolved",
+        request_id: current.request_id,
+        event_id: current.channel_context.event_id,
+        chat_id: current.channel_context.chat_id,
+        session_id: current.session_id,
+        decision: current.decision.behavior,
+      });
       logDebug(`resolved request_id=${request.request_id}`);
       writeResult(buildPermissionResult(current.decision));
       return;
@@ -132,6 +168,13 @@ async function main() {
   }
 
   await approvalStore.markExpired(request.request_id);
+  trace({
+    stage: "approval_request_expired",
+    request_id: request.request_id,
+    event_id: request.channel_context.event_id,
+    chat_id: request.channel_context.chat_id,
+    session_id: request.session_id,
+  });
   logDebug(`expired request_id=${request.request_id}`);
   writeResult(buildPermissionResult({
     behavior: "deny",

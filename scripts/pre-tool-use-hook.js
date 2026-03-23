@@ -7,6 +7,7 @@ import {
   resolveSessionContextsDir,
 } from "../server/paths.js";
 import { QuestionStore } from "../server/question-store.js";
+import { writeTraceStderr } from "../server/logging.js";
 
 const remoteQuestionTimeoutMs = 10 * 60 * 1000;
 const pollIntervalMs = 1000;
@@ -17,6 +18,15 @@ function logDebug(message) {
     return;
   }
   process.stderr.write(`[pre-tool-use-hook] ${message}\n`);
+}
+
+function trace(fields) {
+  writeTraceStderr({
+    component: "hook.pre_tool_use",
+    ...fields,
+  }, {
+    env: process.env,
+  });
 }
 
 function sleep(delayMs) {
@@ -85,6 +95,12 @@ async function main() {
     `context session=${String(input.session_id ?? "")} cwd=${String(input.cwd ?? "")} transcript=${String(input.transcript_path ?? "")} status=${contextResolution.status} reason=${contextResolution.reason || ""} source=${contextResolution.source || ""}`,
   );
   if (contextResolution.status !== "resolved" || !contextResolution.context?.chat_id) {
+    trace({
+      stage: "channel_context_missing",
+      session_id: input.session_id,
+      tool_name: input.tool_name,
+      reason: contextResolution.reason || "no_channel_context",
+    });
     process.stderr.write(
       `pre-tool-use-hook bridge skipped: ${contextResolution.reason || "no_channel_context"}\n`,
     );
@@ -105,6 +121,13 @@ async function main() {
     questions,
     channel_context: contextResolution.context,
   });
+  trace({
+    stage: "question_request_created",
+    request_id: request.request_id,
+    event_id: request.channel_context.event_id,
+    chat_id: request.channel_context.chat_id,
+    session_id: request.session_id,
+  });
   logDebug(
     `created request_id=${request.request_id} chat_id=${request.channel_context.chat_id} question_count=${request.questions.length}`,
   );
@@ -113,6 +136,13 @@ async function main() {
   while (Date.now() < deadlineAt) {
     const current = await questionStore.getRequest(request.request_id);
     if (current?.status === "resolved" && current.answers) {
+      trace({
+        stage: "question_request_resolved",
+        request_id: current.request_id,
+        event_id: current.channel_context.event_id,
+        chat_id: current.channel_context.chat_id,
+        session_id: current.session_id,
+      });
       logDebug(`resolved request_id=${request.request_id}`);
       writeResult(buildAllowResult({
         questions: current.questions,
@@ -127,6 +157,13 @@ async function main() {
   }
 
   await questionStore.markExpired(request.request_id);
+  trace({
+    stage: "question_request_expired",
+    request_id: request.request_id,
+    event_id: request.channel_context.event_id,
+    chat_id: request.channel_context.chat_id,
+    session_id: request.session_id,
+  });
   logDebug(`expired request_id=${request.request_id}`);
   writeResult(buildDenyResult("Remote question timed out."));
 }

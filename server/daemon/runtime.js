@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { parseControlCommand } from "./control-command.js";
 import { normalizeInboundEventPayload } from "../inbound-event-meta.js";
+import { MessageDeliveryStore } from "./message-delivery-store.js";
 import { resolveWorkerPluginDataDir } from "./daemon-paths.js";
 import { WorkerControlClient } from "./worker-control-client.js";
 import { claudeSessionExists as defaultClaudeSessionExists } from "./claude-session-store.js";
@@ -33,18 +34,6 @@ function formatBindingSummary(binding) {
   ].join("\n");
 }
 
-function buildPendingEventRecord(rawPayload) {
-  return {
-    eventID: normalizeString(rawPayload?.event_id),
-    sessionID: normalizeString(rawPayload?.session_id),
-    msgID: normalizeString(rawPayload?.msg_id),
-    rawPayload: { ...(rawPayload ?? {}) },
-    delivery_attempts: 0,
-    delivery_state: "pending",
-    last_worker_id: "",
-  };
-}
-
 function buildInterruptedEventNotice() {
   return "Claude 刚刚中断了，这条消息没有处理完成。请再发一次。";
 }
@@ -74,6 +63,8 @@ export class DaemonRuntime {
     bridgeServer,
     workerControlClientFactory = null,
     claudeSessionExists = defaultClaudeSessionExists,
+    messageDeliveryStore = null,
+    logger = null,
   }) {
     this.env = env;
     this.bindingRegistry = bindingRegistry;
@@ -89,8 +80,17 @@ export class DaemonRuntime {
     this.claudeSessionExists = typeof claudeSessionExists === "function"
       ? claudeSessionExists
       : defaultClaudeSessionExists;
-    this.eventSessionIndex = new Map();
-    this.pendingEvents = new Map();
+    this.messageDeliveryStore = messageDeliveryStore instanceof MessageDeliveryStore
+      ? messageDeliveryStore
+      : new MessageDeliveryStore();
+    this.logger = logger;
+  }
+
+  trace(fields, level = "info") {
+    this.logger?.trace?.({
+      component: "daemon.runtime",
+      ...fields,
+    }, { level });
   }
 
   async reply(event, text, extra = {}) {
@@ -108,6 +108,12 @@ export class DaemonRuntime {
       sessionID: event.session_id,
       msgID: event.msg_id,
       receivedAt: Date.now(),
+    });
+    this.trace({
+      stage: "event_acked",
+      event_id: event.event_id,
+      session_id: event.session_id,
+      msg_id: event.msg_id,
     });
   }
 
@@ -239,70 +245,46 @@ export class DaemonRuntime {
     return client.deliverRevoke(rawPayload);
   }
 
-  trackPendingEvent(rawPayload) {
-    const record = buildPendingEventRecord(rawPayload);
-    if (!record.eventID || !record.sessionID) {
-      return null;
-    }
-    const existing = this.pendingEvents.get(record.eventID);
-    if (existing) {
-      return existing;
-    }
-    this.pendingEvents.set(record.eventID, record);
-    return record;
+  async trackPendingEvent(rawPayload) {
+    return this.messageDeliveryStore.trackPendingEvent(rawPayload);
   }
 
-  markPendingEventDelivered(eventID, binding) {
-    const record = this.pendingEvents.get(normalizeString(eventID));
-    if (!record) {
-      return null;
-    }
-    record.delivery_attempts += 1;
-    record.delivery_state = "delivered";
-    record.last_worker_id = normalizeString(binding?.worker_id);
-    return record;
+  async markPendingEventDelivered(eventID, binding) {
+    return this.messageDeliveryStore.markPendingEventDelivered(
+      eventID,
+      normalizeString(binding?.worker_id),
+    );
   }
 
-  markPendingEventDispatching(eventID, binding) {
-    const record = this.pendingEvents.get(normalizeString(eventID));
-    if (!record) {
-      return null;
-    }
-    record.delivery_attempts += 1;
-    record.delivery_state = "dispatching";
-    record.last_worker_id = normalizeString(binding?.worker_id);
-    return record;
+  async markPendingEventDispatching(eventID, binding) {
+    return this.messageDeliveryStore.markPendingEventDispatching(
+      eventID,
+      normalizeString(binding?.worker_id),
+    );
   }
 
-  markPendingEventPending(eventID) {
-    const record = this.pendingEvents.get(normalizeString(eventID));
-    if (!record) {
-      return null;
-    }
-    record.delivery_state = "pending";
-    return record;
+  async markPendingEventPending(eventID) {
+    return this.messageDeliveryStore.markPendingEventPending(eventID);
   }
 
-  markPendingEventInterrupted(eventID) {
-    const record = this.pendingEvents.get(normalizeString(eventID));
-    if (!record) {
-      return null;
-    }
-    record.delivery_state = "interrupted";
-    return record;
+  async markPendingEventInterrupted(eventID) {
+    return this.messageDeliveryStore.markPendingEventInterrupted(eventID);
   }
 
-  clearPendingEvent(eventID) {
-    this.pendingEvents.delete(normalizeString(eventID));
+  async clearPendingEvent(eventID) {
+    await this.messageDeliveryStore.clearEventState(eventID);
   }
 
   listPendingEventsForSession(sessionID) {
-    const normalizedSessionID = normalizeString(sessionID);
-    if (!normalizedSessionID) {
-      return [];
-    }
-    return Array.from(this.pendingEvents.values())
-      .filter((record) => record.sessionID === normalizedSessionID);
+    return this.messageDeliveryStore.listPendingEventsForSession(sessionID);
+  }
+
+  listPendingEvents() {
+    return this.messageDeliveryStore.listPendingEvents();
+  }
+
+  getPendingEvent(eventID) {
+    return this.messageDeliveryStore.getPendingEvent(eventID);
   }
 
   async flushPendingSessionEvents(sessionID, binding) {
@@ -320,11 +302,30 @@ export class DaemonRuntime {
         continue;
       }
       try {
-        this.markPendingEventDispatching(record.eventID, binding);
+        this.trace({
+          stage: "pending_event_flushing",
+          event_id: record.eventID,
+          session_id: record.sessionID,
+          worker_id: binding?.worker_id,
+        });
+        await this.markPendingEventDispatching(record.eventID, binding);
         await this.deliverEventToWorker(binding, record.rawPayload);
-        this.markPendingEventDelivered(record.eventID, binding);
-      } catch {
-        this.markPendingEventPending(record.eventID);
+        await this.markPendingEventDelivered(record.eventID, binding);
+        this.trace({
+          stage: "pending_event_flushed",
+          event_id: record.eventID,
+          session_id: record.sessionID,
+          worker_id: binding?.worker_id,
+        });
+      } catch (error) {
+        await this.markPendingEventPending(record.eventID);
+        this.trace({
+          stage: "pending_event_flush_failed",
+          event_id: record.eventID,
+          session_id: record.sessionID,
+          worker_id: binding?.worker_id,
+          error: error instanceof Error ? error.message : String(error),
+        }, "error");
         return;
       }
     }
@@ -357,7 +358,14 @@ export class DaemonRuntime {
     } catch {
       // best effort only
     }
-    this.clearPendingEvent(record.eventID);
+    await this.clearPendingEvent(record.eventID);
+    this.trace({
+      stage: "pending_event_failed",
+      event_id: record.eventID,
+      session_id: record.sessionID,
+      status: "failed",
+      code: "worker_interrupted",
+    }, "error");
   }
 
   async handleWorkerStatusUpdate(previousBinding, nextBinding) {
@@ -366,6 +374,13 @@ export class DaemonRuntime {
     if (!sessionID || !nextStatus) {
       return;
     }
+
+    this.trace({
+      stage: "worker_status_updated",
+      session_id: sessionID,
+      worker_id: nextBinding?.worker_id || previousBinding?.worker_id,
+      status: nextStatus,
+    });
 
     if (canDeliverToWorker(nextBinding)) {
       await this.flushPendingSessionEvents(sessionID, nextBinding);
@@ -383,13 +398,49 @@ export class DaemonRuntime {
       if (previousWorkerID && normalizeString(record.last_worker_id) !== previousWorkerID) {
         continue;
       }
-      this.markPendingEventInterrupted(record.eventID);
+      await this.markPendingEventInterrupted(record.eventID);
       await this.failPendingEvent(record);
     }
   }
 
   async handleEventCompleted(eventID) {
-    this.clearPendingEvent(eventID);
+    await this.clearPendingEvent(eventID);
+    this.trace({
+      stage: "event_completed",
+      event_id: eventID,
+    });
+  }
+
+  async recoverPersistedDeliveryState() {
+    for (const record of this.listPendingEvents()) {
+      this.trace({
+        stage: "delivery_state_recovered",
+        event_id: record.eventID,
+        session_id: record.sessionID,
+        delivery_state: record.delivery_state,
+      });
+      const binding = this.bindingRegistry.getByAibotSessionID(record.sessionID);
+      if (!binding) {
+        await this.clearPendingEvent(record.eventID);
+        this.trace({
+          stage: "delivery_state_cleared_missing_binding",
+          event_id: record.eventID,
+          session_id: record.sessionID,
+        }, "error");
+        continue;
+      }
+
+      if (record.delivery_state === "pending") {
+        if (canDeliverToWorker(binding)) {
+          await this.flushPendingSessionEvents(record.sessionID, binding);
+        }
+        continue;
+      }
+
+      await this.markPendingEventInterrupted(record.eventID);
+      const currentRecord = this.getPendingEvent(record.eventID) ?? record;
+      await this.failPendingEvent(currentRecord);
+    }
   }
 
   async deliverWithRecovery(aibotSessionID, rawPayload, deliverFn) {
@@ -401,11 +452,32 @@ export class DaemonRuntime {
     let readyBinding = binding;
     if (canDeliverToWorker(binding)) {
       try {
-        this.markPendingEventDispatching(rawPayload?.event_id, binding);
+        this.trace({
+          stage: "event_dispatching",
+          event_id: rawPayload?.event_id,
+          session_id: aibotSessionID,
+          worker_id: binding?.worker_id,
+          path: "ready_worker",
+        });
+        await this.markPendingEventDispatching(rawPayload?.event_id, binding);
         await deliverFn.call(this, binding, rawPayload);
+        this.trace({
+          stage: "event_dispatched",
+          event_id: rawPayload?.event_id,
+          session_id: aibotSessionID,
+          worker_id: binding?.worker_id,
+          path: "ready_worker",
+        });
         return binding;
-      } catch {
-        this.markPendingEventPending(rawPayload?.event_id);
+      } catch (error) {
+        await this.markPendingEventPending(rawPayload?.event_id);
+        this.trace({
+          stage: "event_dispatch_retrying",
+          event_id: rawPayload?.event_id,
+          session_id: aibotSessionID,
+          worker_id: binding?.worker_id,
+          error: error instanceof Error ? error.message : String(error),
+        }, "error");
         readyBinding = await this.bindingRegistry.markWorkerStarting(binding.aibot_session_id, {
           workerID: binding.worker_id || randomUUID(),
           updatedAt: Date.now(),
@@ -416,11 +488,30 @@ export class DaemonRuntime {
 
     readyBinding = await this.ensureReadyBinding(readyBinding.aibot_session_id);
     if (!canDeliverToWorker(readyBinding)) {
+      this.trace({
+        stage: "event_waiting_worker",
+        event_id: rawPayload?.event_id,
+        session_id: aibotSessionID,
+      });
       return null;
     }
 
-    this.markPendingEventDispatching(rawPayload?.event_id, readyBinding);
+    this.trace({
+      stage: "event_dispatching",
+      event_id: rawPayload?.event_id,
+      session_id: aibotSessionID,
+      worker_id: readyBinding?.worker_id,
+      path: "recovered_worker",
+    });
+    await this.markPendingEventDispatching(rawPayload?.event_id, readyBinding);
     await deliverFn.call(this, readyBinding, rawPayload);
+    this.trace({
+      stage: "event_dispatched",
+      event_id: rawPayload?.event_id,
+      session_id: aibotSessionID,
+      worker_id: readyBinding?.worker_id,
+      path: "recovered_worker",
+    });
     return readyBinding;
   }
 
@@ -600,7 +691,13 @@ export class DaemonRuntime {
     if (!event.event_id || !event.session_id || !event.msg_id) {
       return;
     }
-    this.eventSessionIndex.set(event.event_id, event.session_id);
+    this.trace({
+      stage: "event_received",
+      event_id: event.event_id,
+      session_id: event.session_id,
+      msg_id: event.msg_id,
+      sender_id: event.sender_id,
+    });
     this.ack(event);
 
     const parsed = parseControlCommand(event.content);
@@ -611,6 +708,11 @@ export class DaemonRuntime {
 
     const binding = this.bindingRegistry.getByAibotSessionID(event.session_id);
     if (!binding) {
+      this.trace({
+        stage: "event_binding_missing",
+        event_id: event.event_id,
+        session_id: event.session_id,
+      }, "error");
       await this.reply(
         event,
         "当前会话还没有绑定目录。先发送 open <目录> 来创建会话。",
@@ -619,7 +721,15 @@ export class DaemonRuntime {
       return;
     }
 
-    const pending = this.trackPendingEvent(rawPayload);
+    const pending = await this.trackPendingEvent(rawPayload);
+    if (pending) {
+      this.trace({
+        stage: "event_tracked",
+        event_id: pending.eventID,
+        session_id: pending.sessionID,
+        msg_id: pending.msgID,
+      });
+    }
     const deliveredBinding = await this.deliverWithRecovery(
       binding.aibot_session_id,
       rawPayload,
@@ -627,13 +737,26 @@ export class DaemonRuntime {
     );
     if (deliveredBinding) {
       if (pending) {
-        this.markPendingEventDelivered(pending.eventID, deliveredBinding);
+        await this.markPendingEventDelivered(pending.eventID, deliveredBinding);
       }
+      this.trace({
+        stage: "event_forwarded",
+        event_id: event.event_id,
+        session_id: event.session_id,
+        worker_id: deliveredBinding?.worker_id,
+      });
       return;
     }
 
     const readyBinding = this.bindingRegistry.getByAibotSessionID(binding.aibot_session_id) ?? binding;
     if (!readyBinding.worker_control_url || !readyBinding.worker_control_token) {
+      this.trace({
+        stage: "event_worker_not_ready",
+        event_id: event.event_id,
+        session_id: event.session_id,
+        worker_id: readyBinding?.worker_id,
+        status: readyBinding?.worker_status,
+      }, "error");
       await this.reply(
         event,
         `当前会话已经绑定到原 Claude，但 worker 还没准备好。\n\n${formatBindingSummary(readyBinding ?? binding)}`,
@@ -648,12 +771,30 @@ export class DaemonRuntime {
     if (!eventID) {
       return;
     }
-    const sessionID = normalizeString(rawPayload?.session_id) || this.eventSessionIndex.get(eventID) || "";
+    this.trace({
+      stage: "stop_received",
+      event_id: eventID,
+      session_id: rawPayload?.session_id,
+      stop_id: rawPayload?.stop_id,
+    });
+    const sessionID = normalizeString(rawPayload?.session_id)
+      || this.messageDeliveryStore.getRememberedSessionID(eventID);
     if (!sessionID) {
+      this.trace({
+        stage: "stop_route_missing",
+        event_id: eventID,
+        stop_id: rawPayload?.stop_id,
+      }, "error");
       return;
     }
 
     await this.deliverWithRecovery(sessionID, rawPayload, this.deliverStopToWorker);
+    this.trace({
+      stage: "stop_forwarded",
+      event_id: eventID,
+      session_id: sessionID,
+      stop_id: rawPayload?.stop_id,
+    });
   }
 
   async handleRevokeEvent(rawPayload) {
@@ -661,11 +802,29 @@ export class DaemonRuntime {
     if (!eventID) {
       return;
     }
-    const sessionID = normalizeString(rawPayload?.session_id) || this.eventSessionIndex.get(eventID) || "";
+    this.trace({
+      stage: "revoke_received",
+      event_id: eventID,
+      session_id: rawPayload?.session_id,
+      msg_id: rawPayload?.msg_id,
+    });
+    const sessionID = normalizeString(rawPayload?.session_id)
+      || this.messageDeliveryStore.getRememberedSessionID(eventID);
     if (!sessionID) {
+      this.trace({
+        stage: "revoke_route_missing",
+        event_id: eventID,
+        msg_id: rawPayload?.msg_id,
+      }, "error");
       return;
     }
 
     await this.deliverWithRecovery(sessionID, rawPayload, this.deliverRevokeToWorker);
+    this.trace({
+      stage: "revoke_forwarded",
+      event_id: eventID,
+      session_id: sessionID,
+      msg_id: rawPayload?.msg_id,
+    });
   }
 }

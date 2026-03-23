@@ -1,13 +1,19 @@
 import process from "node:process";
 import { resolveDaemonConfigPath, resolveDaemonDataDir } from "./daemon-paths.js";
 import { ConfigStore } from "../config-store.js";
-import { resolveBindingRegistryPath } from "./daemon-paths.js";
+import {
+  resolveBindingRegistryPath,
+  resolveMessageDeliveryStatePath,
+  resolveWorkerRuntimeRegistryPath,
+} from "./daemon-paths.js";
 import { BindingRegistry } from "./binding-registry.js";
+import { MessageDeliveryStore } from "./message-delivery-store.js";
 import { WorkerBridgeServer } from "./worker-bridge-server.js";
 import { WorkerProcessManager } from "./worker-process.js";
 import { AibotClient } from "../aibot-client.js";
 import { DaemonRuntime } from "./runtime.js";
 import { createSessionActivityDispatcher } from "../session-activity-dispatcher.js";
+import { createProcessLogger } from "../logging.js";
 
 function usage() {
   return `用法:
@@ -100,12 +106,19 @@ export async function run(argv = [], env = process.env) {
     ...(options.dataDir ? { CLAWPOOL_DAEMON_DATA_DIR: options.dataDir } : {}),
     ...(options.showClaude ? { CLAWPOOL_SHOW_CLAUDE_WINDOW: "1" } : {}),
   };
+  const logger = createProcessLogger({ env: runtimeEnv });
 
   const dataDir = resolveDaemonDataDir(runtimeEnv);
   const configStore = new ConfigStore(resolveDaemonConfigPath(runtimeEnv), {
     env: runtimeEnv,
   });
-  const bindingRegistry = new BindingRegistry(resolveBindingRegistryPath(runtimeEnv));
+  const bindingRegistry = new BindingRegistry({
+    bindingFilePath: resolveBindingRegistryPath(runtimeEnv),
+    workerRuntimeFilePath: resolveWorkerRuntimeRegistryPath(runtimeEnv),
+  });
+  const messageDeliveryStore = new MessageDeliveryStore(
+    resolveMessageDeliveryStatePath(runtimeEnv),
+  );
   await configStore.load();
   if (options.wsUrl || options.agentId || options.apiKey || options.chunkLimit) {
     await configStore.update({
@@ -116,6 +129,7 @@ export async function run(argv = [], env = process.env) {
     });
   }
   await bindingRegistry.load();
+  await messageDeliveryStore.load();
   await bindingRegistry.resetTransientWorkerStates();
   const workerProcessManager = new WorkerProcessManager({
     env: runtimeEnv,
@@ -142,6 +156,7 @@ export async function run(argv = [], env = process.env) {
   });
 
   const bridgeServer = new WorkerBridgeServer({
+    logger,
     onRegisterWorker: async (payload) => {
       const aibotSessionID = String(payload?.aibot_session_id ?? "").trim();
       const workerID = String(payload?.worker_id ?? "").trim();
@@ -265,6 +280,8 @@ export async function run(argv = [], env = process.env) {
     workerProcessManager,
     aibotClient,
     bridgeServer,
+    messageDeliveryStore,
+    logger,
   });
   aibotClient.onEventMessage = async (payload) => {
     await runtime.handleEvent(payload);
@@ -289,8 +306,10 @@ export async function run(argv = [], env = process.env) {
   const connectionConfig = configStore.getConnectionConfig();
   if (connectionConfig) {
     await aibotClient.start(connectionConfig);
+    await runtime.recoverPersistedDeliveryState();
     print("Aibot: connected");
   } else {
+    await runtime.recoverPersistedDeliveryState();
     print("Aibot: not configured");
   }
 

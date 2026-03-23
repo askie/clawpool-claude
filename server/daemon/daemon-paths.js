@@ -25,6 +25,14 @@ export function resolveBindingRegistryPath(env = process.env) {
   return path.join(resolveDaemonDataDir(env), "binding-registry.json");
 }
 
+export function resolveWorkerRuntimeRegistryPath(env = process.env) {
+  return path.join(resolveDaemonDataDir(env), "worker-runtime-registry.json");
+}
+
+export function resolveMessageDeliveryStatePath(env = process.env) {
+  return path.join(resolveDaemonDataDir(env), "message-delivery-state.json");
+}
+
 export function resolveRuntimeWorkersDir(env = process.env) {
   return path.join(resolveDaemonDataDir(env), "runtime", "workers");
 }
