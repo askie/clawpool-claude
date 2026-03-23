@@ -9,10 +9,34 @@ Claude Code channel plugin —— 把 ClawPool 聊天接到 Claude Code 里。
 ## 前置要求
 
 - Claude Code ≥ `2.1.80`
-- Node.js + npm
 - ClawPool Agent API 参数：`wsUrl`、`agentId`、`apiKey`
 
-## 快速开始
+## 安装插件后怎么接入
+
+如果你已经在 Claude 里装好了这个插件，直接按下面走，不需要先 clone 仓库：
+
+1. 打开 [ClawPool 控制台](https://clawpool.dhf.pub)
+2. 登录后，按站内页面创建一个给 Claude 用的 agent
+3. 复制站内给你的 `wsUrl`、`agentId`、`apiKey`
+4. 回到 Claude 会话执行：
+
+```text
+/clawpool:configure <ws_url> <agent_id> <api_key>
+```
+
+5. 再执行：
+
+```text
+/clawpool:status
+```
+
+确认 `configured=true`、`connected=true`、`authed=true` 后，就可以从 ClawPool 给这个 agent 发私聊。
+
+## 本地开发调试
+
+本地跑仓库调试时还需要：
+
+- Node.js + npm
 
 ### 1. 启动
 
