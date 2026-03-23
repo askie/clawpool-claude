@@ -2,7 +2,7 @@
 
 把 ClawPool 私聊接到 Claude Code 里。
 
-## 你只需要做两步
+## 最简单的用法
 
 ### 1. 全局安装
 
@@ -10,7 +10,7 @@
 npm install -g @dhfpub/clawpool-claude
 ```
 
-### 2. 第一次启动时带上连接参数
+### 2. 第一次安装后台服务
 
 先在 ClawPool 控制台拿到这 3 个值：
 
@@ -18,19 +18,50 @@ npm install -g @dhfpub/clawpool-claude
 - `agentId`
 - `apiKey`
 
-然后在你平时工作的目录里执行：
+然后执行：
 
 ```bash
-clawpool-claude --ws-url <ws_url> --agent-id <agent_id> --api-key <api_key>
+clawpool-claude install --ws-url <ws_url> --agent-id <agent_id> --api-key <api_key>
 ```
 
 这条命令会自动完成下面几件事：
 
 - 保存连接信息
-- 启动本机 `daemon`
+- 安装当前用户自己的后台服务
+- 立即启动本机 `daemon`
 - 由 `daemon` 负责后续会话的启动、恢复和消息转发
 
-以后再次启动时，直接执行：
+支持的后台方式：
+
+- macOS: `launchd`
+- Linux: `systemd --user`
+- Windows: 任务计划
+
+## 之后你通常只会用这几个命令
+
+```bash
+clawpool-claude status
+clawpool-claude restart
+clawpool-claude stop
+clawpool-claude start
+clawpool-claude uninstall
+```
+
+- `status` 看服务和连接状态
+- `restart` 改完配置后重启
+- `stop` 临时停掉后台服务
+- `start` 重新拉起后台服务
+- `uninstall` 删除后台启动项
+
+## 如果你只想临时前台运行
+
+不装后台服务也可以，直接执行：
+
+```bash
+clawpool-claude --ws-url <ws_url> --agent-id <agent_id> --api-key <api_key>
+```
+
+后续本地已经有配置时，也可以直接运行：
 
 ```bash
 clawpool-claude
@@ -54,7 +85,7 @@ open <你的工作目录>
 
 看到 worker 已经挂到 daemon 上，就说明链路正常。
 
-## 常用命令
+## Claude 里的常用命令
 
 | 命令 | 用途 |
 | --- | --- |
@@ -79,11 +110,23 @@ open <你的工作目录>
 
 Claude 可以把本地文件回发到 ClawPool。单个文件最大 50MB，只支持常见图片、视频、文档类型。
 
-## 命令选项
+## CLI 命令
 
 ```text
+clawpool-claude install [options]
+clawpool-claude start [options]
+clawpool-claude stop [options]
+clawpool-claude restart [options]
+clawpool-claude status [options]
+clawpool-claude uninstall [options]
 clawpool-claude [options]
+```
 
+推荐优先用 `install`。默认命令 `clawpool-claude [options]` 更适合临时前台运行或者调试。
+
+## 常用选项
+
+```text
 --ws-url <value>      ClawPool Agent API WebSocket 地址
 --agent-id <value>    Agent ID
 --api-key <value>     API Key
@@ -94,7 +137,9 @@ clawpool-claude [options]
 --help, -h            显示帮助
 ```
 
-第一次运行需要传完整参数。后续本地已经有配置时，可以直接运行 `clawpool-claude`。
+- 第一次执行 `install` 或前台启动时，需要传完整连接参数
+- 后续如果本地已经保存过配置，可以省略连接参数
+- `--data-dir` 用来指定单独的数据目录，适合多套环境分开跑
 
 开发时如果你怀疑 Claude 卡在启动确认页，可以加 `--show-claude`，这样 daemon 会把对应 Claude 会话直接拉到一个可见的 Terminal 窗口里。
 
