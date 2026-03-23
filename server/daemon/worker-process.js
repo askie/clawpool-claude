@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { resolvePackageRoot, resolveServerEntryPath } from "../../cli/config.js";
 import { ensureUserMcpServer as defaultEnsureUserMcpServer } from "../../cli/mcp.js";
 import { resolveWorkerLogsDir } from "./daemon-paths.js";
-import { runCommand, terminateProcessTree } from "../process-control.js";
+import { runCommand, terminateProcessTree as defaultTerminateProcessTree } from "../process-control.js";
 
 const missingResumeSessionPattern = /No conversation found with session ID:/u;
 
@@ -271,22 +271,48 @@ function isManagedClaudeCommand(command, { packageRoot, sessionName }) {
   );
 }
 
+function isManagedVisibleTerminalCommand(command, { logsDir }) {
+  const normalizedCommand = normalizeString(command);
+  const normalizedLogsDir = normalizeString(logsDir);
+  if (!normalizedLogsDir) {
+    return false;
+  }
+  return (
+    normalizedCommand.includes(normalizedLogsDir) &&
+    (
+      normalizedCommand.includes(".launch.command")
+      || normalizedCommand.includes(".launch.expect")
+    )
+  );
+}
+
 async function terminateStaleClaudeProcesses({
   packageRoot,
   aibotSessionID,
+  logsDir = "",
   platform = process.platform,
   spawnImpl = spawn,
+  terminateProcessTreeImpl = defaultTerminateProcessTree,
 }) {
   const sessionName = buildWorkerSessionName(aibotSessionID);
   const processes = await listManagedClaudeProcesses({
     platform,
     spawnImpl,
   });
-  for (const entry of processes) {
-    if (!isManagedClaudeCommand(entry.command, { packageRoot, sessionName })) {
+  const staleEntries = processes.filter((entry) => (
+    isManagedClaudeCommand(entry.command, { packageRoot, sessionName })
+    || isManagedVisibleTerminalCommand(entry.command, { logsDir })
+  ));
+  staleEntries.sort((left, right) => {
+    const leftIsWrapper = isManagedVisibleTerminalCommand(left.command, { logsDir });
+    const rightIsWrapper = isManagedVisibleTerminalCommand(right.command, { logsDir });
+    return Number(leftIsWrapper) - Number(rightIsWrapper);
+  });
+  for (const entry of staleEntries) {
+    if (!entry?.pid) {
       continue;
     }
-    await terminateProcessTree(entry.pid, { platform });
+    await terminateProcessTreeImpl(entry.pid, { platform });
   }
 }
 
@@ -358,6 +384,7 @@ export class WorkerProcessManager {
     connectionConfig = null,
     spawnImpl = spawn,
     ensureUserMcpServer = defaultEnsureUserMcpServer,
+    terminateProcessTree = defaultTerminateProcessTree,
   } = {}) {
     this.env = env;
     this.packageRoot = packageRoot;
@@ -366,6 +393,9 @@ export class WorkerProcessManager {
     this.ensureUserMcpServer = typeof ensureUserMcpServer === "function"
       ? ensureUserMcpServer
       : defaultEnsureUserMcpServer;
+    this.terminateProcessTree = typeof terminateProcessTree === "function"
+      ? terminateProcessTree
+      : defaultTerminateProcessTree;
     this.runtimes = new Map();
   }
 
@@ -455,8 +485,10 @@ export class WorkerProcessManager {
     await terminateStaleClaudeProcesses({
       packageRoot: this.packageRoot,
       aibotSessionID: normalizedSessionID,
+      logsDir,
       platform: process.platform,
       spawnImpl: this.spawnImpl,
+      terminateProcessTreeImpl: this.terminateProcessTree,
     });
 
     let child = null;
@@ -525,7 +557,7 @@ export class WorkerProcessManager {
     }
     const pid = Number(runtime.pid ?? 0);
     if (pid > 0) {
-      const terminated = await terminateProcessTree(pid);
+      const terminated = await this.terminateProcessTree(pid);
       if (!terminated) {
         return false;
       }

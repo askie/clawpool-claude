@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawn as realSpawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
@@ -10,6 +11,7 @@ import {
   createVisibleClaudeLaunchScript,
   WorkerProcessManager,
 } from "./daemon/worker-process.js";
+import { resolveWorkerLogsDir } from "./daemon/daemon-paths.js";
 
 test("buildWorkerEnvironment passes daemon connection config to worker", () => {
   const env = buildWorkerEnvironment({
@@ -182,6 +184,62 @@ await writeFile(process.env.TEST_OUTPUT_PATH, Buffer.concat(chunks).toString("ut
   assert.deepEqual(ensured[0].serverArgs, [path.join(tempDir, "server", "main.js")]);
   assert.equal(ensured[0].env.CLAWPOOL_DAEMON_MODE, "1");
   assert.equal(ensured[0].env.CLAWPOOL_AIBOT_SESSION_ID, "chat-mcp");
+});
+
+test("spawnWorker terminates stale visible terminal wrapper processes before relaunch", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-stale-visible-"));
+  const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
+  const logsDir = resolveWorkerLogsDir("chat-stale", {
+    ...process.env,
+    CLAWPOOL_DAEMON_DATA_DIR: tempDir,
+  });
+  const scriptPath = path.join(logsDir, "old.launch.command");
+  const expectPath = path.join(logsDir, "old.launch.expect");
+  const killed = [];
+
+  await mkdir(path.join(tempDir, "server"), { recursive: true });
+  await writeFile(path.join(tempDir, "server", "main.js"), "process.exit(0);\n", "utf8");
+  await writeFile(fakeClaudePath, "#!/usr/bin/env node\nprocess.exit(0);\n", "utf8");
+  await chmod(fakeClaudePath, 0o755);
+
+  const psOutput = [
+    `111 ${scriptPath}`,
+    `112 ${expectPath}`,
+    `113 claude --name clawpool-chat-stale --plugin-dir ${tempDir} --dangerously-skip-permissions --session-id stale --dangerously-load-development-channels server:clawpool-claude`,
+  ].join("\n");
+
+  const spawnImpl = (command, args, options) => {
+    if (command === "ps") {
+      return realSpawn("/bin/sh", ["-lc", `printf '%s\n' "${psOutput}"`], options);
+    }
+    return realSpawn(command, args, options);
+  };
+
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAUDE_BIN: fakeClaudePath,
+      CLAWPOOL_SHOW_CLAUDE_WINDOW: "0",
+      CLAWPOOL_DAEMON_DATA_DIR: tempDir,
+    },
+    packageRoot: tempDir,
+    spawnImpl,
+    async ensureUserMcpServer() {},
+    async terminateProcessTree(pid) {
+      killed.push(pid);
+      return true;
+    },
+  });
+
+  await manager.spawnWorker({
+    aibotSessionID: "chat-stale",
+    cwd: tempDir,
+    pluginDataDir: path.join(tempDir, "plugin-data"),
+    claudeSessionID: "claude-stale",
+    workerID: "worker-stale",
+  });
+
+  assert.deepEqual(killed, [113, 111, 112]);
 });
 
 test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude pid file", async () => {
