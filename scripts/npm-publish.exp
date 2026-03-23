@@ -1,0 +1,21 @@
+#!/usr/bin/expect -f
+set timeout -1
+
+if {$argc == 0} {
+  puts stderr {usage: npm-publish.exp <command> [args...]}
+  exit 64
+}
+
+spawn -noecho {*}$argv
+
+expect {
+  -re {Press ENTER to open in the browser\.\.\.} {
+    send "\r"
+    exp_continue
+  }
+  eof
+}
+
+set wait_status [wait]
+set exit_code [lindex $wait_status 3]
+exit $exit_code
