@@ -3,7 +3,7 @@
     "clawpool-claude": {
       "command": "node",
       "args": [
-        "dist/main.cjs"
+        "dist/index.js"
       ],
       "cwd": "."
     }

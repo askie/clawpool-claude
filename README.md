@@ -1,53 +1,42 @@
 # @dhfpub/clawpool-claude
 
-Claude Code channel plugin —— 把 ClawPool 聊天接到 Claude Code 里。
+把 ClawPool 私聊接到 Claude Code 里。
 
-- 在 ClawPool 里给 agent 发消息，Claude Code 会话里直接收到
-- Claude 需要审批或补充信息时，请求会桥接回 ClawPool
-- 技术细节见 [ARCHITECTURE.md](./ARCHITECTURE.md)
+## 你只需要做两步
 
-## 前置要求
-
-- Claude Code ≥ `2.1.80`
-- ClawPool Agent API 参数：`wsUrl`、`agentId`、`apiKey`
-
-## 安装插件后怎么接入
-
-如果你已经在 Claude 里装好了这个插件，直接按下面走，不需要先 clone 仓库：
-
-1. 打开 [ClawPool 控制台](https://clawpool.dhf.pub)
-2. 登录后，按站内页面创建一个给 Claude 用的 agent
-3. 复制站内给你的 `wsUrl`、`agentId`、`apiKey`
-4. 回到 Claude 会话执行：
-
-```text
-/clawpool:configure <ws_url> <agent_id> <api_key>
-```
-
-5. 再执行：
-
-```text
-/clawpool:status
-```
-
-确认 `configured=true`、`connected=true`、`authed=true` 后，就可以从 ClawPool 给这个 agent 发私聊。
-
-## 本地开发调试
-
-本地跑仓库调试时还需要：
-
-- Node.js + npm
-
-### 1. 启动
+### 1. 全局安装
 
 ```bash
-cd /path/to/clawpool-claude
-./start.sh --ws-url <ws_url> --agent-id <agent_id> --api-key <api_key>
+npm install -g @dhfpub/clawpool-claude
 ```
 
-运行 `./start.sh --help` 查看全部选项。
+### 2. 第一次启动时带上连接参数
 
-### 2. 验证
+先在 ClawPool 控制台拿到这 3 个值：
+
+- `wsUrl`
+- `agentId`
+- `apiKey`
+
+然后在你平时工作的目录里执行：
+
+```bash
+clawpool-claude --ws-url <ws_url> --agent-id <agent_id> --api-key <api_key>
+```
+
+这条命令会自动完成下面几件事：
+
+- 保存连接信息
+- 把 `clawpool-claude` 写到 Claude 的用户级 MCP 配置里
+- 打开 Claude，并把这个通道一起带上
+
+以后再次打开时，直接执行：
+
+```bash
+clawpool-claude
+```
+
+## 用起来之后怎么确认
 
 进入 Claude 后执行：
 
@@ -55,28 +44,21 @@ cd /path/to/clawpool-claude
 /clawpool:status
 ```
 
-确认 `configured=true`、`connected=true`、`authed=true`。  
-> 刚启动 1–2 秒内状态可能还没就绪，稍等后再查。
-
-### 3. 打通消息
-
-1. 从 ClawPool 给 agent 发一条私聊
-2. 首条私聊会自动绑定 sender 并进入 Claude
-3. 让 Claude 回复，确认 ClawPool 侧收到
+看到 `configured=true`、`connected=true`、`authed=true`，就说明已经连上了。
 
 ## 常用命令
 
 | 命令 | 用途 |
-|------|------|
-| `/clawpool:status` | 查看连接和配置状态 |
-| `/clawpool:configure <ws_url> <agent_id> <api_key>` | 在会话内配置连接 |
-| `/clawpool:access` | 查看访问控制 |
-| `/clawpool:access pair <code>` | 配对新 sender |
+| --- | --- |
+| `/clawpool:status` | 看当前连接状态 |
+| `/clawpool:configure <ws_url> <agent_id> <api_key>` | 在 Claude 里改连接参数 |
+| `/clawpool:access` | 看当前访问控制 |
+| `/clawpool:access pair <code>` | 放行新的私聊发送者 |
 | `/clawpool:access policy <allowlist\|open\|disabled>` | 切换访问策略 |
 
-## 审批与提问
+## 审批和提问
 
-当 Claude 触发审批或提问时，插件会把请求发到 ClawPool 对应 chat，用户在 chat 内回复：
+当 Claude 需要你确认或补充信息时，消息会回到 ClawPool。你在 ClawPool 里直接回复：
 
 ```text
 /clawpool-approval <request_id> allow
@@ -84,16 +66,32 @@ cd /path/to/clawpool-claude
 /clawpool-question <request_id> 你的回答
 ```
 
-> 审批人需先加入 approver allowlist：`/clawpool:access allow-approver <sender_id>`
-
 ## 文件发送
 
-支持 Claude 通过 `reply.files` 发送本地文件到 ClawPool，限制：绝对路径、单文件 ≤ 50MB、仅支持常见图片/视频/文档类型。
+Claude 可以把本地文件回发到 ClawPool。单个文件最大 50MB，只支持常见图片、视频、文档类型。
 
-## 常见问题
+## 命令选项
 
-**Claude 里看不到消息？** 检查启动参数是否包含 `--plugin-dir` 和 `--dangerously-load-development-channels server:clawpool-claude`。
+```text
+clawpool-claude [options]
 
-**configured=true 但 authed=false？** 等 1–2 秒再查；持续失败则检查 `wsUrl` / `agentId` / `apiKey` 是否正确。
+--ws-url <value>      ClawPool Agent API WebSocket 地址
+--agent-id <value>    Agent ID
+--api-key <value>     API Key
+--data-dir <path>     配置和运行数据目录
+--chunk-limit <n>     单段文本长度上限
+--no-launch           只检查并写好配置，不打开 Claude
+--help, -h            显示帮助
+```
 
-**消息没进 Claude？** 执行 `/clawpool:access` 检查 sender 是否已在 allowlist 中，或用 `pair <code>` 完成配对。
+第一次运行需要传完整参数。后续本地已经有配置时，可以直接运行 `clawpool-claude`。
+
+## 开发时自动编译
+
+如果你在改当前仓库代码，直接运行：
+
+```bash
+npm run dev
+```
+
+它会持续监听源码变化，并把最新产物自动编译到当前项目的 `dist/index.js`。这条命令只服务本地开发，不影响用户正式安装后的使用流程。

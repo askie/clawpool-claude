@@ -43,7 +43,6 @@ import {
   resolveOutboundTextChunkLimit,
   splitTextForAibotProtocol,
 } from "./protocol-text.js";
-import { resolveClawpoolRuntimeMode } from "./runtime-mode.js";
 import { ResultTimeoutManager } from "./result-timeout.js";
 import { normalizeInboundEventPayload } from "./inbound-event-meta.js";
 
@@ -117,16 +116,7 @@ function toolTextResult(value) {
   };
 }
 
-const runtimeMode = resolveClawpoolRuntimeMode();
-
 function buildInstructions() {
-  if (!runtimeMode.transportEnabled) {
-    return [
-      "This inline clawpool-claude plugin runtime is running alongside a workspace .mcp clawpool-claude server.",
-      "To avoid duplicate Agent API websocket connections, this inline companion instance disables live channel transport and tool execution.",
-      "Use the workspace clawpool-claude MCP server in the current working directory for clawpool-claude tools and live channel delivery.",
-    ].join(" ");
-  }
   return [
     'Messages arrive as <channel source="clawpool-claude" chat_id="..." event_id="..." message_id="..." user_id="...">text</channel>.',
     "When present, channel metadata includes msg_type plus JSON strings in attachments_json, biz_card_json, channel_data_json, and extra_json. Use those structured fields directly instead of guessing attachment or card semantics from text.",
@@ -416,17 +406,9 @@ async function dispatchChannelNotification(event) {
 
 function buildStatusHints() {
   const hints = [
-    "Development channel startup requires running Claude from a workspace that contains .mcp.json with a clawpool-claude entry: cd /tmp/claude-clawpool-claude-<account>-workspace && CLAUDE_PLUGIN_DATA=/abs/path/to/claude-data/clawpool-claude claude --plugin-dir /abs/path/to/clawpool-claude --dangerously-load-development-channels server:clawpool-claude",
-    "Use ./start.sh to prepare config and launch Claude in one step. Do not add --channels server:clawpool-claude for the bare .mcp.json server.",
+    "Open Claude through the clawpool-claude command so the channel and plugin are loaded together.",
     "Team and Enterprise orgs must also enable channelsEnabled or channel notifications will not arrive.",
   ];
-
-  if (!runtimeMode.transportEnabled) {
-    hints.unshift(
-      "Inline plugin companion mode is active. Live clawpool-claude transport is intentionally disabled here; use the workspace .mcp clawpool-claude server to avoid duplicate websocket connections.",
-    );
-    return hints;
-  }
 
   if (!configStore.isConfigured()) {
     hints.unshift("Clawpool is not configured. Run /clawpool:configure.");
@@ -1505,27 +1487,11 @@ const toolDefinitions = [
   },
 ];
 
-function getToolDefinitions() {
-  if (runtimeMode.toolExposure === "none") {
-    return [];
-  }
-  return toolDefinitions;
-}
-
-function assertToolExecutionEnabled() {
-  if (runtimeMode.toolExposure === "none") {
-    throw new Error(
-      "clawpool-claude inline companion mode disables tool execution; use the workspace .mcp clawpool-claude server instead",
-    );
-  }
-}
-
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: getToolDefinitions(),
+  tools: toolDefinitions,
 }));
 
 mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
-  assertToolExecutionEnabled();
   const name = normalizeString(request.params.name);
   const args = request.params.arguments ?? {};
 
@@ -1611,10 +1577,6 @@ async function bootstrap() {
   await questionStore.init();
   const restoredEntries = await restoreEventState();
   await mcp.connect(new StdioServerTransport());
-  if (!runtimeMode.transportEnabled) {
-    logInfo("inline companion mode active; skipping duplicate clawpool-claude transport startup");
-    return;
-  }
   await aibotClient.start(configStore.getConnectionConfig());
   startApprovalPump();
   startQuestionPump();
