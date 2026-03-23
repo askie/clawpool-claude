@@ -32,6 +32,34 @@ function tclEscape(value) {
     .replace(/\}/g, "\\}");
 }
 
+function buildVisibleTerminalCleanupLines() {
+  return [
+    "current_tty=$(tty 2>/dev/null || true)",
+    "if [ -n \"$current_tty\" ]; then",
+    "  /usr/bin/osascript - \"$current_tty\" >/dev/null 2>&1 <<'APPLESCRIPT' || true",
+    "on run argv",
+    "  if (count of argv) is 0 then",
+    "    return",
+    "  end if",
+    "  set targetTTY to item 1 of argv",
+    "  tell application \"Terminal\"",
+    "    repeat with w in windows",
+    "      repeat with t in tabs of w",
+    "        try",
+    "          if tty of t is targetTTY then",
+    "            close t",
+    "            return",
+    "          end if",
+    "        end try",
+    "      end repeat",
+    "    end repeat",
+    "  end tell",
+    "end run",
+    "APPLESCRIPT",
+    "fi",
+  ];
+}
+
 function buildShellEnvArgs(env) {
   return Object.entries(env)
     .filter(([key, value]) => normalizeString(key) && !String(key).includes("=") && value !== undefined)
@@ -167,7 +195,8 @@ export async function createVisibleClaudeLaunchScript({
     "set -e",
     `cd ${shellEscape(cwd)}`,
     `printf '\\e]1;clawpool-claude ${normalizedWorkerID}\\a'`,
-    `exec /usr/bin/env ${buildShellEnvArgs(env).join(" ")} /usr/bin/expect ${shellEscape(expectPath)}`,
+    `/usr/bin/env ${buildShellEnvArgs(env).join(" ")} /usr/bin/expect ${shellEscape(expectPath)}`,
+    ...buildVisibleTerminalCleanupLines(),
     "",
   ];
   await writeFile(pidPath, "", "utf8");

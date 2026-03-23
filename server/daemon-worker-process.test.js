@@ -216,12 +216,17 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude
   assert.match(result.expectPath, /worker-visible\.launch\.expect$/u);
   assert.match(result.pidPath, /worker-visible\.pid$/u);
   assert.match(script, /clawpool-claude worker-visible/u);
-  assert.match(script, /exec \/usr\/bin\/env /u);
+  assert.match(script, /\/usr\/bin\/env /u);
+  assert.doesNotMatch(script, /exec \/usr\/bin\/env /u);
   assert.match(script, /'CLAUDE_PLUGIN_DATA=\/tmp\/plugin data'/u);
   assert.match(script, /'CLAWPOOL_AIBOT_SESSION_ID=chat-visible'/u);
   assert.match(script, /'npm_package_bin_clawpool-claude=\.\/bin\/clawpool-claude\.js'/u);
   assert.match(script, /\/usr\/bin\/expect '.*worker-visible\.launch\.expect'/u);
   assert.match(script, /cd '\/tmp\/demo path'/u);
+  assert.match(script, /current_tty=\$\(tty 2>\/dev\/null \|\| true\)/u);
+  assert.match(script, /\/usr\/bin\/osascript - "\$current_tty"/u);
+  assert.match(script, /if tty of t is targetTTY then/u);
+  assert.match(script, /close t/u);
   assert.match(expectScript, /set timeout -1/u);
   assert.match(expectScript, /log_file -a \{.*worker-visible\.out\.log\}/u);
   assert.match(expectScript, /spawn -noecho \{\*\}\$claude_command/u);
