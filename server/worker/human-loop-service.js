@@ -3,6 +3,13 @@ import {
   buildApprovalDecisionResponseText,
   buildApprovalRequestText,
 } from "../approval-text.js";
+import {
+  buildApprovalCommandStatusBizCard,
+  buildApprovalRequestBizCard,
+  buildApprovalResolutionBizCard,
+  buildQuestionRequestBizCard,
+  buildQuestionStatusBizCard,
+} from "../claude-card-payload.js";
 import { parseQuestionResponseCommand } from "../question-command.js";
 import { buildAskUserQuestionUpdatedInput } from "../question-response.js";
 import {
@@ -75,6 +82,7 @@ export class WorkerHumanLoopService {
   async sendCommandReply(event, text, {
     clientMsgPrefix,
     replySource,
+    bizCard = null,
   }) {
     await this.bridge.sendText({
       eventID: event.event_id,
@@ -84,21 +92,24 @@ export class WorkerHumanLoopService {
       clientMsgID: `${clientMsgPrefix}_${event.event_id}`,
       extra: {
         reply_source: replySource,
+        ...(bizCard ? { biz_card: bizCard } : {}),
       },
     });
   }
 
-  async sendApprovalCommandReply(event, text) {
+  async sendApprovalCommandReply(event, text, bizCard = null) {
     await this.sendCommandReply(event, text, {
       clientMsgPrefix: "approval_reply",
       replySource: "claude_channel_approval",
+      bizCard,
     });
   }
 
-  async sendQuestionCommandReply(event, text) {
+  async sendQuestionCommandReply(event, text, bizCard = null) {
     await this.sendCommandReply(event, text, {
       clientMsgPrefix: "question_reply",
       replySource: "claude_channel_question",
+      bizCard,
     });
   }
 
@@ -109,7 +120,9 @@ export class WorkerHumanLoopService {
     }
 
     if (!parsed.ok) {
-      await this.sendApprovalCommandReply(event, parsed.error);
+      await this.sendApprovalCommandReply(event, parsed.error, buildApprovalCommandStatusBizCard({
+        summary: parsed.error,
+      }));
       await this.finalizeEventSafely(event.event_id, {
         status: "responded",
         code: "approval_command_invalid",
@@ -119,7 +132,14 @@ export class WorkerHumanLoopService {
     }
 
     if (!this.accessStore.isSenderApprover(event.sender_id)) {
-      await this.sendApprovalCommandReply(event, "This sender is not configured as a Claude approval approver.");
+      await this.sendApprovalCommandReply(
+        event,
+        "This sender is not configured as a Claude approval approver.",
+        buildApprovalCommandStatusBizCard({
+          summary: "This sender is not configured as a Claude approval approver.",
+          status: "warning",
+        }),
+      );
       await this.finalizeEventSafely(event.event_id, {
         status: "responded",
         code: "approval_sender_not_authorized",
@@ -130,7 +150,15 @@ export class WorkerHumanLoopService {
 
     const request = await this.approvalStore.getRequest(parsed.request_id);
     if (!request) {
-      await this.sendApprovalCommandReply(event, `Approval request ${parsed.request_id} was not found.`);
+      await this.sendApprovalCommandReply(
+        event,
+        `Approval request ${parsed.request_id} was not found.`,
+        buildApprovalCommandStatusBizCard({
+          summary: `Approval request ${parsed.request_id} was not found.`,
+          referenceID: parsed.request_id,
+          status: "warning",
+        }),
+      );
       await this.finalizeEventSafely(event.event_id, {
         status: "responded",
         code: "approval_request_not_found",
@@ -140,7 +168,15 @@ export class WorkerHumanLoopService {
     }
 
     if (request.channel_context.chat_id !== event.session_id) {
-      await this.sendApprovalCommandReply(event, "This approval request belongs to a different ClawPool chat.");
+      await this.sendApprovalCommandReply(
+        event,
+        "This approval request belongs to a different ClawPool chat.",
+        buildApprovalCommandStatusBizCard({
+          summary: "This approval request belongs to a different ClawPool chat.",
+          referenceID: parsed.request_id,
+          status: "warning",
+        }),
+      );
       await this.finalizeEventSafely(event.event_id, {
         status: "responded",
         code: "approval_chat_mismatch",
@@ -150,7 +186,15 @@ export class WorkerHumanLoopService {
     }
 
     if (request.status !== "pending") {
-      await this.sendApprovalCommandReply(event, `Approval request ${parsed.request_id} is ${request.status}.`);
+      await this.sendApprovalCommandReply(
+        event,
+        `Approval request ${parsed.request_id} is ${request.status}.`,
+        buildApprovalCommandStatusBizCard({
+          summary: `Approval request ${parsed.request_id} is ${request.status}.`,
+          referenceID: parsed.request_id,
+          status: "warning",
+        }),
+      );
       await this.finalizeEventSafely(event.event_id, {
         status: "responded",
         code: "approval_request_not_pending",
@@ -164,7 +208,11 @@ export class WorkerHumanLoopService {
       decision = buildApprovalDecision(request, parsed.resolution);
     } catch (error) {
       const message = String(error instanceof Error ? error.message : error);
-      await this.sendApprovalCommandReply(event, message);
+      await this.sendApprovalCommandReply(event, message, buildApprovalCommandStatusBizCard({
+        summary: message,
+        referenceID: parsed.request_id,
+        status: "warning",
+      }));
       await this.finalizeEventSafely(event.event_id, {
         status: "responded",
         code: "approval_rule_invalid",
@@ -192,9 +240,15 @@ export class WorkerHumanLoopService {
       origin_event_id: request.channel_context.event_id,
       chat_id: request.channel_context.chat_id,
     });
-    await this.sendApprovalCommandReply(event, buildApprovalDecisionResponseText({
+    const approvalResponseText = buildApprovalDecisionResponseText({
       requestID: parsed.request_id,
       resolution: parsed.resolution,
+    });
+    await this.sendApprovalCommandReply(event, approvalResponseText, buildApprovalResolutionBizCard({
+      request,
+      resolution: parsed.resolution,
+      summary: approvalResponseText,
+      resolvedByID: event.sender_id,
     }));
     await this.finalizeEventSafely(event.event_id, {
       status: "responded",
@@ -211,7 +265,9 @@ export class WorkerHumanLoopService {
     }
 
     if (!parsed.ok) {
-      await this.sendQuestionCommandReply(event, parsed.error);
+      await this.sendQuestionCommandReply(event, parsed.error, buildQuestionStatusBizCard({
+        summary: parsed.error,
+      }));
       await this.finalizeEventSafely(event.event_id, {
         status: "responded",
         code: "question_command_invalid",
@@ -222,7 +278,15 @@ export class WorkerHumanLoopService {
 
     const request = await this.questionStore.getRequest(parsed.request_id);
     if (!request) {
-      await this.sendQuestionCommandReply(event, `Question request ${parsed.request_id} was not found.`);
+      await this.sendQuestionCommandReply(
+        event,
+        `Question request ${parsed.request_id} was not found.`,
+        buildQuestionStatusBizCard({
+          summary: `Question request ${parsed.request_id} was not found.`,
+          referenceID: parsed.request_id,
+          status: "warning",
+        }),
+      );
       await this.finalizeEventSafely(event.event_id, {
         status: "responded",
         code: "question_request_not_found",
@@ -232,7 +296,15 @@ export class WorkerHumanLoopService {
     }
 
     if (request.channel_context.chat_id !== event.session_id) {
-      await this.sendQuestionCommandReply(event, "This question request belongs to a different ClawPool chat.");
+      await this.sendQuestionCommandReply(
+        event,
+        "This question request belongs to a different ClawPool chat.",
+        buildQuestionStatusBizCard({
+          summary: "This question request belongs to a different ClawPool chat.",
+          referenceID: parsed.request_id,
+          status: "warning",
+        }),
+      );
       await this.finalizeEventSafely(event.event_id, {
         status: "responded",
         code: "question_chat_mismatch",
@@ -242,7 +314,15 @@ export class WorkerHumanLoopService {
     }
 
     if (request.status !== "pending") {
-      await this.sendQuestionCommandReply(event, `Question request ${parsed.request_id} is ${request.status}.`);
+      await this.sendQuestionCommandReply(
+        event,
+        `Question request ${parsed.request_id} is ${request.status}.`,
+        buildQuestionStatusBizCard({
+          summary: `Question request ${parsed.request_id} is ${request.status}.`,
+          referenceID: parsed.request_id,
+          status: "warning",
+        }),
+      );
       await this.finalizeEventSafely(event.event_id, {
         status: "responded",
         code: "question_request_not_pending",
@@ -256,7 +336,11 @@ export class WorkerHumanLoopService {
       updatedInput = buildAskUserQuestionUpdatedInput(request, parsed.response);
     } catch (error) {
       const message = String(error instanceof Error ? error.message : error);
-      await this.sendQuestionCommandReply(event, message);
+      await this.sendQuestionCommandReply(event, message, buildQuestionStatusBizCard({
+        summary: message,
+        referenceID: parsed.request_id,
+        status: "warning",
+      }));
       await this.finalizeEventSafely(event.event_id, {
         status: "responded",
         code: "question_answer_invalid",
@@ -284,8 +368,13 @@ export class WorkerHumanLoopService {
       origin_event_id: request.channel_context.event_id,
       chat_id: request.channel_context.chat_id,
     });
-    await this.sendQuestionCommandReply(event, buildQuestionResponseText({
+    const questionResponseText = buildQuestionResponseText({
       requestID: parsed.request_id,
+    });
+    await this.sendQuestionCommandReply(event, questionResponseText, buildQuestionStatusBizCard({
+      summary: questionResponseText,
+      referenceID: parsed.request_id,
+      status: "success",
     }));
     await this.finalizeEventSafely(event.event_id, {
       status: "responded",
@@ -325,6 +414,7 @@ export class WorkerHumanLoopService {
       extra: {
         reply_source: "claude_permission_request",
         approval_request_id: request.request_id,
+        biz_card: buildApprovalRequestBizCard(request),
       },
     });
     await this.approvalStore.markDispatched(request.request_id, {
@@ -350,6 +440,7 @@ export class WorkerHumanLoopService {
       extra: {
         reply_source: "claude_ask_user_question",
         question_request_id: request.request_id,
+        biz_card: buildQuestionRequestBizCard(request),
       },
     });
     await this.questionStore.markDispatched(request.request_id, {

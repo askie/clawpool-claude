@@ -60,6 +60,41 @@ function formatPermissionSuggestions(requestID, suggestions) {
   return lines;
 }
 
+export function buildApprovalCardCommandText(request) {
+  const requestID = normalizeString(request.request_id);
+  const detailLines = formatToolDetails(request);
+  const suggestionLines = formatPermissionSuggestions(requestID, request.permission_suggestions);
+  const lines = [
+    ...detailLines,
+    ...(suggestionLines.length > 0 ? ["", ...suggestionLines] : []),
+  ];
+  return lines.join("\n").trim();
+}
+
+export function buildApprovalDecisionCommands(request) {
+  const requestID = normalizeString(request.request_id);
+  const decisionCommands = {
+    "allow-once": `/clawpool-approval ${requestID} allow`,
+    deny: `/clawpool-approval ${requestID} deny`,
+  };
+  const allowedDecisions = ["allow-once"];
+
+  const suggestions = Array.isArray(request?.permission_suggestions)
+    ? request.permission_suggestions
+    : [];
+  suggestions.forEach((_, index) => {
+    const key = `allow-rule:${index + 1}`;
+    allowedDecisions.push(key);
+    decisionCommands[key] = `/clawpool-approval ${requestID} allow-rule ${index + 1}`;
+  });
+
+  allowedDecisions.push("deny");
+  return {
+    allowedDecisions,
+    decisionCommands,
+  };
+}
+
 export function buildApprovalRequestText(request) {
   const requestID = normalizeString(request.request_id);
   const lines = [

@@ -80,6 +80,11 @@ test("worker human loop service records approval decisions", async () => {
         return {
           request_id: requestID,
           status: "pending",
+          tool_name: "Bash",
+          tool_input: {
+            command: "echo hi",
+            description: "say hi",
+          },
           channel_context: {
             chat_id: "chat-approval-1",
           },
@@ -116,6 +121,11 @@ test("worker human loop service records approval decisions", async () => {
   });
   assert.equal(bridgeCalls.length, 1);
   assert.equal(bridgeCalls[0].extra.reply_source, "claude_channel_approval");
+  assert.equal(bridgeCalls[0].extra.biz_card.type, "exec_status");
+  assert.equal(bridgeCalls[0].extra.biz_card.status, "resolved-allow-rule");
+  assert.equal(bridgeCalls[0].extra.biz_card.approval_id, "req-approval-1");
+  assert.equal(bridgeCalls[0].extra.biz_card.resolved_by_id, "sender-approval-1");
+  assert.match(bridgeCalls[0].extra.biz_card.command, /Tool: Bash/);
   assert.equal(finalizeCalls.length, 1);
   assert.equal(finalizeCalls[0].eventID, "evt-approval-1");
   assert.equal(finalizeCalls[0].result.code, "approval_recorded");
@@ -170,6 +180,10 @@ test("worker human loop service records question answers", async () => {
   });
   assert.equal(bridgeCalls.length, 1);
   assert.equal(bridgeCalls[0].extra.reply_source, "claude_channel_question");
+  assert.equal(bridgeCalls[0].extra.biz_card.type, "claude_status");
+  assert.equal(bridgeCalls[0].extra.biz_card.category, "question");
+  assert.equal(bridgeCalls[0].extra.biz_card.status, "success");
+  assert.equal(bridgeCalls[0].extra.biz_card.reference_id, "req-question-1");
   assert.equal(finalizeCalls.length, 1);
   assert.equal(finalizeCalls[0].eventID, "evt-question-1");
   assert.equal(finalizeCalls[0].result.code, "question_recorded");
@@ -214,12 +228,94 @@ test("worker human loop service dispatches pending approval requests", async () 
   assert.equal(bridgeCalls[0].sessionID, "chat-pending-1");
   assert.equal(bridgeCalls[0].quotedMessageID, "msg-pending-1");
   assert.equal(bridgeCalls[0].extra.reply_source, "claude_permission_request");
+  assert.equal(bridgeCalls[0].extra.biz_card.type, "exec_approval");
+  assert.equal(bridgeCalls[0].extra.biz_card.approval_id, "req-pending-1");
+  assert.equal(bridgeCalls[0].extra.biz_card.host, "Claude Clawpool");
+  assert.deepEqual(bridgeCalls[0].extra.biz_card.allowed_decisions, [
+    "allow-once",
+    "deny",
+  ]);
   assert.deepEqual(dispatched, [
     {
       requestID: "req-pending-1",
       payload: {
         dispatchedAt: dispatched[0].payload.dispatchedAt,
         approvalMessageID: "approval-msg-1",
+      },
+    },
+  ]);
+
+  await service.shutdown();
+});
+
+test("worker human loop service dispatches pending question requests with structured card payload", async () => {
+  const dispatched = [];
+  const { service, bridgeCalls } = createService({
+    questionStore: {
+      async listPendingDispatches() {
+        return [
+          {
+            request_id: "req-question-pending-1",
+            questions: [
+              {
+                header: "Environment",
+                question: "Which environment should I use?",
+                options: [
+                  { label: "production" },
+                  { label: "staging" },
+                ],
+                multiSelect: false,
+              },
+              {
+                header: "",
+                question: "What else should I know?",
+                options: [],
+                multiSelect: true,
+              },
+            ],
+            channel_context: {
+              chat_id: "chat-question-pending-1",
+              message_id: "msg-question-pending-1",
+              msg_id: "msg-question-pending-1",
+            },
+          },
+        ];
+      },
+      async markDispatched(requestID, payload) {
+        dispatched.push({ requestID, payload });
+      },
+    },
+    bridge: {
+      async sendText(payload) {
+        bridgeCalls.push(payload);
+        return { msg_id: "question-msg-1" };
+      },
+    },
+  });
+
+  await service.pumpQuestionRequests();
+
+  assert.equal(bridgeCalls.length, 1);
+  assert.equal(bridgeCalls[0].sessionID, "chat-question-pending-1");
+  assert.equal(bridgeCalls[0].quotedMessageID, "msg-question-pending-1");
+  assert.equal(bridgeCalls[0].extra.reply_source, "claude_ask_user_question");
+  assert.equal(bridgeCalls[0].extra.biz_card.type, "claude_question");
+  assert.equal(bridgeCalls[0].extra.biz_card.request_id, "req-question-pending-1");
+  assert.equal(bridgeCalls[0].extra.biz_card.questions.length, 2);
+  assert.equal(bridgeCalls[0].extra.biz_card.questions[0].index, 1);
+  assert.equal(bridgeCalls[0].extra.biz_card.questions[0].options[0], "production");
+  assert.equal(bridgeCalls[0].extra.biz_card.questions[1].header, "Question 2");
+  assert.equal(bridgeCalls[0].extra.biz_card.questions[1].multi_select, true);
+  assert.equal(
+    bridgeCalls[0].extra.biz_card.answer_command_hint,
+    "/clawpool-question req-question-pending-1 1=first answer; 2=second answer",
+  );
+  assert.deepEqual(dispatched, [
+    {
+      requestID: "req-question-pending-1",
+      payload: {
+        dispatchedAt: dispatched[0].payload.dispatchedAt,
+        questionMessageID: "question-msg-1",
       },
     },
   ]);

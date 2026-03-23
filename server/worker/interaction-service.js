@@ -2,6 +2,10 @@ import { loadEventEntries } from "../event-state-persistence.js";
 import { normalizeInboundEventPayload } from "../inbound-event-meta.js";
 import { ResultTimeoutManager } from "../result-timeout.js";
 import { buildChannelNotificationParams } from "../channel-notification.js";
+import {
+  buildAccessStatusBizCard,
+  buildPairingBizCard,
+} from "../claude-card-payload.js";
 
 const defaultResultTimeoutMs = 10 * 60 * 1000;
 const resultTimeoutRetryMs = 10 * 1000;
@@ -258,13 +262,14 @@ export class WorkerInteractionService {
     this.logger.debug(`event notification-dispatched event=${event.event_id}`);
   }
 
-  async sendAccessStatusMessage(sessionID, text, clientMsgID) {
+  async sendAccessStatusMessage(sessionID, text, clientMsgID, bizCard = null) {
     await this.bridge.sendText({
       sessionID,
       text,
       clientMsgID,
       extra: {
         reply_source: "claude_channel_access",
+        ...(bizCard ? { biz_card: bizCard } : {}),
       },
     });
   }
@@ -284,6 +289,9 @@ export class WorkerInteractionService {
       sessionID: event.session_id,
       text,
       clientMsgID: `pair_${event.event_id}`,
+      extra: {
+        biz_card: buildPairingBizCard(pair.code),
+      },
     });
     this.eventState.markPairingSent(event.event_id, {
       sentAt: Date.now(),
@@ -412,6 +420,11 @@ export class WorkerInteractionService {
           event.session_id,
           "Claude Clawpool access is currently disabled for this channel.",
           `access_disabled_${event.event_id}`,
+          buildAccessStatusBizCard({
+            summary: "Claude Clawpool access is currently disabled for this channel.",
+            status: "warning",
+            referenceID: event.event_id,
+          }),
         );
       } catch (error) {
         this.logger.error(`disabled-policy notice failed event=${event.event_id}: ${String(error)}`);
@@ -456,6 +469,11 @@ export class WorkerInteractionService {
             event.session_id,
             `Claude Clawpool could not auto-authorize this sender: ${String(error)}.`,
             `sender_bootstrap_failed_${event.event_id}`,
+            buildAccessStatusBizCard({
+              summary: `Claude Clawpool could not auto-authorize this sender: ${String(error)}.`,
+              status: "error",
+              referenceID: event.event_id,
+            }),
           );
         } catch (notifyError) {
           this.logger.error(`sender bootstrap notice failed event=${event.event_id}: ${String(notifyError)}`);
@@ -486,6 +504,11 @@ export class WorkerInteractionService {
             event.session_id,
             "This sender is not allowlisted for the Claude Clawpool channel.",
             `sender_blocked_${event.event_id}`,
+            buildAccessStatusBizCard({
+              summary: "This sender is not allowlisted for the Claude Clawpool channel.",
+              status: "warning",
+              referenceID: event.event_id,
+            }),
           );
         } catch (error) {
           this.logger.error(`group allowlist notice failed event=${event.event_id}: ${String(error)}`);

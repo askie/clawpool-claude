@@ -136,3 +136,92 @@ test("worker revoke handling still acknowledges through bridge", async () => {
 
   await service.shutdown();
 });
+
+test("worker inbound handling sends structured access status when channel is disabled", async () => {
+  const sentTexts = [];
+  const sentResults = [];
+  const { service } = createService({
+    accessStore: {
+      getPolicy: () => "disabled",
+    },
+    bridge: {
+      async sendText(payload) {
+        sentTexts.push(payload);
+        return {};
+      },
+      async sendEventResult(payload) {
+        sentResults.push(payload);
+        return {};
+      },
+      async setSessionComposing() {
+        return {};
+      },
+    },
+  });
+
+  await service.handleInboundEvent({
+    event_id: "evt-disabled-1",
+    session_id: "chat-disabled-1",
+    msg_id: "msg-disabled-1",
+    sender_id: "sender-disabled-1",
+    content: "hello",
+  });
+
+  assert.equal(sentTexts.length, 1);
+  assert.equal(sentTexts[0].extra.reply_source, "claude_channel_access");
+  assert.equal(sentTexts[0].extra.biz_card.type, "claude_status");
+  assert.equal(sentTexts[0].extra.biz_card.category, "access");
+  assert.equal(sentTexts[0].extra.biz_card.status, "warning");
+  assert.equal(sentTexts[0].extra.biz_card.reference_id, "evt-disabled-1");
+  assert.equal(sentResults.length, 1);
+  assert.equal(sentResults[0].code, "policy_disabled");
+
+  await service.shutdown();
+});
+
+test("worker inbound handling sends structured pairing card for blocked direct sender", async () => {
+  const sentTexts = [];
+  const sentResults = [];
+  const { service } = createService({
+    accessStore: {
+      isSenderAllowlisted: () => false,
+      isSenderAllowed: () => false,
+      hasAllowedSenders: () => true,
+      issuePairingCode: async () => ({ code: "PAIR123" }),
+    },
+    bridge: {
+      async sendText(payload) {
+        sentTexts.push(payload);
+        return {};
+      },
+      async sendEventResult(payload) {
+        sentResults.push(payload);
+        return {};
+      },
+      async setSessionComposing() {
+        return {};
+      },
+    },
+  });
+
+  await service.handleInboundEvent({
+    event_id: "evt-pairing-1",
+    session_id: "chat-pairing-1",
+    msg_id: "msg-pairing-1",
+    sender_id: "sender-pairing-1",
+    content: "hello",
+  });
+
+  assert.equal(sentTexts.length, 1);
+  assert.equal(sentTexts[0].clientMsgID, "pair_evt-pairing-1");
+  assert.equal(sentTexts[0].extra.biz_card.type, "claude_pairing");
+  assert.equal(sentTexts[0].extra.biz_card.pairing_code, "PAIR123");
+  assert.equal(
+    sentTexts[0].extra.biz_card.command_hint,
+    "/clawpool:access pair <code>",
+  );
+  assert.equal(sentResults.length, 1);
+  assert.equal(sentResults[0].code, "pairing_required");
+
+  await service.shutdown();
+});

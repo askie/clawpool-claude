@@ -8,6 +8,7 @@ import {
   resolveOutboundTextChunkLimit,
   splitTextForAibotProtocol,
 } from "../protocol-text.js";
+import { buildAccessStatusBizCard } from "../claude-card-payload.js";
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -450,6 +451,10 @@ export class WorkerToolService {
         sessionID,
         "Paired! Say hi to Claude.",
         `pair_ok_${randomUUID()}`,
+        buildAccessStatusBizCard({
+          summary: "Paired! Say hi to Claude.",
+          status: "success",
+        }),
       );
       return true;
     } catch (error) {
@@ -464,6 +469,11 @@ export class WorkerToolService {
         sessionID,
         `Pairing request ${code} was denied. Ask the Claude Code user to request a new pairing code if you still need access.`,
         `pair_denied_${randomUUID()}`,
+        buildAccessStatusBizCard({
+          summary: `Pairing request ${code} was denied. Ask the Claude Code user to request a new pairing code if you still need access.`,
+          status: "warning",
+          referenceID: code,
+        }),
       );
       return true;
     } catch (error) {
