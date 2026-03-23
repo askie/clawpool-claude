@@ -223,4 +223,39 @@ export class BindingRegistry {
     await mkdir(path.dirname(this.filePath), { recursive: true });
     await writeJSONFileAtomic(this.filePath, this.state);
   }
+
+  async resetTransientWorkerStates({
+    updatedAt = Date.now(),
+    lastStoppedAt = Date.now(),
+  } = {}) {
+    let changed = false;
+
+    for (const [sessionID, existing] of Object.entries(this.state.bindings)) {
+      const shouldResetStatus = existing.worker_status === "starting"
+        || existing.worker_status === "connected"
+        || existing.worker_status === "ready";
+      const hasWorkerControl = Boolean(existing.worker_control_url || existing.worker_control_token);
+
+      if (!shouldResetStatus && !hasWorkerControl) {
+        continue;
+      }
+
+      this.state.bindings[sessionID] = normalizeBinding({
+        ...existing,
+        worker_status: shouldResetStatus ? "stopped" : existing.worker_status,
+        worker_control_url: "",
+        worker_control_token: "",
+        updated_at: updatedAt,
+        last_stopped_at: shouldResetStatus ? lastStoppedAt : existing.last_stopped_at,
+      });
+      changed = true;
+    }
+
+    if (!changed) {
+      return [];
+    }
+
+    await this.save();
+    return this.listBindings();
+  }
 }

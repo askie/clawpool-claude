@@ -4,6 +4,7 @@ import { parseControlCommand } from "./control-command.js";
 import { normalizeInboundEventPayload } from "../inbound-event-meta.js";
 import { resolveWorkerPluginDataDir } from "./daemon-paths.js";
 import { WorkerControlClient } from "./worker-control-client.js";
+import { claudeSessionExists as defaultClaudeSessionExists } from "./claude-session-store.js";
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -48,6 +49,22 @@ function buildInterruptedEventNotice() {
   return "Claude 刚刚中断了，这条消息没有处理完成。请再发一次。";
 }
 
+function hasWorkerControl(binding) {
+  return Boolean(binding?.worker_control_url && binding?.worker_control_token);
+}
+
+function canDeliverToWorker(binding) {
+  const status = normalizeString(binding?.worker_status);
+  return hasWorkerControl(binding) && status === "ready";
+}
+
+function withWorkerLaunchFailure(binding, code) {
+  return {
+    ...(binding ?? {}),
+    worker_launch_failure: normalizeString(code),
+  };
+}
+
 export class DaemonRuntime {
   constructor({
     env = process.env,
@@ -56,6 +73,7 @@ export class DaemonRuntime {
     aibotClient,
     bridgeServer,
     workerControlClientFactory = null,
+    claudeSessionExists = defaultClaudeSessionExists,
   }) {
     this.env = env;
     this.bindingRegistry = bindingRegistry;
@@ -68,6 +86,9 @@ export class DaemonRuntime {
           controlURL: binding.worker_control_url,
           token: binding.worker_control_token,
         });
+    this.claudeSessionExists = typeof claudeSessionExists === "function"
+      ? claudeSessionExists
+      : defaultClaudeSessionExists;
     this.eventSessionIndex = new Map();
     this.pendingEvents = new Map();
   }
@@ -90,41 +111,30 @@ export class DaemonRuntime {
     });
   }
 
+  async shouldResumeClaudeSession(binding) {
+    const claudeSessionID = normalizeString(binding?.claude_session_id);
+    const cwd = normalizeString(binding?.cwd);
+    if (!claudeSessionID || !cwd) {
+      return false;
+    }
+    return this.claudeSessionExists({
+      cwd,
+      claudeSessionID,
+      env: this.env,
+    });
+  }
+
   async ensureWorker(binding) {
-    if (binding.worker_status === "ready" && binding.worker_control_url && binding.worker_control_token) {
+    if (canDeliverToWorker(binding)) {
       return {
         worker_id: binding.worker_id,
-        status: "ready",
+        status: binding.worker_status,
       };
     }
 
-    if (binding.worker_status === "connected" && binding.worker_control_url && binding.worker_control_token) {
+    if (binding.worker_status === "starting" || binding.worker_status === "connected") {
       const current = await this.waitForWorkerBridgeState(binding.aibot_session_id);
-      if (
-        current &&
-        current.worker_status === "ready" &&
-        current.worker_control_url &&
-        current.worker_control_token
-      ) {
-        return {
-          worker_id: current.worker_id,
-          status: "ready",
-        };
-      }
-      return {
-        worker_id: binding.worker_id,
-        status: "connected",
-      };
-    }
-
-    if (binding.worker_status === "starting") {
-      const current = await this.waitForWorkerBridgeState(binding.aibot_session_id);
-      if (
-        current &&
-        current.worker_status === "ready" &&
-        current.worker_control_url &&
-        current.worker_control_token
-      ) {
+      if (canDeliverToWorker(current)) {
         return {
           worker_id: current.worker_id,
           status: current.worker_status,
@@ -137,6 +147,7 @@ export class DaemonRuntime {
       updatedAt: Date.now(),
       lastStartedAt: Date.now(),
     });
+    const resumeSession = await this.shouldResumeClaudeSession(binding);
     return this.workerProcessManager.spawnWorker({
       aibotSessionID: binding.aibot_session_id,
       cwd: binding.cwd,
@@ -145,7 +156,7 @@ export class DaemonRuntime {
       workerID: binding.worker_id || randomUUID(),
       bridgeURL: this.bridgeServer.getURL(),
       bridgeToken: this.bridgeServer.token,
-      resumeSession: true,
+      resumeSession,
     });
   }
 
@@ -171,19 +182,37 @@ export class DaemonRuntime {
       if (!current) {
         return null;
       }
-      if (
-        current.worker_status === "ready" &&
-        current.worker_control_url &&
-        current.worker_control_token
-      ) {
+      if (canDeliverToWorker(current)) {
+        const hasMissingResumeSessionError = (
+          normalizeString(current.worker_status) === "starting" ||
+          normalizeString(current.worker_status) === "connected"
+        ) && await this.workerProcessManager?.hasMissingResumeSessionError?.(current.worker_id);
+        if (hasMissingResumeSessionError) {
+          return withWorkerLaunchFailure(current, "resume_session_missing");
+        }
         return current;
+      }
+      if (
+        (normalizeString(current.worker_status) === "starting" ||
+          normalizeString(current.worker_status) === "connected") &&
+        await this.workerProcessManager?.hasMissingResumeSessionError?.(current.worker_id)
+      ) {
+        return withWorkerLaunchFailure(current, "resume_session_missing");
       }
       if (current.worker_status === "stopped" || current.worker_status === "failed") {
         return current;
       }
       await sleep(intervalMs);
     }
-    return this.bindingRegistry.getByAibotSessionID(aibotSessionID);
+    const current = this.bindingRegistry.getByAibotSessionID(aibotSessionID);
+    if (
+      (normalizeString(current?.worker_status) === "starting" ||
+        normalizeString(current?.worker_status) === "connected") &&
+      await this.workerProcessManager?.hasMissingResumeSessionError?.(current?.worker_id)
+    ) {
+      return withWorkerLaunchFailure(current, "resume_session_missing");
+    }
+    return current;
   }
 
   async deliverEventToWorker(binding, rawPayload) {
@@ -234,6 +263,26 @@ export class DaemonRuntime {
     return record;
   }
 
+  markPendingEventDispatching(eventID, binding) {
+    const record = this.pendingEvents.get(normalizeString(eventID));
+    if (!record) {
+      return null;
+    }
+    record.delivery_attempts += 1;
+    record.delivery_state = "dispatching";
+    record.last_worker_id = normalizeString(binding?.worker_id);
+    return record;
+  }
+
+  markPendingEventPending(eventID) {
+    const record = this.pendingEvents.get(normalizeString(eventID));
+    if (!record) {
+      return null;
+    }
+    record.delivery_state = "pending";
+    return record;
+  }
+
   markPendingEventInterrupted(eventID) {
     const record = this.pendingEvents.get(normalizeString(eventID));
     if (!record) {
@@ -271,9 +320,11 @@ export class DaemonRuntime {
         continue;
       }
       try {
+        this.markPendingEventDispatching(record.eventID, binding);
         await this.deliverEventToWorker(binding, record.rawPayload);
         this.markPendingEventDelivered(record.eventID, binding);
       } catch {
+        this.markPendingEventPending(record.eventID);
         return;
       }
     }
@@ -316,7 +367,7 @@ export class DaemonRuntime {
       return;
     }
 
-    if (nextStatus === "ready" && nextBinding?.worker_control_url && nextBinding?.worker_control_token) {
+    if (canDeliverToWorker(nextBinding)) {
       await this.flushPendingSessionEvents(sessionID, nextBinding);
     }
 
@@ -348,11 +399,13 @@ export class DaemonRuntime {
     }
 
     let readyBinding = binding;
-    if (binding.worker_status === "ready" && binding.worker_control_url && binding.worker_control_token) {
+    if (canDeliverToWorker(binding)) {
       try {
+        this.markPendingEventDispatching(rawPayload?.event_id, binding);
         await deliverFn.call(this, binding, rawPayload);
         return binding;
       } catch {
+        this.markPendingEventPending(rawPayload?.event_id);
         readyBinding = await this.bindingRegistry.markWorkerStarting(binding.aibot_session_id, {
           workerID: binding.worker_id || randomUUID(),
           updatedAt: Date.now(),
@@ -362,14 +415,11 @@ export class DaemonRuntime {
     }
 
     readyBinding = await this.ensureReadyBinding(readyBinding.aibot_session_id);
-    if (
-      readyBinding?.worker_status !== "ready" ||
-      !readyBinding?.worker_control_url ||
-      !readyBinding?.worker_control_token
-    ) {
+    if (!canDeliverToWorker(readyBinding)) {
       return null;
     }
 
+    this.markPendingEventDispatching(rawPayload?.event_id, readyBinding);
     await deliverFn.call(this, readyBinding, rawPayload);
     return readyBinding;
   }
@@ -381,7 +431,7 @@ export class DaemonRuntime {
     }
 
     let readyBinding = binding;
-    if (binding.worker_status === "ready" && binding.worker_control_url && binding.worker_control_token) {
+    if (canDeliverToWorker(binding)) {
       return binding;
     }
 
@@ -390,7 +440,34 @@ export class DaemonRuntime {
       readyBinding = await this.waitForWorkerBridgeState(aibotSessionID, {
         timeoutMs: 15000,
       });
+    } else {
+      readyBinding = this.bindingRegistry.getByAibotSessionID(aibotSessionID) ?? readyBinding;
     }
+
+    if (
+      readyBinding?.worker_launch_failure === "resume_session_missing" &&
+      normalizeString(binding.claude_session_id)
+    ) {
+      await this.bindingRegistry.markWorkerStarting(binding.aibot_session_id, {
+        workerID: binding.worker_id || randomUUID(),
+        updatedAt: Date.now(),
+        lastStartedAt: Date.now(),
+      });
+      await this.workerProcessManager.spawnWorker({
+        aibotSessionID: binding.aibot_session_id,
+        cwd: binding.cwd,
+        pluginDataDir: binding.plugin_data_dir,
+        claudeSessionID: binding.claude_session_id,
+        workerID: binding.worker_id || randomUUID(),
+        bridgeURL: this.bridgeServer.getURL(),
+        bridgeToken: this.bridgeServer.token,
+        resumeSession: false,
+      });
+      readyBinding = await this.waitForWorkerBridgeState(aibotSessionID, {
+        timeoutMs: 15000,
+      });
+    }
+
     return readyBinding ?? binding;
   }
 

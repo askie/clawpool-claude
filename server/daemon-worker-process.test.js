@@ -104,6 +104,7 @@ await writeFile(process.env.TEST_OUTPUT_PATH, Buffer.concat(chunks).toString("ut
     env: {
       ...process.env,
       CLAUDE_BIN: fakeClaudePath,
+      CLAWPOOL_SHOW_CLAUDE_WINDOW: "0",
       TEST_OUTPUT_PATH: outputPath,
     },
     packageRoot: tempDir,
@@ -118,7 +119,7 @@ await writeFile(process.env.TEST_OUTPUT_PATH, Buffer.concat(chunks).toString("ut
   });
 
   let actual = "";
-  for (let index = 0; index < 20; index += 1) {
+  for (let index = 0; index < 100; index += 1) {
     try {
       actual = await readFile(outputPath, "utf8");
       break;
@@ -152,6 +153,7 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with pid fi
     env: {
       CLAUDE_PLUGIN_DATA: "/tmp/plugin data",
       CLAWPOOL_AIBOT_SESSION_ID: "chat-visible",
+      "npm_package_bin_clawpool-claude": "./bin/clawpool-claude.js",
     },
   });
 
@@ -162,13 +164,43 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with pid fi
   assert.match(result.pidPath, /worker-visible\.pid$/u);
   assert.match(script, /clawpool-claude worker-visible/u);
   assert.match(script, /echo \$\$ >/u);
-  assert.match(script, /exec \/usr\/bin\/expect '.*worker-visible\.launch\.expect'/u);
-  assert.match(script, /export CLAUDE_PLUGIN_DATA='\/tmp\/plugin data'/u);
+  assert.match(script, /exec \/usr\/bin\/env /u);
+  assert.match(script, /'CLAUDE_PLUGIN_DATA=\/tmp\/plugin data'/u);
+  assert.match(script, /'CLAWPOOL_AIBOT_SESSION_ID=chat-visible'/u);
+  assert.match(script, /'npm_package_bin_clawpool-claude=\.\/bin\/clawpool-claude\.js'/u);
+  assert.match(script, /\/usr\/bin\/expect '.*worker-visible\.launch\.expect'/u);
   assert.match(script, /cd '\/tmp\/demo path'/u);
   assert.match(expectScript, /set timeout -1/u);
   assert.match(expectScript, /log_file -a \{.*worker-visible\.out\.log\}/u);
   assert.match(expectScript, /spawn -noecho \{\*\}\$claude_command/u);
+  assert.match(expectScript, /after 500/u);
   assert.match(expectScript, /-re \{Enter\.\*confirm\}/u);
   assert.match(expectScript, /send -- "\\r"/u);
+  assert.match(expectScript, /exp_continue/u);
   assert.match(expectScript, /set claude_command \[list \{\/usr\/local\/bin\/claude\} \{--name\} \{clawpool-chat-visible\} \{--plugin-dir\} \{\/tmp\/clawpool-claude-plugin\} \{--dangerously-skip-permissions\} \{--session-id\} \{session-1\} \{--dangerously-load-development-channels\} \{server:clawpool-claude\}\]/u);
+});
+
+test("worker process manager detects missing Claude session resume failure from logs", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-resume-error-"));
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAWPOOL_DAEMON_DATA_DIR: tempDir,
+      CLAWPOOL_SHOW_CLAUDE_WINDOW: "0",
+    },
+    packageRoot: tempDir,
+  });
+
+  manager.runtimes.set("worker-missing-session", {
+    worker_id: "worker-missing-session",
+    stdout_log_path: path.join(tempDir, "missing-session.out.log"),
+    stderr_log_path: path.join(tempDir, "missing-session.err.log"),
+  });
+  await writeFile(
+    path.join(tempDir, "missing-session.out.log"),
+    "No conversation found with session ID: test-session\n",
+    "utf8",
+  );
+
+  assert.equal(await manager.hasMissingResumeSessionError("worker-missing-session"), true);
 });

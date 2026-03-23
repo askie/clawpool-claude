@@ -73,3 +73,45 @@ test("binding registry rejects duplicate aibot session bindings", async () => {
     /binding already exists/u,
   );
 });
+
+test("binding registry resets transient worker states on daemon startup", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-binding-registry-"));
+  const registry = new BindingRegistry(path.join(dir, "binding-registry.json"));
+  await registry.load();
+
+  await registry.createBinding({
+    aibot_session_id: "chat-ready",
+    claude_session_id: "claude-ready",
+    cwd: "/repo/ready",
+    worker_id: "worker-ready",
+    worker_status: "ready",
+    plugin_data_dir: "/data/chat-ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-ready",
+  });
+  await registry.createBinding({
+    aibot_session_id: "chat-stopped",
+    claude_session_id: "claude-stopped",
+    cwd: "/repo/stopped",
+    worker_id: "worker-stopped",
+    worker_status: "stopped",
+    plugin_data_dir: "/data/chat-stopped",
+  });
+
+  const reset = await registry.resetTransientWorkerStates({
+    updatedAt: 20,
+    lastStoppedAt: 21,
+  });
+
+  assert.equal(reset.length, 2);
+
+  const ready = registry.getByAibotSessionID("chat-ready");
+  assert.equal(ready.worker_status, "stopped");
+  assert.equal(ready.worker_control_url, "");
+  assert.equal(ready.worker_control_token, "");
+  assert.equal(ready.last_stopped_at, 21);
+
+  const stopped = registry.getByAibotSessionID("chat-stopped");
+  assert.equal(stopped.worker_status, "stopped");
+  assert.equal(stopped.last_stopped_at, 0);
+});

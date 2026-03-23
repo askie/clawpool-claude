@@ -115,6 +115,7 @@ export async function run(argv = [], env = process.env) {
     });
   }
   await bindingRegistry.load();
+  await bindingRegistry.resetTransientWorkerStates();
   const workerProcessManager = new WorkerProcessManager({
     env: runtimeEnv,
     connectionConfig: configStore.getConnectionConfig(),

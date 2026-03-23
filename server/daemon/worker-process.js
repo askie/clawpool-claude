@@ -6,6 +6,8 @@ import { randomUUID } from "node:crypto";
 import { resolvePackageRoot } from "../../cli/config.js";
 import { resolveWorkerLogsDir } from "./daemon-paths.js";
 
+const missingResumeSessionPattern = /No conversation found with session ID:/u;
+
 function normalizeString(value) {
   return String(value ?? "").trim();
 }
@@ -28,10 +30,10 @@ function tclEscape(value) {
     .replace(/\}/g, "\\}");
 }
 
-function buildShellExportLines(env) {
+function buildShellEnvArgs(env) {
   return Object.entries(env)
-    .filter(([, value]) => value !== undefined)
-    .map(([key, value]) => `export ${key}=${shellEscape(String(value ?? ""))}`);
+    .filter(([key, value]) => normalizeString(key) && !String(key).includes("=") && value !== undefined)
+    .map(([key, value]) => shellEscape(`${String(key)}=${String(value ?? "")}`));
 }
 
 function shouldShowClaudeWindow(env = process.env) {
@@ -41,6 +43,14 @@ function shouldShowClaudeWindow(env = process.env) {
 function buildWorkerSessionName(aibotSessionID) {
   const normalized = normalizeString(aibotSessionID).replace(/[^a-zA-Z0-9._-]+/g, "-");
   return normalized ? `clawpool-${normalized}` : "clawpool-worker";
+}
+
+function resolveWorkerLogPaths({ logsDir, workerID }) {
+  const normalizedWorkerID = normalizeString(workerID) || randomUUID();
+  return {
+    stdoutLogPath: path.join(logsDir, `${normalizedWorkerID}.out.log`),
+    stderrLogPath: path.join(logsDir, `${normalizedWorkerID}.err.log`),
+  };
 }
 
 export function buildWorkerEnvironment({
@@ -124,18 +134,25 @@ export async function createVisibleClaudeLaunchScript({
   const scriptPath = path.join(logsDir, `${normalizedWorkerID}.launch.command`);
   const expectPath = path.join(logsDir, `${normalizedWorkerID}.launch.expect`);
   const pidPath = path.join(logsDir, `${normalizedWorkerID}.pid`);
-  const outLogPath = path.join(logsDir, `${normalizedWorkerID}.out.log`);
+  const { stdoutLogPath } = resolveWorkerLogPaths({
+    logsDir,
+    workerID: normalizedWorkerID,
+  });
   const expectLines = [
     "log_user 1",
     "set timeout -1",
-    `log_file -a {${tclEscape(outLogPath)}}`,
+    `log_file -a {${tclEscape(stdoutLogPath)}}`,
     `set claude_command [list {${tclEscape(command)}}${args.map((item) => ` {${tclEscape(item)}}`).join("")}]`,
     "spawn -noecho {*}$claude_command",
+    "after 500",
+    "send -- \"\\r\"",
     "expect {",
     "  -re {Enter.*confirm} {",
     "    send -- \"\\r\"",
     "    after 500",
+    "    exp_continue",
     "  }",
+    "  eof {}",
     "}",
     "interact",
     "",
@@ -146,8 +163,7 @@ export async function createVisibleClaudeLaunchScript({
     `cd ${shellEscape(cwd)}`,
     `printf '\\e]1;clawpool-claude ${normalizedWorkerID}\\a'`,
     `echo $$ > ${shellEscape(pidPath)}`,
-    ...buildShellExportLines(env),
-    `exec /usr/bin/expect ${shellEscape(expectPath)}`,
+    `exec /usr/bin/env ${buildShellEnvArgs(env).join(" ")} /usr/bin/expect ${shellEscape(expectPath)}`,
     "",
   ];
   await writeFile(expectPath, expectLines.join("\n"), "utf8");
@@ -339,8 +355,15 @@ export class WorkerProcessManager {
 
     const logsDir = resolveWorkerLogsDir(normalizedSessionID, this.env);
     await mkdir(logsDir, { recursive: true });
-    const stdoutHandle = await open(path.join(logsDir, `${normalizedWorkerID}.out.log`), "a");
-    const stderrHandle = await open(path.join(logsDir, `${normalizedWorkerID}.err.log`), "a");
+    const {
+      stdoutLogPath,
+      stderrLogPath,
+    } = resolveWorkerLogPaths({
+      logsDir,
+      workerID: normalizedWorkerID,
+    });
+    const stdoutHandle = await open(stdoutLogPath, "w");
+    const stderrHandle = await open(stderrLogPath, "w");
     const workerEnv = buildWorkerEnvironment({
       baseEnv: this.env,
       pluginDataDir: normalizedPluginDataDir,
@@ -402,9 +425,13 @@ export class WorkerProcessManager {
       claude_session_id: normalizedClaudeSessionID,
       cwd: normalizedCwd,
       plugin_data_dir: normalizedPluginDataDir,
+      logs_dir: logsDir,
+      stdout_log_path: stdoutLogPath,
+      stderr_log_path: stderrLogPath,
       pid,
       started_at: Date.now(),
       status: "starting",
+      resume_session: resumeSession,
       visible_terminal: Boolean(visibleTerminal),
     };
     this.runtimes.set(normalizedWorkerID, runtime);
@@ -435,5 +462,27 @@ export class WorkerProcessManager {
       exitSignal: "SIGTERM",
     });
     return true;
+  }
+
+  async hasMissingResumeSessionError(workerID) {
+    const runtime = this.runtimes.get(normalizeString(workerID));
+    if (!runtime) {
+      return false;
+    }
+
+    for (const filePath of [runtime.stdout_log_path, runtime.stderr_log_path]) {
+      if (!normalizeString(filePath)) {
+        continue;
+      }
+      try {
+        const content = await readFile(filePath, "utf8");
+        if (missingResumeSessionPattern.test(content)) {
+          return true;
+        }
+      } catch {
+        // ignore unreadable log files while startup is still in progress
+      }
+    }
+    return false;
   }
 }

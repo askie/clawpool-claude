@@ -133,6 +133,9 @@ test("daemon runtime restores persisted binding and does not require open again"
         return "http://127.0.0.1:9000";
       },
     },
+    async claudeSessionExists() {
+      return true;
+    },
     workerControlClientFactory() {
       return {
         isConfigured() {
@@ -273,6 +276,9 @@ test("daemon runtime delivers normal message to ready worker control", async () 
         return "http://127.0.0.1:9000";
       },
     },
+    async claudeSessionExists() {
+      return true;
+    },
     workerControlClientFactory() {
       return {
         isConfigured() {
@@ -347,6 +353,9 @@ test("daemon runtime resumes the bound Claude session when restarting a stopped 
       getURL() {
         return "http://127.0.0.1:9000";
       },
+    },
+    async claudeSessionExists() {
+      return true;
     },
     workerControlClientFactory() {
       return {
@@ -425,6 +434,9 @@ test("daemon runtime respawns when binding is stopped even if local runtime is s
         return "http://127.0.0.1:9000";
       },
     },
+    async claudeSessionExists() {
+      return true;
+    },
     workerControlClientFactory() {
       return {
         isConfigured() {
@@ -494,6 +506,16 @@ test("daemon runtime waits for ready before delivering to a connected worker bri
       };
     },
   });
+  runtime.waitForWorkerBridgeState = async () => {
+    await registry.markWorkerReady("chat-4d", {
+      workerID: "worker-4d",
+      workerControlURL: "http://127.0.0.1:9992",
+      workerControlToken: "token-4d",
+      updatedAt: Date.now(),
+      lastStartedAt: Date.now(),
+    });
+    return registry.getByAibotSessionID("chat-4d");
+  };
 
   await runtime.handleEvent({
     event_id: "evt-4d",
@@ -504,7 +526,8 @@ test("daemon runtime waits for ready before delivering to a connected worker bri
   });
 
   assert.equal(workerCalls.length, 0);
-  assert.equal(delivered.length, 0);
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].event_id, "evt-4d");
   assert.equal(sent.filter((item) => item.kind === "text").length, 0);
 });
 
@@ -549,6 +572,9 @@ test("daemon runtime flushes the first pending event after worker bridge becomes
         return "http://127.0.0.1:9000";
       },
     },
+    async claudeSessionExists() {
+      return true;
+    },
     workerControlClientFactory(binding) {
       return {
         isConfigured() {
@@ -564,6 +590,7 @@ test("daemon runtime flushes the first pending event after worker bridge becomes
       };
     },
   });
+  runtime.waitForWorkerBridgeState = async () => registry.getByAibotSessionID("chat-4d2");
 
   await runtime.handleEvent({
     event_id: "evt-4d2",
@@ -600,6 +627,193 @@ test("daemon runtime flushes the first pending event after worker bridge becomes
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].payload.event_id, "evt-4d2");
   assert.equal(delivered[0].via, "http://127.0.0.1:99921");
+});
+
+test("daemon runtime falls back to a fresh Claude session when resume target is missing", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const delivered = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-4d3",
+    claude_session_id: "claude-4d3",
+    cwd: tempDir,
+    worker_id: "worker-4d3",
+    worker_status: "stopped",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  let missingResume = false;
+  const workerProcessManager = {
+    getWorkerRuntime() {
+      return null;
+    },
+    async spawnWorker(input) {
+      workerCalls.push({ kind: "spawn", input });
+      if (input.resumeSession) {
+        missingResume = true;
+        await registry.markWorkerConnected(input.aibotSessionID, {
+          workerID: input.workerID,
+          workerControlURL: "http://127.0.0.1:99921",
+          workerControlToken: "token-missing-resume",
+          updatedAt: Date.now(),
+          lastStartedAt: Date.now(),
+        });
+      } else {
+        missingResume = false;
+        await registry.markWorkerReady(input.aibotSessionID, {
+          workerID: input.workerID,
+          workerControlURL: "http://127.0.0.1:99922",
+          workerControlToken: "token-4d3",
+          updatedAt: Date.now(),
+          lastStartedAt: Date.now(),
+        });
+      }
+      return {
+        worker_id: input.workerID,
+        status: "starting",
+      };
+    },
+    async stopWorker() {
+      return true;
+    },
+    async hasMissingResumeSessionError() {
+      return missingResume;
+    },
+  };
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    async claudeSessionExists() {
+      return true;
+    },
+    workerControlClientFactory(binding) {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          delivered.push({
+            via: binding.worker_control_url,
+            payload,
+          });
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await runtime.handleEvent({
+    event_id: "evt-4d3",
+    session_id: "chat-4d3",
+    msg_id: "msg-4d3",
+    sender_id: "sender-4d3",
+    content: "recover missing resume session",
+  });
+
+  assert.equal(workerCalls.length, 2);
+  assert.equal(workerCalls[0].input.resumeSession, true);
+  assert.equal(workerCalls[1].input.resumeSession, false);
+  assert.equal(workerCalls[1].input.claudeSessionID, "claude-4d3");
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].payload.event_id, "evt-4d3");
+  assert.equal(delivered[0].via, "http://127.0.0.1:99922");
+  assert.equal(sent.filter((item) => item.kind === "text").length, 0);
+});
+
+test("daemon runtime skips resume and starts fresh when Claude session file is missing", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const delivered = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-4d4",
+    claude_session_id: "claude-4d4",
+    cwd: tempDir,
+    worker_id: "worker-4d4",
+    worker_status: "stopped",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: {
+      getWorkerRuntime() {
+        return null;
+      },
+      async spawnWorker(input) {
+        workerCalls.push({ kind: "spawn", input });
+        await registry.markWorkerReady(input.aibotSessionID, {
+          workerID: input.workerID,
+          workerControlURL: "http://127.0.0.1:99923",
+          workerControlToken: "token-4d4",
+          updatedAt: Date.now(),
+          lastStartedAt: Date.now(),
+        });
+        return {
+          worker_id: input.workerID,
+          status: "starting",
+        };
+      },
+      async stopWorker() {
+        return true;
+      },
+    },
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    async claudeSessionExists() {
+      return false;
+    },
+    workerControlClientFactory(binding) {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          delivered.push({
+            via: binding.worker_control_url,
+            payload,
+          });
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await runtime.handleEvent({
+    event_id: "evt-4d4",
+    session_id: "chat-4d4",
+    msg_id: "msg-4d4",
+    sender_id: "sender-4d4",
+    content: "start fresh when missing",
+  });
+
+  assert.equal(workerCalls.length, 1);
+  assert.equal(workerCalls[0].input.resumeSession, false);
+  assert.equal(workerCalls[0].input.claudeSessionID, "claude-4d4");
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].payload.event_id, "evt-4d4");
+  assert.equal(delivered[0].via, "http://127.0.0.1:99923");
+  assert.equal(sent.filter((item) => item.kind === "text").length, 0);
 });
 
 test("daemon runtime delivers to a ready worker even when local runtime snapshot is stale", async () => {
