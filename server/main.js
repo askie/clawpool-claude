@@ -45,6 +45,7 @@ import {
 } from "./protocol-text.js";
 import { ResultTimeoutManager } from "./result-timeout.js";
 import { normalizeInboundEventPayload } from "./inbound-event-meta.js";
+import { createSessionActivityDispatcher } from "./session-activity-dispatcher.js";
 import { WorkerBridgeClient } from "./worker/worker-bridge-client.js";
 import { WorkerInboundBridgeServer } from "./worker/inbound-bridge-server.js";
 
@@ -63,6 +64,24 @@ const daemonModeEnabled = process.env.CLAWPOOL_DAEMON_MODE === "1" && daemonBrid
 let workerReadyReported = false;
 let workerReadyPromise = null;
 let restoredEntriesForReadyReplay = [];
+const dispatchSessionActivity = createSessionActivityDispatcher(async ({
+  sessionID,
+  kind = "composing",
+  active,
+  ttlMs = 0,
+  refMsgID = "",
+  refEventID = "",
+}) => {
+  requireDaemonBridge();
+  return workerBridgeClient.setSessionComposing({
+    session_id: sessionID,
+    kind,
+    active,
+    ttl_ms: ttlMs,
+    ref_msg_id: refMsgID,
+    ref_event_id: refEventID,
+  });
+});
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -333,18 +352,19 @@ async function sendEventStopResultOutbound(payload) {
 
 async function setSessionComposingOutbound({
   sessionID,
+  kind = "composing",
   active,
   ttlMs = 0,
   refMsgID = "",
   refEventID = "",
 }) {
-  requireDaemonBridge();
-  return workerBridgeClient.setSessionComposing({
-    session_id: sessionID,
+  return dispatchSessionActivity({
+    sessionID,
+    kind,
     active,
-    ttl_ms: ttlMs,
-    ref_msg_id: refMsgID,
-    ref_event_id: refEventID,
+    ttlMs,
+    refMsgID,
+    refEventID,
   });
 }
 

@@ -124,3 +124,31 @@ test("buildSessionActivityPayload omits empty optional fields", () => {
     },
   );
 });
+
+test("aibot client setSessionComposing forwards explicit kind", () => {
+  const client = markClientReady(makeClient());
+  const sentPackets = [];
+
+  client.ws = {
+    readyState: 1,
+    send(raw) {
+      sentPackets.push(JSON.parse(raw));
+    },
+  };
+
+  client.setSessionComposing({
+    sessionID: "chat-2",
+    kind: "composing",
+    active: false,
+    refEventID: "evt-2",
+  });
+
+  assert.equal(sentPackets.length, 1);
+  assert.equal(sentPackets[0].cmd, "session_activity_set");
+  assert.deepEqual(sentPackets[0].payload, {
+    session_id: "chat-2",
+    kind: "composing",
+    active: false,
+    ref_event_id: "evt-2",
+  });
+});

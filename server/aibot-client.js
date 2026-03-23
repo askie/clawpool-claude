@@ -469,6 +469,7 @@ export class AibotClient {
 
   setSessionComposing({
     sessionID,
+    kind = "composing",
     active,
     ttlMs = 0,
     refMsgID = "",
@@ -478,7 +479,7 @@ export class AibotClient {
       "session_activity_set",
       buildSessionActivityPayload({
         sessionID,
-        kind: "composing",
+        kind,
         active,
         ttlMs,
         refMsgID,

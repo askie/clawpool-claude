@@ -7,6 +7,7 @@ import { WorkerBridgeServer } from "./worker-bridge-server.js";
 import { WorkerProcessManager } from "./worker-process.js";
 import { AibotClient } from "../aibot-client.js";
 import { DaemonRuntime } from "./runtime.js";
+import { createSessionActivityDispatcher } from "../session-activity-dispatcher.js";
 
 function usage() {
   return `用法:
@@ -122,6 +123,23 @@ export async function run(argv = [], env = process.env) {
   });
   let aibotClient = null;
   let runtime = null;
+  const dispatchSessionActivity = createSessionActivityDispatcher(async ({
+    sessionID,
+    kind = "composing",
+    active,
+    ttlMs = 0,
+    refMsgID = "",
+    refEventID = "",
+  }) => {
+    aibotClient.setSessionComposing({
+      sessionID,
+      kind,
+      active,
+      ttlMs,
+      refMsgID,
+      refEventID,
+    });
+  });
 
   const bridgeServer = new WorkerBridgeServer({
     onRegisterWorker: async (payload) => {
@@ -227,8 +245,9 @@ export async function run(argv = [], env = process.env) {
       return { ok: true };
     },
     onSetSessionComposing: async (payload) => {
-      aibotClient.setSessionComposing({
+      await dispatchSessionActivity({
         sessionID: payload.session_id,
+        kind: payload.kind,
         active: payload.active,
         ttlMs: payload.ttl_ms,
         refMsgID: payload.ref_msg_id,
