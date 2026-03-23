@@ -16,6 +16,8 @@ import { createSessionActivityDispatcher } from "../session-activity-dispatcher.
 import { createProcessLogger } from "../logging.js";
 import { DaemonProcessState } from "./process-state.js";
 
+const workerReadySettleDelayMs = 3000;
+
 function usage() {
   return `用法:
   clawpool-claude daemon [options]
@@ -67,19 +69,18 @@ function normalizeString(value) {
   return String(value ?? "").trim();
 }
 
-export function shouldNotifyWorkerReady(previousBinding, nextBinding) {
+export function shouldNotifyWorkerReady(previousBinding, nextBinding, { pendingEventCount = 0 } = {}) {
   if (!nextBinding || normalizeString(nextBinding.worker_status) !== "ready") {
+    return false;
+  }
+  if (Number(pendingEventCount) > 0) {
     return false;
   }
   return normalizeString(previousBinding?.worker_status) !== "ready";
 }
 
 export function buildWorkerReadyNoticeText(binding) {
-  const cwd = normalizeString(binding?.cwd);
-  if (!cwd) {
-    return "Claude 已就绪，可以开始对话。";
-  }
-  return `Claude 已就绪，可以开始对话。\n目录: ${cwd}`;
+  return "claude ready! please retry again.";
 }
 
 export async function notifyWorkerReady(aibotClient, binding) {
@@ -217,10 +218,22 @@ export async function run(argv = [], env = process.env) {
           lastStartedAt: Date.now(),
         });
       }
-      if (shouldNotifyWorkerReady(previousBinding, nextBinding)) {
-        await notifyWorkerReady(aibotClient, nextBinding);
+      if (status === "ready") {
+        const timer = setTimeout(() => {
+          void (async () => {
+            await runtime?.handleWorkerStatusUpdate?.(previousBinding, nextBinding);
+            const pendingEventCount = runtime?.listPendingEventsForSession?.(aibotSessionID)?.length ?? 0;
+            if (shouldNotifyWorkerReady(previousBinding, nextBinding, { pendingEventCount })) {
+              await notifyWorkerReady(aibotClient, nextBinding);
+            }
+          })().catch((error) => {
+            logger.error(`ready status follow-up failed session=${aibotSessionID}: ${String(error)}`);
+          });
+        }, workerReadySettleDelayMs);
+        timer.unref?.();
+      } else {
+        await runtime?.handleWorkerStatusUpdate?.(previousBinding, nextBinding);
       }
-      await runtime?.handleWorkerStatusUpdate?.(previousBinding, nextBinding);
       return { ok: true };
     },
     onSendText: async (payload) => aibotClient.sendText({

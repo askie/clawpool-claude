@@ -543,6 +543,144 @@ test("daemon runtime waits for ready before delivering to a connected worker bri
   assert.equal(sent.filter((item) => item.kind === "text").length, 0);
 });
 
+test("daemon runtime stays silent while worker is not ready", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-4d-starting",
+    claude_session_id: "claude-4d-starting",
+    cwd: tempDir,
+    worker_id: "worker-4d-starting",
+    worker_status: "starting",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: {
+      ...makeWorkerProcessManager(workerCalls),
+      getWorkerRuntime() {
+        return {
+          worker_id: "worker-4d-starting",
+          pid: 123,
+          status: "starting",
+        };
+      },
+    },
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    isProcessRunning() {
+      return true;
+    },
+  });
+  runtime.waitForWorkerBridgeState = async () => registry.getByAibotSessionID("chat-4d-starting");
+
+  await runtime.handleEvent({
+    event_id: "evt-4d-starting",
+    session_id: "chat-4d-starting",
+    msg_id: "msg-4d-starting",
+    sender_id: "sender-4d-starting",
+    content: "hello",
+  });
+
+  assert.equal(workerCalls.length, 0);
+  assert.equal(sent.filter((item) => item.kind === "text").length, 0);
+});
+
+test("daemon runtime avoids redelivering the first event when ready recovery already flushed it", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const delivered = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-4d-race",
+    claude_session_id: "claude-4d-race",
+    cwd: tempDir,
+    worker_id: "worker-4d-race",
+    worker_status: "stopped",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: {
+      getWorkerRuntime() {
+        return null;
+      },
+      async spawnWorker(input) {
+        workerCalls.push({ kind: "spawn", input });
+        return {
+          worker_id: input.workerID,
+          status: "starting",
+        };
+      },
+      async stopWorker() {
+        return true;
+      },
+    },
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          delivered.push(payload);
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  let readyHandled = false;
+  runtime.waitForWorkerBridgeState = async () => {
+    if (!readyHandled) {
+      readyHandled = true;
+      const previousBinding = registry.getByAibotSessionID("chat-4d-race");
+      const nextBinding = await registry.markWorkerReady("chat-4d-race", {
+        workerID: "worker-4d-race",
+        workerControlURL: "http://127.0.0.1:9995",
+        workerControlToken: "token-4d-race",
+        updatedAt: Date.now(),
+        lastStartedAt: Date.now(),
+      });
+      await runtime.handleWorkerStatusUpdate(previousBinding, nextBinding);
+      return nextBinding;
+    }
+    return registry.getByAibotSessionID("chat-4d-race");
+  };
+
+  await runtime.handleEvent({
+    event_id: "evt-4d-race",
+    session_id: "chat-4d-race",
+    msg_id: "msg-4d-race",
+    sender_id: "sender-4d-race",
+    content: "aaa",
+  });
+
+  assert.equal(workerCalls.length, 1);
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].event_id, "evt-4d-race");
+});
+
 test("daemon runtime flushes the first pending event after worker bridge becomes ready", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
@@ -1570,7 +1708,7 @@ test("daemon runtime fails persisted in-flight events after restart recovery", a
   assert.equal(delivered.length, 1);
   assert.equal(
     secondSent.some((item) => item.kind === "text" && /没有处理完成/u.test(item.payload.text)),
-    true,
+    false,
   );
   assert.deepEqual(
     secondSent.find((item) => item.kind === "event_result")?.payload,

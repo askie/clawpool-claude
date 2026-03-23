@@ -145,6 +145,9 @@ export async function createVisibleClaudeLaunchScript({
     `log_file -a {${tclEscape(stdoutLogPath)}}`,
     `set claude_command [list {${tclEscape(command)}}${args.map((item) => ` {${tclEscape(item)}}`).join("")}]`,
     "spawn -noecho {*}$claude_command",
+    `set pid_file [open {${tclEscape(pidPath)}} w]`,
+    "puts $pid_file [exp_pid -i $spawn_id]",
+    "close $pid_file",
     "after 500",
     "send -- \"\\r\"",
     "expect {",
@@ -163,10 +166,10 @@ export async function createVisibleClaudeLaunchScript({
     "set -e",
     `cd ${shellEscape(cwd)}`,
     `printf '\\e]1;clawpool-claude ${normalizedWorkerID}\\a'`,
-    `echo $$ > ${shellEscape(pidPath)}`,
     `exec /usr/bin/env ${buildShellEnvArgs(env).join(" ")} /usr/bin/expect ${shellEscape(expectPath)}`,
     "",
   ];
+  await writeFile(pidPath, "", "utf8");
   await writeFile(expectPath, expectLines.join("\n"), "utf8");
   await chmod(expectPath, 0o755);
   await writeFile(scriptPath, lines.join("\n"), "utf8");

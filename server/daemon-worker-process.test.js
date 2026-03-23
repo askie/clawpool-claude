@@ -131,7 +131,7 @@ await writeFile(process.env.TEST_OUTPUT_PATH, Buffer.concat(chunks).toString("ut
   assert.equal(actual, "\n");
 });
 
-test("createVisibleClaudeLaunchScript writes terminal launch wrapper with pid file", async () => {
+test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude pid file", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-visible-launch-script-"));
   const logsDir = path.join(tempDir, "logs");
   const result = await createVisibleClaudeLaunchScript({
@@ -163,7 +163,6 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with pid fi
   assert.match(result.expectPath, /worker-visible\.launch\.expect$/u);
   assert.match(result.pidPath, /worker-visible\.pid$/u);
   assert.match(script, /clawpool-claude worker-visible/u);
-  assert.match(script, /echo \$\$ >/u);
   assert.match(script, /exec \/usr\/bin\/env /u);
   assert.match(script, /'CLAUDE_PLUGIN_DATA=\/tmp\/plugin data'/u);
   assert.match(script, /'CLAWPOOL_AIBOT_SESSION_ID=chat-visible'/u);
@@ -173,11 +172,14 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with pid fi
   assert.match(expectScript, /set timeout -1/u);
   assert.match(expectScript, /log_file -a \{.*worker-visible\.out\.log\}/u);
   assert.match(expectScript, /spawn -noecho \{\*\}\$claude_command/u);
+  assert.match(expectScript, /set pid_file \[open \{.*worker-visible\.pid\} w\]/u);
+  assert.match(expectScript, /puts \$pid_file \[exp_pid -i \$spawn_id\]/u);
   assert.match(expectScript, /after 500/u);
   assert.match(expectScript, /-re \{Enter\.\*confirm\}/u);
   assert.match(expectScript, /send -- "\\r"/u);
   assert.match(expectScript, /exp_continue/u);
   assert.match(expectScript, /set claude_command \[list \{\/usr\/local\/bin\/claude\} \{--name\} \{clawpool-chat-visible\} \{--plugin-dir\} \{\/tmp\/clawpool-claude-plugin\} \{--dangerously-skip-permissions\} \{--session-id\} \{session-1\} \{--dangerously-load-development-channels\} \{server:clawpool-claude\}\]/u);
+  assert.equal(await readFile(result.pidPath, "utf8"), "");
 });
 
 test("worker process manager detects missing Claude session resume failure from logs", async () => {

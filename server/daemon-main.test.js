@@ -20,16 +20,24 @@ test("shouldNotifyWorkerReady only notifies on transition into ready", () => {
     shouldNotifyWorkerReady({ worker_status: "connected" }, { worker_status: "connected" }),
     false,
   );
+  assert.equal(
+    shouldNotifyWorkerReady(
+      { worker_status: "connected" },
+      { worker_status: "ready" },
+      { pendingEventCount: 1 },
+    ),
+    false,
+  );
 });
 
-test("buildWorkerReadyNoticeText includes cwd when available", () => {
+test("buildWorkerReadyNoticeText returns a short retry notice", () => {
   assert.equal(
     buildWorkerReadyNoticeText({ cwd: "/repo/demo" }),
-    "Claude 已就绪，可以开始对话。\n目录: /repo/demo",
+    "claude ready! please retry again.",
   );
   assert.equal(
     buildWorkerReadyNoticeText({ cwd: "" }),
-    "Claude 已就绪，可以开始对话。",
+    "claude ready! please retry again.",
   );
 });
 
@@ -50,7 +58,7 @@ test("notifyWorkerReady sends a visible ready message to the bound aibot session
   assert.deepEqual(calls, [
     {
       sessionID: "chat-1",
-      text: "Claude 已就绪，可以开始对话。\n目录: /repo/demo",
+      text: "claude ready! please retry again.",
       extra: {
         reply_source: "daemon_worker_ready",
       },

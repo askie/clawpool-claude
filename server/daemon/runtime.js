@@ -329,31 +329,32 @@ export class DaemonRuntime {
     }
 
     for (const record of this.listPendingEventsForSession(normalizedSessionID)) {
-      if (record.delivery_state !== "pending") {
+      const currentRecord = this.getPendingEvent(record.eventID) ?? record;
+      if (currentRecord.delivery_state !== "pending") {
         continue;
       }
       try {
         this.trace({
           stage: "pending_event_flushing",
-          event_id: record.eventID,
-          session_id: record.sessionID,
+          event_id: currentRecord.eventID,
+          session_id: currentRecord.sessionID,
           worker_id: binding?.worker_id,
         });
-        await this.markPendingEventDispatching(record.eventID, binding);
-        await this.deliverEventToWorker(binding, record.rawPayload);
-        await this.markPendingEventDelivered(record.eventID, binding);
+        await this.markPendingEventDispatching(currentRecord.eventID, binding);
+        await this.deliverEventToWorker(binding, currentRecord.rawPayload);
+        await this.markPendingEventDelivered(currentRecord.eventID, binding);
         this.trace({
           stage: "pending_event_flushed",
-          event_id: record.eventID,
-          session_id: record.sessionID,
+          event_id: currentRecord.eventID,
+          session_id: currentRecord.sessionID,
           worker_id: binding?.worker_id,
         });
       } catch (error) {
-        await this.markPendingEventPending(record.eventID);
+        await this.markPendingEventPending(currentRecord.eventID);
         this.trace({
           stage: "pending_event_flush_failed",
-          event_id: record.eventID,
-          session_id: record.sessionID,
+          event_id: currentRecord.eventID,
+          session_id: currentRecord.sessionID,
           worker_id: binding?.worker_id,
           error: error instanceof Error ? error.message : String(error),
         }, "error");
@@ -362,22 +363,24 @@ export class DaemonRuntime {
     }
   }
 
-  async failPendingEvent(record) {
+  async failPendingEvent(record, { notifyText = true } = {}) {
     if (!record?.eventID || !record?.sessionID) {
       return;
     }
-    try {
-      await this.aibotClient.sendText({
-        eventID: record.eventID,
-        sessionID: record.sessionID,
-        text: buildInterruptedEventNotice(),
-        quotedMessageID: record.msgID,
-        extra: {
-          reply_source: "daemon_worker_interrupted",
-        },
-      });
-    } catch {
-      // best effort only
+    if (notifyText) {
+      try {
+        await this.aibotClient.sendText({
+          eventID: record.eventID,
+          sessionID: record.sessionID,
+          text: buildInterruptedEventNotice(),
+          quotedMessageID: record.msgID,
+          extra: {
+            reply_source: "daemon_worker_interrupted",
+          },
+        });
+      } catch {
+        // best effort only
+      }
     }
     try {
       this.aibotClient.sendEventResult({
@@ -528,7 +531,7 @@ export class DaemonRuntime {
 
       await this.markPendingEventInterrupted(record.eventID);
       const currentRecord = this.getPendingEvent(record.eventID) ?? record;
-      await this.failPendingEvent(currentRecord);
+      await this.failPendingEvent(currentRecord, { notifyText: false });
     }
   }
 
@@ -592,6 +595,22 @@ export class DaemonRuntime {
       worker_id: readyBinding?.worker_id,
       path: "recovered_worker",
     });
+    const currentRecord = this.getPendingEvent(rawPayload?.event_id);
+    if (
+      currentRecord
+      && ["dispatching", "delivered"].includes(normalizeString(currentRecord.delivery_state))
+      && normalizeString(currentRecord.last_worker_id) === normalizeString(readyBinding?.worker_id)
+    ) {
+      this.trace({
+        stage: "event_dispatch_skipped",
+        event_id: rawPayload?.event_id,
+        session_id: aibotSessionID,
+        worker_id: readyBinding?.worker_id,
+        path: "recovered_worker",
+        reason: "already_dispatched",
+      });
+      return readyBinding;
+    }
     await this.markPendingEventDispatching(rawPayload?.event_id, readyBinding);
     await deliverFn.call(this, readyBinding, rawPayload);
     this.trace({
@@ -846,11 +865,6 @@ export class DaemonRuntime {
         worker_id: readyBinding?.worker_id,
         status: readyBinding?.worker_status,
       }, "error");
-      await this.reply(
-        event,
-        `当前会话已经绑定到原 Claude，但 worker 还没准备好。\n\n${formatBindingSummary(readyBinding ?? binding)}`,
-        { reply_source: "daemon_route_pending" },
-      );
       return;
     }
   }
