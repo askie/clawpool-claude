@@ -41,6 +41,10 @@ function applyEnvOverrides(config) {
   const wsURL = normalizeString(process.env.CLAWPOOL_WS_URL);
   const agentID = normalizeString(process.env.CLAWPOOL_AGENT_ID);
   const apiKey = normalizeString(process.env.CLAWPOOL_API_KEY);
+  const outboundTextChunkLimit = normalizePositiveInt(
+    process.env.CLAWPOOL_OUTBOUND_TEXT_CHUNK_LIMIT,
+    next.outbound_text_chunk_limit,
+  );
   if (wsURL) {
     next.ws_url = wsURL;
   }
@@ -50,6 +54,7 @@ function applyEnvOverrides(config) {
   if (apiKey) {
     next.api_key = apiKey;
   }
+  next.outbound_text_chunk_limit = outboundTextChunkLimit;
   return next;
 }
 

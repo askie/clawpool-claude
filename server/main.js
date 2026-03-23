@@ -45,6 +45,8 @@ import {
 } from "./protocol-text.js";
 import { ResultTimeoutManager } from "./result-timeout.js";
 import { normalizeInboundEventPayload } from "./inbound-event-meta.js";
+import { WorkerBridgeClient } from "./worker/worker-bridge-client.js";
+import { WorkerInboundBridgeServer } from "./worker/inbound-bridge-server.js";
 
 const defaultResultTimeoutMs = 10 * 60 * 1000;
 const resultTimeoutRetryMs = 10 * 1000;
@@ -55,6 +57,9 @@ const questionPollIntervalMs = 1500;
 const verboseDebugEnabled = process.env.CLAWPOOL_E2E_DEBUG === "1";
 const verboseDebugLogPath = normalizeOptionalString(process.env.CLAWPOOL_E2E_DEBUG_LOG);
 const composingKeepaliveTimers = new Map();
+const daemonBridgeURL = normalizeOptionalString(process.env.CLAWPOOL_DAEMON_BRIDGE_URL);
+const daemonBridgeToken = normalizeOptionalString(process.env.CLAWPOOL_DAEMON_BRIDGE_TOKEN);
+const daemonModeEnabled = process.env.CLAWPOOL_DAEMON_MODE === "1" && daemonBridgeURL && daemonBridgeToken;
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -212,7 +217,7 @@ async function onResultTimeout(eventID) {
 
   eventState.setResultIntent(eventID, result);
   try {
-    aibotClient.sendEventResult({
+    await sendEventResultOutbound({
       event_id: eventID,
       ...result,
     });
@@ -252,11 +257,144 @@ const aibotClient = new AibotClient({
   },
 });
 
+const workerBridgeClient = new WorkerBridgeClient({
+  bridgeURL: daemonBridgeURL,
+  token: daemonBridgeToken,
+});
+const workerControlServer = daemonModeEnabled
+  ? new WorkerInboundBridgeServer({
+      onDeliverEvent: async (input) => {
+        await handleInboundEvent(input?.payload ?? {});
+        return { ok: true };
+      },
+      onDeliverStop: async (input) => {
+        await handleStopEvent(input?.payload ?? {});
+        return { ok: true };
+      },
+      onDeliverRevoke: async (input) => {
+        await handleRevokeEvent(input?.payload ?? {});
+        return { ok: true };
+      },
+    })
+  : null;
+
+function isDaemonBridgeActive() {
+  return daemonModeEnabled && workerBridgeClient.isConfigured();
+}
+
+async function sendTextOutbound(payload) {
+  if (isDaemonBridgeActive()) {
+    return workerBridgeClient.sendText({
+      event_id: payload.eventID,
+      session_id: payload.sessionID,
+      text: payload.text,
+      quoted_message_id: payload.quotedMessageID,
+      client_msg_id: payload.clientMsgID,
+      extra: payload.extra,
+    });
+  }
+  return aibotClient.sendText(payload);
+}
+
+async function sendMediaOutbound(payload) {
+  if (isDaemonBridgeActive()) {
+    return workerBridgeClient.sendMedia({
+      event_id: payload.eventID,
+      session_id: payload.sessionID,
+      media_url: payload.mediaURL,
+      caption: payload.caption,
+      quoted_message_id: payload.quotedMessageID,
+      client_msg_id: payload.clientMsgID,
+      extra: payload.extra,
+    });
+  }
+  return aibotClient.sendMedia(payload);
+}
+
+async function deleteMessageOutbound(sessionID, messageID) {
+  if (isDaemonBridgeActive()) {
+    return workerBridgeClient.deleteMessage({
+      session_id: sessionID,
+      msg_id: messageID,
+    });
+  }
+  return aibotClient.deleteMessage(sessionID, messageID);
+}
+
+async function ackEventOutbound(eventID, { sessionID, msgID, receivedAt = Date.now() } = {}) {
+  if (isDaemonBridgeActive()) {
+    return workerBridgeClient.ackEvent({
+      event_id: eventID,
+      session_id: sessionID,
+      msg_id: msgID,
+      received_at: Math.floor(receivedAt),
+    });
+  }
+  aibotClient.ackEvent(eventID, {
+    sessionID,
+    msgID,
+    receivedAt,
+  });
+  return { ok: true };
+}
+
+async function sendEventResultOutbound(payload) {
+  if (isDaemonBridgeActive()) {
+    return workerBridgeClient.sendEventResult(payload);
+  }
+  aibotClient.sendEventResult(payload);
+  return { ok: true };
+}
+
+async function sendEventStopAckOutbound(payload) {
+  if (isDaemonBridgeActive()) {
+    return workerBridgeClient.sendEventStopAck(payload);
+  }
+  aibotClient.sendEventStopAck(payload);
+  return { ok: true };
+}
+
+async function sendEventStopResultOutbound(payload) {
+  if (isDaemonBridgeActive()) {
+    return workerBridgeClient.sendEventStopResult(payload);
+  }
+  aibotClient.sendEventStopResult(payload);
+  return { ok: true };
+}
+
+async function setSessionComposingOutbound({
+  sessionID,
+  active,
+  ttlMs = 0,
+  refMsgID = "",
+  refEventID = "",
+}) {
+  if (isDaemonBridgeActive()) {
+    return workerBridgeClient.setSessionComposing({
+      session_id: sessionID,
+      active,
+      ttl_ms: ttlMs,
+      ref_msg_id: refMsgID,
+      ref_event_id: refEventID,
+    });
+  }
+  aibotClient.setSessionComposing({
+    sessionID,
+    active,
+    ttlMs,
+    refMsgID,
+    refEventID,
+  });
+  return { ok: true };
+}
+
 function resendAck(event) {
-  aibotClient.ackEvent(event.event_id, {
+  void ackEventOutbound(event.event_id, {
     sessionID: event.session_id,
     msgID: event.msg_id,
     receivedAt: Date.now(),
+  }).catch((error) => {
+    logError(`event ack send failed event=${event.event_id}: ${String(error)}`);
   });
 }
 
@@ -297,21 +435,18 @@ function sendComposingState(event, active) {
   if (!event || !normalizeString(event.session_id)) {
     return false;
   }
-  try {
-    aibotClient.setSessionComposing({
-      sessionID: event.session_id,
-      active,
-      ttlMs: active ? composingTTLMS : 0,
-      refMsgID: event.msg_id,
-      refEventID: event.event_id,
-    });
-    return true;
-  } catch (error) {
+  void setSessionComposingOutbound({
+    sessionID: event.session_id,
+    active,
+    ttlMs: active ? composingTTLMS : 0,
+    refMsgID: event.msg_id,
+    refEventID: event.event_id,
+  }).catch((error) => {
     logError(
       `composing state send failed event=${event?.event_id ?? ""} active=${active}: ${String(error)}`,
     );
-    return false;
-  }
+  });
+  return true;
 }
 
 function startComposingKeepalive(eventID) {
@@ -355,7 +490,7 @@ function buildTerminalResult({ status, code = "", msg = "" }) {
   };
 }
 
-function sendTerminalResult(eventID, { status, code = "", msg = "" }) {
+async function sendTerminalResult(eventID, { status, code = "", msg = "" }) {
   const event = eventState.get(eventID);
   const result = buildTerminalResult({
     status,
@@ -364,7 +499,7 @@ function sendTerminalResult(eventID, { status, code = "", msg = "" }) {
   });
   eventState.setResultIntent(eventID, result);
   try {
-    aibotClient.sendEventResult({
+    await sendEventResultOutbound({
       event_id: eventID,
       ...result,
     });
@@ -382,9 +517,9 @@ function sendTerminalResult(eventID, { status, code = "", msg = "" }) {
   return completed;
 }
 
-function finalizeEventSafely(eventID, result, context) {
+async function finalizeEventSafely(eventID, result, context) {
   try {
-    sendTerminalResult(eventID, result);
+    await sendTerminalResult(eventID, result);
     return true;
   } catch (error) {
     logError(`${context} event=${eventID}: ${String(error)}`);
@@ -410,7 +545,9 @@ function buildStatusHints() {
     "Team and Enterprise orgs must also enable channelsEnabled or channel notifications will not arrive.",
   ];
 
-  if (!configStore.isConfigured()) {
+  if (isDaemonBridgeActive()) {
+    hints.unshift("This worker is running under the clawpool-claude daemon bridge.");
+  } else if (!configStore.isConfigured()) {
     hints.unshift("Clawpool is not configured. Run /clawpool:configure.");
   } else if (!latestClientStatus.authed) {
     hints.unshift("Clawpool is configured but not authenticated. Check ws_url, agent_id, api_key, and backend reachability.");
@@ -441,7 +578,7 @@ async function sendPairingMessage(event) {
     "Ask the Claude Code user to run /clawpool:access pair <code> with this code to approve the sender.",
   ].join("\n");
 
-  await aibotClient.sendText({
+  await sendTextOutbound({
     sessionID: event.session_id,
     text,
     clientMsgID: `pair_${event.event_id}`,
@@ -449,7 +586,7 @@ async function sendPairingMessage(event) {
   eventState.markPairingSent(event.event_id, {
     sentAt: Date.now(),
   });
-  finalizeEventSafely(event.event_id, {
+  await finalizeEventSafely(event.event_id, {
     status: "responded",
     code: "pairing_required",
     msg: "pairing code sent",
@@ -457,7 +594,7 @@ async function sendPairingMessage(event) {
 }
 
 async function sendAccessStatusMessage(sessionID, text, clientMsgID) {
-  await aibotClient.sendText({
+  await sendTextOutbound({
     sessionID,
     text,
     clientMsgID,
@@ -477,7 +614,7 @@ async function handleDuplicateEvent(event) {
   }
 
   if (event.completed) {
-    aibotClient.sendEventResult({
+    await sendEventResultOutbound({
       event_id: event.event_id,
       status: event.completed.status,
       code: event.completed.code,
@@ -488,7 +625,7 @@ async function handleDuplicateEvent(event) {
   }
 
   if (event.result_intent) {
-    finalizeEventSafely(event.event_id, event.result_intent, "duplicate result resend failed");
+    await finalizeEventSafely(event.event_id, event.result_intent, "duplicate result resend failed");
     return;
   }
 
@@ -534,7 +671,7 @@ function buildApprovalDecision(request, resolution) {
 }
 
 async function sendApprovalCommandReply(event, text) {
-  await aibotClient.sendText({
+  await sendTextOutbound({
     eventID: event.event_id,
     sessionID: event.session_id,
     text,
@@ -547,7 +684,7 @@ async function sendApprovalCommandReply(event, text) {
 }
 
 async function sendQuestionCommandReply(event, text) {
-  await aibotClient.sendText({
+  await sendTextOutbound({
     eventID: event.event_id,
     sessionID: event.session_id,
     text,
@@ -567,7 +704,7 @@ async function handleApprovalDecisionEvent(event) {
 
   if (!parsed.ok) {
     await sendApprovalCommandReply(event, parsed.error);
-    finalizeEventSafely(event.event_id, {
+    await finalizeEventSafely(event.event_id, {
       status: "responded",
       code: "approval_command_invalid",
       msg: "approval command invalid",
@@ -577,7 +714,7 @@ async function handleApprovalDecisionEvent(event) {
 
   if (!accessStore.isSenderApprover(event.sender_id)) {
     await sendApprovalCommandReply(event, "This sender is not configured as a Claude approval approver.");
-    finalizeEventSafely(event.event_id, {
+    await finalizeEventSafely(event.event_id, {
       status: "responded",
       code: "approval_sender_not_authorized",
       msg: "sender not configured as approver",
@@ -588,7 +725,7 @@ async function handleApprovalDecisionEvent(event) {
   const request = await approvalStore.getRequest(parsed.request_id);
   if (!request) {
     await sendApprovalCommandReply(event, `Approval request ${parsed.request_id} was not found.`);
-    finalizeEventSafely(event.event_id, {
+    await finalizeEventSafely(event.event_id, {
       status: "responded",
       code: "approval_request_not_found",
       msg: "approval request not found",
@@ -598,7 +735,7 @@ async function handleApprovalDecisionEvent(event) {
 
   if (request.channel_context.chat_id !== event.session_id) {
     await sendApprovalCommandReply(event, "This approval request belongs to a different ClawPool chat.");
-    finalizeEventSafely(event.event_id, {
+    await finalizeEventSafely(event.event_id, {
       status: "responded",
       code: "approval_chat_mismatch",
       msg: "approval request belongs to a different chat",
@@ -608,7 +745,7 @@ async function handleApprovalDecisionEvent(event) {
 
   if (request.status !== "pending") {
     await sendApprovalCommandReply(event, `Approval request ${parsed.request_id} is ${request.status}.`);
-    finalizeEventSafely(event.event_id, {
+    await finalizeEventSafely(event.event_id, {
       status: "responded",
       code: "approval_request_not_pending",
       msg: `approval request is ${request.status}`,
@@ -621,7 +758,7 @@ async function handleApprovalDecisionEvent(event) {
     decision = buildApprovalDecision(request, parsed.resolution);
   } catch (error) {
     await sendApprovalCommandReply(event, String(error instanceof Error ? error.message : error));
-    finalizeEventSafely(event.event_id, {
+    await finalizeEventSafely(event.event_id, {
       status: "responded",
       code: "approval_rule_invalid",
       msg: String(error instanceof Error ? error.message : error),
@@ -642,7 +779,7 @@ async function handleApprovalDecisionEvent(event) {
     requestID: parsed.request_id,
     resolution: parsed.resolution,
   }));
-  finalizeEventSafely(event.event_id, {
+  await finalizeEventSafely(event.event_id, {
     status: "responded",
     code: "approval_recorded",
     msg: "approval decision recorded",
@@ -658,7 +795,7 @@ async function handleQuestionResponseEvent(event) {
 
   if (!parsed.ok) {
     await sendQuestionCommandReply(event, parsed.error);
-    finalizeEventSafely(event.event_id, {
+    await finalizeEventSafely(event.event_id, {
       status: "responded",
       code: "question_command_invalid",
       msg: "question command invalid",
@@ -669,7 +806,7 @@ async function handleQuestionResponseEvent(event) {
   const request = await questionStore.getRequest(parsed.request_id);
   if (!request) {
     await sendQuestionCommandReply(event, `Question request ${parsed.request_id} was not found.`);
-    finalizeEventSafely(event.event_id, {
+    await finalizeEventSafely(event.event_id, {
       status: "responded",
       code: "question_request_not_found",
       msg: "question request not found",
@@ -679,7 +816,7 @@ async function handleQuestionResponseEvent(event) {
 
   if (request.channel_context.chat_id !== event.session_id) {
     await sendQuestionCommandReply(event, "This question request belongs to a different ClawPool chat.");
-    finalizeEventSafely(event.event_id, {
+    await finalizeEventSafely(event.event_id, {
       status: "responded",
       code: "question_chat_mismatch",
       msg: "question request belongs to a different chat",
@@ -689,7 +826,7 @@ async function handleQuestionResponseEvent(event) {
 
   if (request.status !== "pending") {
     await sendQuestionCommandReply(event, `Question request ${parsed.request_id} is ${request.status}.`);
-    finalizeEventSafely(event.event_id, {
+    await finalizeEventSafely(event.event_id, {
       status: "responded",
       code: "question_request_not_pending",
       msg: `question request is ${request.status}`,
@@ -702,7 +839,7 @@ async function handleQuestionResponseEvent(event) {
     updatedInput = buildAskUserQuestionUpdatedInput(request, parsed.response);
   } catch (error) {
     await sendQuestionCommandReply(event, String(error instanceof Error ? error.message : error));
-    finalizeEventSafely(event.event_id, {
+    await finalizeEventSafely(event.event_id, {
       status: "responded",
       code: "question_answer_invalid",
       msg: String(error instanceof Error ? error.message : error),
@@ -722,7 +859,7 @@ async function handleQuestionResponseEvent(event) {
   await sendQuestionCommandReply(event, buildQuestionResponseText({
     requestID: parsed.request_id,
   }));
-  finalizeEventSafely(event.event_id, {
+  await finalizeEventSafely(event.event_id, {
     status: "responded",
     code: "question_recorded",
     msg: "question answers recorded",
@@ -731,7 +868,7 @@ async function handleQuestionResponseEvent(event) {
 }
 
 async function dispatchApprovalRequest(request) {
-  const ack = await aibotClient.sendText({
+  const ack = await sendTextOutbound({
     sessionID: request.channel_context.chat_id,
     text: buildApprovalRequestText(request),
     quotedMessageID: request.channel_context.message_id || request.channel_context.msg_id,
@@ -748,7 +885,7 @@ async function dispatchApprovalRequest(request) {
 }
 
 async function dispatchQuestionRequest(request) {
-  const ack = await aibotClient.sendText({
+  const ack = await sendTextOutbound({
     sessionID: request.channel_context.chat_id,
     text: buildQuestionRequestText(request),
     quotedMessageID: request.channel_context.message_id || request.channel_context.msg_id,
@@ -765,7 +902,7 @@ async function dispatchQuestionRequest(request) {
 }
 
 async function pumpApprovalRequests() {
-  if (!latestClientStatus.authed) {
+  if (!isDaemonBridgeActive() && !latestClientStatus.authed) {
     return;
   }
 
@@ -781,7 +918,7 @@ async function pumpApprovalRequests() {
 }
 
 async function pumpQuestionRequests() {
-  if (!latestClientStatus.authed) {
+  if (!isDaemonBridgeActive() && !latestClientStatus.authed) {
     return;
   }
 
@@ -881,7 +1018,7 @@ async function handleInboundEvent(rawPayload) {
     } catch (error) {
       logError(`disabled-policy notice failed event=${event.event_id}: ${String(error)}`);
     }
-    finalizeEventSafely(event.event_id, {
+    await finalizeEventSafely(event.event_id, {
       status: "canceled",
       code: "policy_disabled",
       msg: "channel policy disabled",
@@ -917,7 +1054,7 @@ async function handleInboundEvent(rawPayload) {
       } catch (notifyError) {
         logError(`sender bootstrap notice failed event=${event.event_id}: ${String(notifyError)}`);
       }
-      finalizeEventSafely(event.event_id, {
+      await finalizeEventSafely(event.event_id, {
         status: "failed",
         code: "sender_bootstrap_failed",
         msg: String(error),
@@ -938,7 +1075,7 @@ async function handleInboundEvent(rawPayload) {
       } catch (error) {
         logError(`group allowlist notice failed event=${event.event_id}: ${String(error)}`);
       }
-      finalizeEventSafely(event.event_id, {
+      await finalizeEventSafely(event.event_id, {
         status: "canceled",
         code: "sender_not_allowlisted",
         msg: "sender not allowlisted",
@@ -948,7 +1085,7 @@ async function handleInboundEvent(rawPayload) {
     try {
       await sendPairingMessage(event);
     } catch (error) {
-      finalizeEventSafely(event.event_id, {
+      await finalizeEventSafely(event.event_id, {
         status: "failed",
         code: "pairing_send_failed",
         msg: String(error),
@@ -970,7 +1107,7 @@ async function handleInboundEvent(rawPayload) {
   try {
     await dispatchChannelNotification(event);
   } catch (error) {
-    finalizeEventSafely(event.event_id, {
+    await finalizeEventSafely(event.event_id, {
       status: "failed",
       code: "channel_notification_failed",
       msg: String(error),
@@ -987,7 +1124,7 @@ async function handleStopEvent(rawPayload) {
   const existing = eventState.get(eventID);
 
   try {
-    aibotClient.sendEventStopAck({
+    await sendEventStopAckOutbound({
       event_id: eventID,
       stop_id: stopID,
       accepted: true,
@@ -1000,7 +1137,7 @@ async function handleStopEvent(rawPayload) {
   if (!existing || existing.completed) {
     stopComposingKeepalive(eventID, existing);
     try {
-      aibotClient.sendEventStopResult({
+      await sendEventStopResultOutbound({
         event_id: eventID,
         stop_id: stopID,
         status: "already_finished",
@@ -1018,7 +1155,7 @@ async function handleStopEvent(rawPayload) {
     updated_at: Date.now(),
   });
   try {
-    aibotClient.sendEventStopResult({
+    await sendEventStopResultOutbound({
       event_id: eventID,
       stop_id: stopID,
       status: "stopped",
@@ -1029,7 +1166,7 @@ async function handleStopEvent(rawPayload) {
   } catch (error) {
     logError(`sendEventStopResult(stopped) failed event=${eventID}: ${String(error)}`);
   }
-  finalizeEventSafely(eventID, {
+  await finalizeEventSafely(eventID, {
     status: "canceled",
     code: "owner_requested_stop",
     msg: "owner requested stop",
@@ -1042,7 +1179,7 @@ async function handleRevokeEvent(rawPayload) {
     return;
   }
   stopComposingKeepalive(eventID);
-  aibotClient.ackEvent(eventID, {
+  await ackEventOutbound(eventID, {
     sessionID: normalizeOptionalString(rawPayload.session_id),
     msgID: normalizeOptionalString(rawPayload.msg_id),
     receivedAt: Date.now(),
@@ -1097,7 +1234,7 @@ async function handleReplyTool(args) {
         return toolTextResult("ignored: event no longer active");
       }
       chunkIndex += 1;
-      const ack = await aibotClient.sendText({
+      const ack = await sendTextOutbound({
         eventID,
         sessionID: chatID,
         text: chunk,
@@ -1126,7 +1263,7 @@ async function handleReplyTool(args) {
         sessionID: chatID,
         filePath,
       });
-      const ack = await aibotClient.sendMedia({
+      const ack = await sendMediaOutbound({
         eventID,
         sessionID: chatID,
         mediaURL: upload.access_url,
@@ -1150,7 +1287,7 @@ async function handleReplyTool(args) {
     if (!current || current.completed || current.stopped) {
       return toolTextResult("ignored: event no longer active");
     }
-    finalizeEventSafely(eventID, {
+    await finalizeEventSafely(eventID, {
       status: "failed",
       code: "send_msg_failed",
       msg: String(error),
@@ -1158,7 +1295,7 @@ async function handleReplyTool(args) {
     throw error;
   }
 
-  if (!finalizeEventSafely(eventID, {
+  if (!await finalizeEventSafely(eventID, {
     status: "responded",
   }, "reply terminal result failed")) {
     return toolTextResult("sent: backend finalization pending retry");
@@ -1198,7 +1335,7 @@ async function handleCompleteTool(args) {
     return toolTextResult("ignored: event already stopped");
   }
 
-  if (!finalizeEventSafely(eventID, {
+  if (!await finalizeEventSafely(eventID, {
     status,
     code,
     msg,
@@ -1234,7 +1371,7 @@ async function handleDeleteMessageTool(args) {
     throw new Error("delete_message requires chat_id and message_id");
   }
 
-  await aibotClient.deleteMessage(chatID, messageID);
+  await deleteMessageOutbound(chatID, messageID);
   return toolTextResult(`deleted (${messageID})`);
 }
 
@@ -1532,6 +1669,22 @@ async function shutdown() {
   for (const eventID of composingKeepaliveTimers.keys()) {
     clearComposingKeepaliveTimer(eventID);
   }
+  if (daemonModeEnabled && workerBridgeClient.isConfigured()) {
+    try {
+      if (workerControlServer) {
+        await workerControlServer.stop();
+      }
+      await workerBridgeClient.sendStatusUpdate({
+        worker_id: normalizeOptionalString(process.env.CLAWPOOL_WORKER_ID),
+        aibot_session_id: normalizeOptionalString(process.env.CLAWPOOL_AIBOT_SESSION_ID),
+        claude_session_id: normalizeOptionalString(process.env.CLAWPOOL_CLAUDE_SESSION_ID),
+        status: "stopped",
+      });
+    } catch (error) {
+      logError(`worker bridge stop update failed: ${String(error)}`);
+    }
+    return;
+  }
   await aibotClient.stop();
 }
 
@@ -1577,6 +1730,34 @@ async function bootstrap() {
   await questionStore.init();
   const restoredEntries = await restoreEventState();
   await mcp.connect(new StdioServerTransport());
+  if (daemonModeEnabled && workerBridgeClient.isConfigured()) {
+    if (workerControlServer) {
+      await workerControlServer.start();
+    }
+    await workerBridgeClient.registerWorker({
+      worker_id: normalizeOptionalString(process.env.CLAWPOOL_WORKER_ID),
+      aibot_session_id: normalizeOptionalString(process.env.CLAWPOOL_AIBOT_SESSION_ID),
+      claude_session_id: normalizeOptionalString(process.env.CLAWPOOL_CLAUDE_SESSION_ID),
+      cwd: process.cwd(),
+      plugin_data_dir: normalizeOptionalString(process.env.CLAUDE_PLUGIN_DATA),
+      worker_control_url: workerControlServer?.getURL?.() ?? "",
+      worker_control_token: workerControlServer?.token ?? "",
+      pid: process.pid,
+    });
+    await workerBridgeClient.sendStatusUpdate({
+      worker_id: normalizeOptionalString(process.env.CLAWPOOL_WORKER_ID),
+      aibot_session_id: normalizeOptionalString(process.env.CLAWPOOL_AIBOT_SESSION_ID),
+      claude_session_id: normalizeOptionalString(process.env.CLAWPOOL_CLAUDE_SESSION_ID),
+      worker_control_url: workerControlServer?.getURL?.() ?? "",
+      worker_control_token: workerControlServer?.token ?? "",
+      status: "ready",
+    });
+    startApprovalPump();
+    startQuestionPump();
+    await replayRestoredEvents(restoredEntries);
+    logInfo("worker started in daemon bridge mode");
+    return;
+  }
   await aibotClient.start(configStore.getConnectionConfig());
   startApprovalPump();
   startQuestionPump();

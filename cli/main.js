@@ -14,9 +14,12 @@ import { ensureUserMcpServer } from "./mcp.js";
 function usage() {
   return `用法:
   clawpool-claude [options]
+  clawpool-claude daemon [options]
+  clawpool-claude worker [options]
 
 说明:
   自动保存连接信息，安装 Claude 的用户级 clawpool-claude MCP，并直接打开 Claude。
+  也支持 daemon 和 worker 管理子命令。
 
 选项:
   --ws-url <value>      ClawPool Agent API WebSocket 地址
@@ -115,7 +118,7 @@ function printError(message) {
   process.stderr.write(`${message}\n`);
 }
 
-export async function run(argv, env = process.env) {
+async function runLegacy(argv, env = process.env) {
   const options = parseArgs(argv);
   if (options.help) {
     print(usage());
@@ -186,6 +189,26 @@ export async function run(argv, env = process.env) {
       resolve(code ?? 1);
     });
   });
+}
+
+async function runSubcommand(name, argv, env) {
+  if (name === "daemon") {
+    const { run } = await import("../server/daemon/main.js");
+    return run(argv, env);
+  }
+  if (name === "worker") {
+    const { run } = await import("../server/worker/main.js");
+    return run(argv, env);
+  }
+  throw new Error(`未知子命令: ${name}`);
+}
+
+export async function run(argv, env = process.env) {
+  const [first = ""] = argv;
+  if (first === "daemon" || first === "worker") {
+    return runSubcommand(first, argv.slice(1), env);
+  }
+  return runLegacy(argv, env);
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env) {

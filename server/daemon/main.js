@@ -1,0 +1,239 @@
+import process from "node:process";
+import { resolveDaemonConfigPath, resolveDaemonDataDir } from "./daemon-paths.js";
+import { ConfigStore } from "../config-store.js";
+import { resolveBindingRegistryPath } from "./daemon-paths.js";
+import { BindingRegistry } from "./binding-registry.js";
+import { WorkerBridgeServer } from "./worker-bridge-server.js";
+import { WorkerProcessManager } from "./worker-process.js";
+import { AibotClient } from "../aibot-client.js";
+import { DaemonRuntime } from "./runtime.js";
+
+function usage() {
+  return `用法:
+  clawpool-claude daemon [options]
+
+说明:
+  常驻 daemon。负责对接 aibot、维护固定绑定，并调度 Claude worker。
+
+选项:
+  --ws-url <value>      Aibot WebSocket 地址
+  --agent-id <value>    Agent ID
+  --api-key <value>     API Key
+  --chunk-limit <n>     单段文本长度上限
+  --data-dir <path>     daemon 数据目录
+  --exit-after-ready    启动后立刻退出，用于检查配置
+`;
+}
+
+function print(message) {
+  process.stdout.write(`${message}\n`);
+}
+
+function parseArgs(argv) {
+  return {
+    help: argv.includes("--help") || argv.includes("-h"),
+    exitAfterReady: argv.includes("--exit-after-ready"),
+    wsUrl: readOption(argv, "--ws-url"),
+    agentId: readOption(argv, "--agent-id"),
+    apiKey: readOption(argv, "--api-key"),
+    chunkLimit: readOption(argv, "--chunk-limit"),
+    dataDir: readOption(argv, "--data-dir"),
+  };
+}
+
+function readOption(argv, name) {
+  const index = argv.indexOf(name);
+  if (index < 0) {
+    return "";
+  }
+  const value = String(argv[index + 1] ?? "").trim();
+  if (!value) {
+    throw new Error(`${name} 缺少值`);
+  }
+  return value;
+}
+
+export async function run(argv = [], env = process.env) {
+  const options = parseArgs(argv);
+  if (options.help) {
+    print(usage());
+    return 0;
+  }
+
+  const runtimeEnv = {
+    ...env,
+    ...(options.dataDir ? { CLAWPOOL_DAEMON_DATA_DIR: options.dataDir } : {}),
+  };
+
+  const dataDir = resolveDaemonDataDir(runtimeEnv);
+  const configStore = new ConfigStore(resolveDaemonConfigPath(runtimeEnv));
+  const bindingRegistry = new BindingRegistry(resolveBindingRegistryPath(runtimeEnv));
+  await configStore.load();
+  if (options.wsUrl || options.agentId || options.apiKey || options.chunkLimit) {
+    await configStore.update({
+      ...(options.wsUrl ? { ws_url: options.wsUrl } : {}),
+      ...(options.agentId ? { agent_id: options.agentId } : {}),
+      ...(options.apiKey ? { api_key: options.apiKey } : {}),
+      ...(options.chunkLimit ? { outbound_text_chunk_limit: Number(options.chunkLimit) } : {}),
+    });
+  }
+  await bindingRegistry.load();
+  const workerProcessManager = new WorkerProcessManager({
+    env: runtimeEnv,
+    connectionConfig: configStore.getConnectionConfig(),
+  });
+
+  const bridgeServer = new WorkerBridgeServer({
+    onRegisterWorker: async (payload) => {
+      const aibotSessionID = String(payload?.aibot_session_id ?? "").trim();
+      const workerID = String(payload?.worker_id ?? "").trim();
+      if (!aibotSessionID || !workerID) {
+        throw new Error("aibot_session_id and worker_id are required");
+      }
+      const existing = bindingRegistry.getByAibotSessionID(aibotSessionID);
+      if (!existing) {
+        return { ok: false, reason: "binding_not_found" };
+      }
+      await bindingRegistry.markWorkerReady(aibotSessionID, {
+        workerID,
+        workerControlURL: String(payload?.worker_control_url ?? "").trim(),
+        workerControlToken: String(payload?.worker_control_token ?? "").trim(),
+        updatedAt: Date.now(),
+        lastStartedAt: Date.now(),
+      });
+      return { ok: true };
+    },
+    onStatusUpdate: async (payload) => {
+      const aibotSessionID = String(payload?.aibot_session_id ?? "").trim();
+      const status = String(payload?.status ?? "").trim();
+      if (!aibotSessionID || !status) {
+        throw new Error("aibot_session_id and status are required");
+      }
+      if (status === "failed") {
+        await bindingRegistry.markWorkerFailed(aibotSessionID, {
+          updatedAt: Date.now(),
+          lastStoppedAt: Date.now(),
+        });
+      } else if (status === "stopped") {
+        await bindingRegistry.markWorkerStopped(aibotSessionID, {
+          updatedAt: Date.now(),
+          lastStoppedAt: Date.now(),
+        });
+      } else {
+        await bindingRegistry.markWorkerReady(aibotSessionID, {
+          workerID: String(payload?.worker_id ?? "").trim(),
+          workerControlURL: String(payload?.worker_control_url ?? "").trim(),
+          workerControlToken: String(payload?.worker_control_token ?? "").trim(),
+          updatedAt: Date.now(),
+          lastStartedAt: Date.now(),
+        });
+      }
+      return { ok: true };
+    },
+    onSendText: async (payload) => aibotClient.sendText({
+      eventID: payload.event_id,
+      sessionID: payload.session_id,
+      text: payload.text,
+      quotedMessageID: payload.quoted_message_id,
+      clientMsgID: payload.client_msg_id,
+      extra: payload.extra,
+    }),
+    onSendMedia: async (payload) => aibotClient.sendMedia({
+      eventID: payload.event_id,
+      sessionID: payload.session_id,
+      mediaURL: payload.media_url,
+      caption: payload.caption,
+      quotedMessageID: payload.quoted_message_id,
+      clientMsgID: payload.client_msg_id,
+      extra: payload.extra,
+    }),
+    onDeleteMessage: async (payload) => aibotClient.deleteMessage(
+      payload.session_id,
+      payload.msg_id,
+    ),
+    onAckEvent: async (payload) => {
+      aibotClient.ackEvent(payload.event_id, {
+        sessionID: payload.session_id,
+        msgID: payload.msg_id,
+        receivedAt: payload.received_at,
+      });
+      return { ok: true };
+    },
+    onSendEventResult: async (payload) => {
+      aibotClient.sendEventResult(payload);
+      return { ok: true };
+    },
+    onSendEventStopAck: async (payload) => {
+      aibotClient.sendEventStopAck(payload);
+      return { ok: true };
+    },
+    onSendEventStopResult: async (payload) => {
+      aibotClient.sendEventStopResult(payload);
+      return { ok: true };
+    },
+    onSetSessionComposing: async (payload) => {
+      aibotClient.setSessionComposing({
+        sessionID: payload.session_id,
+        active: payload.active,
+        ttlMs: payload.ttl_ms,
+        refMsgID: payload.ref_msg_id,
+        refEventID: payload.ref_event_id,
+      });
+      return { ok: true };
+    },
+  });
+  await bridgeServer.start();
+
+  const aibotClient = new AibotClient();
+  const runtime = new DaemonRuntime({
+    env: runtimeEnv,
+    bindingRegistry,
+    workerProcessManager,
+    aibotClient,
+    bridgeServer,
+  });
+  aibotClient.onEventMessage = async (payload) => {
+    await runtime.handleEvent(payload);
+  };
+  aibotClient.onEventStop = async (payload) => {
+    await runtime.handleStopEvent(payload);
+  };
+  aibotClient.onEventRevoke = async (payload) => {
+    await runtime.handleRevokeEvent(payload);
+  };
+
+  print("clawpool-claude daemon 已启动。");
+  print(`数据目录: ${dataDir}`);
+  print(`Bridge: ${bridgeServer.getURL()}`);
+  print(`已配置: ${configStore.isConfigured() ? "yes" : "no"}`);
+
+  if (options.exitAfterReady) {
+    await bridgeServer.stop();
+    return 0;
+  }
+
+  const connectionConfig = configStore.getConnectionConfig();
+  if (connectionConfig) {
+    await aibotClient.start(connectionConfig);
+    print("Aibot: connected");
+  } else {
+    print("Aibot: not configured");
+  }
+
+  await new Promise((resolve) => {
+    const stop = async () => {
+      process.off("SIGINT", stop);
+      process.off("SIGTERM", stop);
+      await aibotClient.stop();
+      await bridgeServer.stop();
+      resolve();
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+  return 0;
+}
+
+export async function main(argv = process.argv.slice(2), env = process.env) {
+  process.exitCode = await run(argv, env);
+}

@@ -1,0 +1,65 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
+import { mkdtemp } from "node:fs/promises";
+import { BindingRegistry } from "./daemon/binding-registry.js";
+
+test("binding registry creates and updates fixed bindings", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-binding-registry-"));
+  const registry = new BindingRegistry(path.join(dir, "binding-registry.json"));
+  await registry.load();
+
+  const created = await registry.createBinding({
+    aibot_session_id: "chat-1",
+    claude_session_id: "claude-1",
+    cwd: "/repo/a",
+    worker_id: "worker-1",
+    worker_status: "starting",
+    plugin_data_dir: "/data/chat-1",
+  });
+  assert.equal(created.aibot_session_id, "chat-1");
+  assert.equal(created.cwd, "/repo/a");
+
+  const ready = await registry.markWorkerReady("chat-1", {
+    workerID: "worker-1",
+    lastStartedAt: 10,
+    updatedAt: 11,
+  });
+  assert.equal(ready.worker_status, "ready");
+  assert.equal(ready.last_started_at, 10);
+
+  const failed = await registry.markWorkerFailed("chat-1", {
+    lastStoppedAt: 12,
+    updatedAt: 13,
+  });
+  assert.equal(failed.worker_status, "failed");
+  assert.equal(failed.last_stopped_at, 12);
+
+  const loaded = new BindingRegistry(path.join(dir, "binding-registry.json"));
+  await loaded.load();
+  assert.deepEqual(loaded.getByAibotSessionID("chat-1"), failed);
+});
+
+test("binding registry rejects duplicate aibot session bindings", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-binding-registry-"));
+  const registry = new BindingRegistry(path.join(dir, "binding-registry.json"));
+  await registry.load();
+
+  await registry.createBinding({
+    aibot_session_id: "chat-2",
+    claude_session_id: "claude-2",
+    cwd: "/repo/b",
+    plugin_data_dir: "/data/chat-2",
+  });
+
+  await assert.rejects(
+    () => registry.createBinding({
+      aibot_session_id: "chat-2",
+      claude_session_id: "claude-3",
+      cwd: "/repo/c",
+      plugin_data_dir: "/data/chat-3",
+    }),
+    /binding already exists/u,
+  );
+});
