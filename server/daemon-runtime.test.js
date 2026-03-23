@@ -59,6 +59,16 @@ function makeWorkerProcessManager(calls) {
   };
 }
 
+function assertRespondedEventResult(sent, eventID) {
+  assert.deepEqual(
+    sent.find((item) => item.kind === "event_result" && item.payload.event_id === eventID)?.payload,
+    {
+      event_id: eventID,
+      status: "responded",
+    },
+  );
+}
+
 test("daemon runtime open creates a fixed binding and spawns worker", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
@@ -92,6 +102,7 @@ test("daemon runtime open creates a fixed binding and spawns worker", async () =
   assert.equal(workerCalls.length, 1);
   assert.equal(sent.filter((item) => item.kind === "ack").length, 1);
   assert.match(sent.find((item) => item.kind === "text").payload.text, /已新建目录会话/u);
+  assertRespondedEventResult(sent, "evt-1");
 });
 
 test("daemon runtime restores persisted binding and does not require open again", async () => {
@@ -257,6 +268,71 @@ test("daemon runtime stop marks binding stopped", async () => {
   const binding = registry.getByAibotSessionID("chat-3");
   assert.equal(binding.worker_status, "stopped");
   assert.deepEqual(workerCalls, [{ kind: "stop", workerID: "worker-3" }]);
+  assertRespondedEventResult(sent, "evt-3");
+});
+
+test("daemon runtime missing binding replies without leaving the event pending", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+  });
+
+  await runtime.handleEvent({
+    event_id: "evt-missing",
+    session_id: "chat-missing",
+    msg_id: "msg-missing",
+    content: "1",
+  });
+
+  assert.equal(workerCalls.length, 0);
+  assert.match(sent.find((item) => item.kind === "text").payload.text, /先发送 open/u);
+  assertRespondedEventResult(sent, "evt-missing");
+});
+
+test("daemon runtime invalid control command replies without timing out", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+  });
+
+  await runtime.handleEvent({
+    event_id: "evt-invalid",
+    session_id: "chat-invalid",
+    msg_id: "msg-invalid",
+    content: "open",
+  });
+
+  assert.equal(workerCalls.length, 0);
+  assert.match(sent.find((item) => item.kind === "text").payload.text, /open 缺少目录路径/u);
+  assertRespondedEventResult(sent, "evt-invalid");
 });
 
 test("daemon runtime delivers normal message to ready worker control", async () => {

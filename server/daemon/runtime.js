@@ -126,6 +126,35 @@ export class DaemonRuntime {
     });
   }
 
+  complete(event, { status = "responded", code = "", msg = "" } = {}) {
+    const payload = {
+      event_id: event.event_id,
+      status,
+    };
+    const normalizedCode = normalizeString(code);
+    const normalizedMsg = normalizeString(msg);
+    if (normalizedCode) {
+      payload.code = normalizedCode;
+    }
+    if (normalizedMsg) {
+      payload.msg = normalizedMsg;
+    }
+    this.aibotClient.sendEventResult(payload);
+    this.trace({
+      stage: "event_result_sent",
+      event_id: event.event_id,
+      session_id: event.session_id,
+      status,
+      code: normalizedCode,
+    });
+  }
+
+  async respond(event, text, extra = {}, result = {}) {
+    const response = await this.reply(event, text, extra);
+    this.complete(event, result);
+    return response;
+  }
+
   ack(event) {
     this.aibotClient.ackEvent(event.event_id, {
       sessionID: event.session_id,
@@ -677,7 +706,7 @@ export class DaemonRuntime {
     const existing = this.bindingRegistry.getByAibotSessionID(event.session_id);
     if (existing) {
       if (existing.cwd !== cwd) {
-        await this.reply(
+        await this.respond(
           event,
           `当前会话已经固定绑定目录，不能改成新目录。\n\n${formatBindingSummary(existing)}`,
           { reply_source: "daemon_control_open_reject" },
@@ -686,7 +715,7 @@ export class DaemonRuntime {
       }
 
       await this.ensureWorker(existing);
-      await this.reply(
+      await this.respond(
         event,
         `当前会话已经绑定，已按原目录恢复或保持原会话。\n\n${formatBindingSummary(existing)}`,
         { reply_source: "daemon_control_open_existing" },
@@ -720,7 +749,7 @@ export class DaemonRuntime {
       bridgeToken: this.bridgeServer.token,
     });
 
-    await this.reply(
+    await this.respond(
       event,
       `已新建目录会话。\n\n${formatBindingSummary(created)}`,
       { reply_source: "daemon_control_open_created" },
@@ -729,7 +758,7 @@ export class DaemonRuntime {
 
   async handleStatusCommand(event) {
     const binding = this.bindingRegistry.getByAibotSessionID(event.session_id);
-    await this.reply(event, formatBindingSummary(binding), {
+    await this.respond(event, formatBindingSummary(binding), {
       reply_source: "daemon_control_status",
     });
   }
@@ -739,7 +768,7 @@ export class DaemonRuntime {
     const text = binding
       ? `当前目录: ${binding.cwd}`
       : "当前会话还没有绑定目录。";
-    await this.reply(event, text, {
+    await this.respond(event, text, {
       reply_source: "daemon_control_where",
     });
   }
@@ -747,7 +776,7 @@ export class DaemonRuntime {
   async handleStopCommand(event) {
     const binding = this.bindingRegistry.getByAibotSessionID(event.session_id);
     if (!binding) {
-      await this.reply(event, "当前会话还没有绑定目录。", {
+      await this.respond(event, "当前会话还没有绑定目录。", {
         reply_source: "daemon_control_stop_missing",
       });
       return;
@@ -760,7 +789,7 @@ export class DaemonRuntime {
       updatedAt: Date.now(),
       lastStoppedAt: Date.now(),
     });
-    await this.reply(event, `已停止当前会话对应的 Claude。\n\n${formatBindingSummary({
+    await this.respond(event, `已停止当前会话对应的 Claude。\n\n${formatBindingSummary({
       ...binding,
       worker_status: "stopped",
     })}`, {
@@ -770,7 +799,7 @@ export class DaemonRuntime {
 
   async handleControlCommand(event, parsed) {
     if (!parsed.ok) {
-      await this.reply(event, parsed.error, {
+      await this.respond(event, parsed.error, {
         reply_source: "daemon_control_invalid",
       });
       return true;
@@ -821,7 +850,7 @@ export class DaemonRuntime {
         event_id: event.event_id,
         session_id: event.session_id,
       }, "error");
-      await this.reply(
+      await this.respond(
         event,
         "当前会话还没有绑定目录。先发送 open <目录> 来创建会话。",
         { reply_source: "daemon_route_missing" },

@@ -3,7 +3,8 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { randomUUID } from "node:crypto";
-import { resolvePackageRoot } from "../../cli/config.js";
+import { resolvePackageRoot, resolveServerEntryPath } from "../../cli/config.js";
+import { ensureUserMcpServer as defaultEnsureUserMcpServer } from "../../cli/mcp.js";
 import { resolveWorkerLogsDir } from "./daemon-paths.js";
 import { runCommand, terminateProcessTree } from "../process-control.js";
 
@@ -327,11 +328,15 @@ export class WorkerProcessManager {
     packageRoot = resolvePackageRoot(),
     connectionConfig = null,
     spawnImpl = spawn,
+    ensureUserMcpServer = defaultEnsureUserMcpServer,
   } = {}) {
     this.env = env;
     this.packageRoot = packageRoot;
     this.connectionConfig = connectionConfig;
     this.spawnImpl = typeof spawnImpl === "function" ? spawnImpl : spawn;
+    this.ensureUserMcpServer = typeof ensureUserMcpServer === "function"
+      ? ensureUserMcpServer
+      : defaultEnsureUserMcpServer;
     this.runtimes = new Map();
   }
 
@@ -384,15 +389,6 @@ export class WorkerProcessManager {
 
     const logsDir = resolveWorkerLogsDir(normalizedSessionID, this.env);
     await mkdir(logsDir, { recursive: true });
-    const {
-      stdoutLogPath,
-      stderrLogPath,
-    } = resolveWorkerLogPaths({
-      logsDir,
-      workerID: normalizedWorkerID,
-    });
-    const stdoutHandle = await open(stdoutLogPath, "w");
-    const stderrHandle = await open(stderrLogPath, "w");
     const workerEnv = buildWorkerEnvironment({
       baseEnv: this.env,
       pluginDataDir: normalizedPluginDataDir,
@@ -404,12 +400,28 @@ export class WorkerProcessManager {
       connectionConfig: this.connectionConfig,
     });
     const claudeCommand = resolveClaudeCommand(this.env);
+    const serverEntryPath = resolveServerEntryPath(this.packageRoot);
     const claudeArgs = buildWorkerClaudeArgs({
       packageRoot: this.packageRoot,
       aibotSessionID: normalizedSessionID,
       claudeSessionID: normalizedClaudeSessionID,
       resumeSession,
     });
+    await this.ensureUserMcpServer({
+      claudeCommand,
+      serverCommand: process.execPath,
+      serverArgs: [serverEntryPath],
+      env: workerEnv,
+    });
+    const {
+      stdoutLogPath,
+      stderrLogPath,
+    } = resolveWorkerLogPaths({
+      logsDir,
+      workerID: normalizedWorkerID,
+    });
+    const stdoutHandle = await open(stdoutLogPath, "w");
+    const stderrHandle = await open(stderrLogPath, "w");
 
     await terminateStaleClaudeProcesses({
       packageRoot: this.packageRoot,

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   buildWorkerClaudeArgs,
@@ -88,7 +88,10 @@ test("spawnWorker feeds a startup enter key to Claude stdin", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-startup-input-"));
   const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
   const outputPath = path.join(tempDir, "stdin-output.txt");
+  const serverDir = path.join(tempDir, "server");
 
+  await mkdir(serverDir, { recursive: true });
+  await writeFile(path.join(serverDir, "main.js"), "process.exit(0);\n", "utf8");
   await writeFile(fakeClaudePath, `#!/usr/bin/env node
 import { writeFile } from "node:fs/promises";
 
@@ -108,6 +111,7 @@ await writeFile(process.env.TEST_OUTPUT_PATH, Buffer.concat(chunks).toString("ut
       TEST_OUTPUT_PATH: outputPath,
     },
     packageRoot: tempDir,
+    async ensureUserMcpServer() {},
   });
 
   await manager.spawnWorker({
@@ -129,6 +133,55 @@ await writeFile(process.env.TEST_OUTPUT_PATH, Buffer.concat(chunks).toString("ut
   }
 
   assert.equal(actual, "\n");
+});
+
+test("spawnWorker ensures the user-scoped MCP server before launching Claude", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-mcp-server-"));
+  const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
+  const serverDir = path.join(tempDir, "server");
+  const outputPath = path.join(tempDir, "stdin-output.txt");
+  const ensured = [];
+
+  await mkdir(serverDir, { recursive: true });
+  await writeFile(path.join(serverDir, "main.js"), "process.exit(0);\n", "utf8");
+  await writeFile(fakeClaudePath, `#!/usr/bin/env node
+import { writeFile } from "node:fs/promises";
+
+const chunks = [];
+for await (const chunk of process.stdin) {
+  chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+}
+await writeFile(process.env.TEST_OUTPUT_PATH, Buffer.concat(chunks).toString("utf8"), "utf8");
+`, "utf8");
+  await chmod(fakeClaudePath, 0o755);
+
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAUDE_BIN: fakeClaudePath,
+      CLAWPOOL_SHOW_CLAUDE_WINDOW: "0",
+      TEST_OUTPUT_PATH: outputPath,
+    },
+    packageRoot: tempDir,
+    async ensureUserMcpServer(input) {
+      ensured.push(input);
+    },
+  });
+
+  await manager.spawnWorker({
+    aibotSessionID: "chat-mcp",
+    cwd: tempDir,
+    pluginDataDir: path.join(tempDir, "plugin-data"),
+    claudeSessionID: "claude-mcp",
+    workerID: "worker-mcp",
+  });
+
+  assert.equal(ensured.length, 1);
+  assert.equal(ensured[0].claudeCommand, fakeClaudePath);
+  assert.equal(ensured[0].serverCommand, process.execPath);
+  assert.deepEqual(ensured[0].serverArgs, [path.join(tempDir, "server", "main.js")]);
+  assert.equal(ensured[0].env.CLAWPOOL_DAEMON_MODE, "1");
+  assert.equal(ensured[0].env.CLAWPOOL_AIBOT_SESSION_ID, "chat-mcp");
 });
 
 test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude pid file", async () => {

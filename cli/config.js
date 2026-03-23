@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -31,8 +32,16 @@ export function resolvePackageBinPath() {
   return path.join(resolvePackageRoot(), "bin", "clawpool-claude.js");
 }
 
-export function resolveServerEntryPath() {
-  return path.join(resolvePackageRoot(), "dist", "index.js");
+export function resolveServerEntryPath(packageRoot = resolvePackageRoot()) {
+  const distEntryPath = path.join(packageRoot, "dist", "index.js");
+  if (existsSync(distEntryPath)) {
+    return distEntryPath;
+  }
+  const sourceEntryPath = path.join(packageRoot, "server", "main.js");
+  if (existsSync(sourceEntryPath)) {
+    return sourceEntryPath;
+  }
+  throw new Error(`没有找到 clawpool-claude server 入口: ${packageRoot}`);
 }
 
 export function resolveDataDir(input) {
