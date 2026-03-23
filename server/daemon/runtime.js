@@ -347,6 +347,20 @@ export class DaemonRuntime {
     return this.messageDeliveryStore.getPendingEvent(eventID);
   }
 
+  hasInFlightSessionEvent(sessionID, { excludeEventID = "" } = {}) {
+    const normalizedSessionID = normalizeString(sessionID);
+    const excludedEventID = normalizeString(excludeEventID);
+    if (!normalizedSessionID) {
+      return false;
+    }
+    return this.listPendingEventsForSession(normalizedSessionID).some((record) => {
+      if (excludedEventID && normalizeString(record.eventID) === excludedEventID) {
+        return false;
+      }
+      return ["dispatching", "delivered"].includes(normalizeString(record.delivery_state));
+    });
+  }
+
   async flushPendingSessionEvents(sessionID, binding) {
     const normalizedSessionID = normalizeString(sessionID);
     if (
@@ -354,6 +368,15 @@ export class DaemonRuntime {
       !binding?.worker_control_url ||
       !binding?.worker_control_token
     ) {
+      return;
+    }
+
+    if (this.hasInFlightSessionEvent(normalizedSessionID)) {
+      this.trace({
+        stage: "pending_event_flush_skipped_inflight",
+        session_id: normalizedSessionID,
+        worker_id: binding?.worker_id,
+      });
       return;
     }
 
@@ -378,6 +401,7 @@ export class DaemonRuntime {
           session_id: currentRecord.sessionID,
           worker_id: binding?.worker_id,
         });
+        return;
       } catch (error) {
         await this.markPendingEventPending(currentRecord.eventID);
         this.trace({
@@ -525,11 +549,20 @@ export class DaemonRuntime {
   }
 
   async handleEventCompleted(eventID) {
+    const record = this.getPendingEvent(eventID);
+    const sessionID = normalizeString(record?.sessionID || this.messageDeliveryStore.getRememberedSessionID(eventID));
     await this.clearPendingEvent(eventID);
     this.trace({
       stage: "event_completed",
       event_id: eventID,
     });
+    if (!sessionID) {
+      return;
+    }
+    const binding = this.bindingRegistry.getByAibotSessionID(sessionID);
+    if (canDeliverToWorker(binding)) {
+      await this.flushPendingSessionEvents(sessionID, binding);
+    }
   }
 
   async recoverPersistedDeliveryState() {
@@ -866,6 +899,17 @@ export class DaemonRuntime {
         session_id: pending.sessionID,
         msg_id: pending.msgID,
       });
+      if (this.hasInFlightSessionEvent(binding.aibot_session_id, {
+        excludeEventID: pending.eventID,
+      })) {
+        this.trace({
+          stage: "event_queued_behind_inflight",
+          event_id: pending.eventID,
+          session_id: pending.sessionID,
+          worker_id: binding?.worker_id,
+        });
+        return;
+      }
     }
     const deliveredBinding = await this.deliverWithRecovery(
       binding.aibot_session_id,

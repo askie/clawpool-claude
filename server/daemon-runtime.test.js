@@ -393,6 +393,145 @@ test("daemon runtime delivers normal message to ready worker control", async () 
   assert.equal(sent.filter((item) => item.kind === "text").length, 0);
 });
 
+test("daemon runtime queues a second session event until the first one completes", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const delivered = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-serial",
+    claude_session_id: "claude-serial",
+    cwd: tempDir,
+    worker_id: "worker-serial",
+    worker_status: "ready",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+    worker_control_url: "http://127.0.0.1:9998",
+    worker_control_token: "token-serial",
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          delivered.push(payload);
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await runtime.handleEvent({
+    event_id: "evt-serial-1",
+    session_id: "chat-serial",
+    msg_id: "msg-serial-1",
+    sender_id: "sender-serial",
+    content: "first",
+  });
+  await runtime.handleEvent({
+    event_id: "evt-serial-2",
+    session_id: "chat-serial",
+    msg_id: "msg-serial-2",
+    sender_id: "sender-serial",
+    content: "second",
+  });
+
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].event_id, "evt-serial-1");
+  assert.equal(runtime.getPendingEvent("evt-serial-2")?.delivery_state, "pending");
+
+  await runtime.handleEventCompleted("evt-serial-1");
+
+  assert.equal(delivered.length, 2);
+  assert.equal(delivered[1].event_id, "evt-serial-2");
+  assert.equal(runtime.getPendingEvent("evt-serial-2")?.delivery_state, "delivered");
+});
+
+test("daemon runtime does not flush a queued event while another session event is still in flight", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const delivered = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  const binding = await registry.createBinding({
+    aibot_session_id: "chat-serial-ready",
+    claude_session_id: "claude-serial-ready",
+    cwd: tempDir,
+    worker_id: "worker-serial-ready",
+    worker_status: "ready",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+    worker_control_url: "http://127.0.0.1:9997",
+    worker_control_token: "token-serial-ready",
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          delivered.push(payload);
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await runtime.trackPendingEvent({
+    event_id: "evt-serial-ready-1",
+    session_id: "chat-serial-ready",
+    msg_id: "msg-serial-ready-1",
+    sender_id: "sender-serial-ready",
+    content: "first",
+  });
+  await runtime.markPendingEventDelivered("evt-serial-ready-1", binding);
+  await runtime.trackPendingEvent({
+    event_id: "evt-serial-ready-2",
+    session_id: "chat-serial-ready",
+    msg_id: "msg-serial-ready-2",
+    sender_id: "sender-serial-ready",
+    content: "second",
+  });
+
+  await runtime.handleWorkerStatusUpdate(binding, {
+    ...binding,
+    worker_status: "ready",
+  });
+
+  assert.equal(delivered.length, 0);
+
+  await runtime.handleEventCompleted("evt-serial-ready-1");
+
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].event_id, "evt-serial-ready-2");
+});
+
 test("daemon runtime resumes the bound Claude session when restarting a stopped worker", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
