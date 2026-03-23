@@ -1,4 +1,4 @@
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, readFile, rename, writeFile } from "node:fs/promises";
 
 export async function readJSONFile(filePath, fallbackValue) {
   try {
@@ -15,9 +15,17 @@ export async function readJSONFile(filePath, fallbackValue) {
   }
 }
 
-export async function writeJSONFileAtomic(filePath, value) {
+export async function writeJSONFileAtomic(filePath, value, { mode = 0o600 } = {}) {
   const tmpPath = `${filePath}.tmp`;
   const text = `${JSON.stringify(value, null, 2)}\n`;
-  await writeFile(tmpPath, text, "utf8");
+  await writeFile(tmpPath, text, {
+    encoding: "utf8",
+    mode,
+  });
   await rename(tmpPath, filePath);
+  try {
+    await chmod(filePath, mode);
+  } catch {
+    // chmod can be unsupported or ineffective on some platforms
+  }
 }

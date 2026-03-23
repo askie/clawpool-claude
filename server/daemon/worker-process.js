@@ -5,6 +5,7 @@ import process from "node:process";
 import { randomUUID } from "node:crypto";
 import { resolvePackageRoot } from "../../cli/config.js";
 import { resolveWorkerLogsDir } from "./daemon-paths.js";
+import { runCommand, terminateProcessTree } from "../process-control.js";
 
 const missingResumeSessionPattern = /No conversation found with session ID:/u;
 
@@ -173,8 +174,29 @@ export async function createVisibleClaudeLaunchScript({
   return { scriptPath, expectPath, pidPath };
 }
 
-async function listManagedClaudeProcesses() {
-  const child = spawn("ps", ["-ax", "-o", "pid=,command="], {
+async function listManagedClaudeProcesses({
+  platform = process.platform,
+  spawnImpl = spawn,
+} = {}) {
+  if (platform === "win32") {
+    const result = await runCommand("powershell", [
+      "-NoProfile",
+      "-Command",
+      "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ], {
+      allowFailure: true,
+      spawnImpl,
+    });
+    const parsed = JSON.parse(result.stdout || "[]");
+    const list = Array.isArray(parsed) ? parsed : [parsed];
+    return list
+      .map((entry) => ({
+        pid: Number.parseInt(String(entry?.ProcessId ?? ""), 10),
+        command: String(entry?.CommandLine ?? "").trim(),
+      }))
+      .filter((entry) => Number.isFinite(entry.pid) && entry.pid > 0 && entry.command);
+  }
+  const child = spawnImpl("ps", ["-ax", "-o", "pid=,command="], {
     stdio: ["ignore", "pipe", "ignore"],
   });
   const chunks = [];
@@ -216,18 +238,22 @@ function isManagedClaudeCommand(command, { packageRoot, sessionName }) {
   );
 }
 
-async function terminateStaleClaudeProcesses({ packageRoot, aibotSessionID }) {
+async function terminateStaleClaudeProcesses({
+  packageRoot,
+  aibotSessionID,
+  platform = process.platform,
+  spawnImpl = spawn,
+}) {
   const sessionName = buildWorkerSessionName(aibotSessionID);
-  const processes = await listManagedClaudeProcesses();
+  const processes = await listManagedClaudeProcesses({
+    platform,
+    spawnImpl,
+  });
   for (const entry of processes) {
     if (!isManagedClaudeCommand(entry.command, { packageRoot, sessionName })) {
       continue;
     }
-    try {
-      process.kill(entry.pid, "SIGTERM");
-    } catch {
-      // ignore stale or already-exited pid
-    }
+    await terminateProcessTree(entry.pid, { platform });
   }
 }
 
@@ -385,6 +411,8 @@ export class WorkerProcessManager {
     await terminateStaleClaudeProcesses({
       packageRoot: this.packageRoot,
       aibotSessionID: normalizedSessionID,
+      platform: process.platform,
+      spawnImpl: this.spawnImpl,
     });
 
     let child = null;
@@ -410,6 +438,7 @@ export class WorkerProcessManager {
           env: workerEnv,
           stdio: ["pipe", stdoutHandle.fd, stderrHandle.fd],
           detached: true,
+          windowsHide: true,
         },
       );
 
@@ -452,9 +481,8 @@ export class WorkerProcessManager {
     }
     const pid = Number(runtime.pid ?? 0);
     if (pid > 0) {
-      try {
-        process.kill(pid, "SIGTERM");
-      } catch {
+      const terminated = await terminateProcessTree(pid);
+      if (!terminated) {
         return false;
       }
     }

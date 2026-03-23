@@ -7,6 +7,7 @@ import { run } from "./main.js";
 
 test("cli run routes daemon subcommand", async () => {
   const outputs = [];
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-route-cli-"));
   const originalStdoutWrite = process.stdout.write;
   process.stdout.write = (chunk) => {
     outputs.push(String(chunk));
@@ -14,7 +15,12 @@ test("cli run routes daemon subcommand", async () => {
   };
 
   try {
-    const exitCode = await run(["daemon", "--exit-after-ready"], {});
+    const exitCode = await run([
+      "daemon",
+      "--exit-after-ready",
+      "--data-dir",
+      tempDir,
+    ], {});
     assert.equal(exitCode, 0);
     assert.match(outputs.join(""), /daemon 已启动/u);
   } finally {
@@ -185,6 +191,86 @@ test("cli daemon subcommand persists daemon config when options are provided", a
     assert.equal(config.agent_id, "agent-1");
     assert.equal(config.api_key, "key-1");
     assert.equal(config.outbound_text_chunk_limit, 2048);
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+  }
+});
+
+test("cli install subcommand prepares config and delegates to service manager", async () => {
+  const outputs = [];
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-install-cli-"));
+  const originalStdoutWrite = process.stdout.write;
+  const calls = [];
+  process.stdout.write = (chunk) => {
+    outputs.push(String(chunk));
+    return true;
+  };
+
+  try {
+    const exitCode = await run([
+      "install",
+      "--data-dir",
+      tempDir,
+      "--ws-url",
+      "ws://127.0.0.1:9010/ws",
+      "--agent-id",
+      "agent-install",
+      "--api-key",
+      "key-install",
+    ], {}, {
+      serviceManager: {
+        install: async ({ dataDir }) => {
+          calls.push({ kind: "install", dataDir });
+          return {
+            installed: true,
+            service_kind: "systemd-user",
+            data_dir: dataDir,
+            install_state: "current",
+            daemon_state: "running",
+            service_id: "service-1",
+          };
+        },
+      },
+    });
+    assert.equal(exitCode, 0);
+    assert.deepEqual(calls, [{
+      kind: "install",
+      dataDir: tempDir,
+    }]);
+    assert.match(outputs.join(""), /服务已安装: yes/u);
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+  }
+});
+
+test("cli status subcommand prints service manager status", async () => {
+  const outputs = [];
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-status-cli-"));
+  const originalStdoutWrite = process.stdout.write;
+  process.stdout.write = (chunk) => {
+    outputs.push(String(chunk));
+    return true;
+  };
+
+  try {
+    const exitCode = await run([
+      "status",
+      "--data-dir",
+      tempDir,
+    ], {}, {
+      serviceManager: {
+        status: async ({ dataDir }) => ({
+          installed: true,
+          service_kind: "launchd",
+          data_dir: dataDir,
+          install_state: "current",
+          daemon_state: "running",
+          pid: 1234,
+        }),
+      },
+    });
+    assert.equal(exitCode, 0);
+    assert.match(outputs.join(""), /进程 PID: 1234/u);
   } finally {
     process.stdout.write = originalStdoutWrite;
   }

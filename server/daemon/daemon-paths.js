@@ -33,6 +33,14 @@ export function resolveMessageDeliveryStatePath(env = process.env) {
   return path.join(resolveDaemonDataDir(env), "message-delivery-state.json");
 }
 
+export function resolveDaemonLockPath(env = process.env) {
+  return path.join(resolveDaemonDataDir(env), "daemon.lock.json");
+}
+
+export function resolveDaemonStatusPath(env = process.env) {
+  return path.join(resolveDaemonDataDir(env), "daemon-status.json");
+}
+
 export function resolveRuntimeWorkersDir(env = process.env) {
   return path.join(resolveDaemonDataDir(env), "runtime", "workers");
 }

@@ -97,7 +97,7 @@ export class ConfigStore {
   }
 
   async load() {
-    await mkdir(path.dirname(this.filePath), { recursive: true });
+    await mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
     const stored = await readJSONFile(this.filePath, defaultConfig);
     this.config = normalizeConfigShape(applyEnvOverrides(stored, this.env));
     validateConfig(this.config);
@@ -140,8 +140,8 @@ export class ConfigStore {
       ...input,
     });
     validateConfig(next);
-    await mkdir(path.dirname(this.filePath), { recursive: true });
-    await writeJSONFileAtomic(this.filePath, next);
+    await mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
+    await writeJSONFileAtomic(this.filePath, next, { mode: 0o600 });
     this.config = applyEnvOverrides(next, this.env);
     validateConfig(this.config);
     return this.getStatus();

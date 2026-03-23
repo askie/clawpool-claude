@@ -14,6 +14,7 @@ import { AibotClient } from "../aibot-client.js";
 import { DaemonRuntime } from "./runtime.js";
 import { createSessionActivityDispatcher } from "../session-activity-dispatcher.js";
 import { createProcessLogger } from "../logging.js";
+import { DaemonProcessState } from "./process-state.js";
 
 function usage() {
   return `用法:
@@ -109,6 +110,11 @@ export async function run(argv = [], env = process.env) {
   const logger = createProcessLogger({ env: runtimeEnv });
 
   const dataDir = resolveDaemonDataDir(runtimeEnv);
+  const processState = new DaemonProcessState({
+    env: runtimeEnv,
+    dataDir,
+  });
+  await processState.acquire();
   const configStore = new ConfigStore(resolveDaemonConfigPath(runtimeEnv), {
     env: runtimeEnv,
   });
@@ -271,60 +277,90 @@ export async function run(argv = [], env = process.env) {
       return { ok: true };
     },
   });
-  await bridgeServer.start();
+  try {
+    await bridgeServer.start();
 
-  aibotClient = new AibotClient();
-  runtime = new DaemonRuntime({
-    env: runtimeEnv,
-    bindingRegistry,
-    workerProcessManager,
-    aibotClient,
-    bridgeServer,
-    messageDeliveryStore,
-    logger,
-  });
-  aibotClient.onEventMessage = async (payload) => {
-    await runtime.handleEvent(payload);
-  };
-  aibotClient.onEventStop = async (payload) => {
-    await runtime.handleStopEvent(payload);
-  };
-  aibotClient.onEventRevoke = async (payload) => {
-    await runtime.handleRevokeEvent(payload);
-  };
-
-  print("clawpool-claude daemon 已启动。");
-  print(`数据目录: ${dataDir}`);
-  print(`Bridge: ${bridgeServer.getURL()}`);
-  print(`已配置: ${configStore.isConfigured() ? "yes" : "no"}`);
-
-  if (options.exitAfterReady) {
-    await bridgeServer.stop();
-    return 0;
-  }
-
-  const connectionConfig = configStore.getConnectionConfig();
-  if (connectionConfig) {
-    await aibotClient.start(connectionConfig);
-    await runtime.recoverPersistedDeliveryState();
-    print("Aibot: connected");
-  } else {
-    await runtime.recoverPersistedDeliveryState();
-    print("Aibot: not configured");
-  }
-
-  await new Promise((resolve) => {
-    const stop = async () => {
-      process.off("SIGINT", stop);
-      process.off("SIGTERM", stop);
-      await aibotClient.stop();
-      await bridgeServer.stop();
-      resolve();
+    aibotClient = new AibotClient();
+    runtime = new DaemonRuntime({
+      env: runtimeEnv,
+      bindingRegistry,
+      workerProcessManager,
+      aibotClient,
+      bridgeServer,
+      messageDeliveryStore,
+      logger,
+    });
+    aibotClient.onEventMessage = async (payload) => {
+      await runtime.handleEvent(payload);
     };
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
-  });
-  return 0;
+    aibotClient.onEventStop = async (payload) => {
+      await runtime.handleStopEvent(payload);
+    };
+    aibotClient.onEventRevoke = async (payload) => {
+      await runtime.handleRevokeEvent(payload);
+    };
+
+    print("clawpool-claude daemon 已启动。");
+    print(`数据目录: ${dataDir}`);
+    print(`Bridge: ${bridgeServer.getURL()}`);
+    print(`已配置: ${configStore.isConfigured() ? "yes" : "no"}`);
+
+    const connectionConfig = configStore.getConnectionConfig();
+    await processState.markRunning({
+      bridgeURL: bridgeServer.getURL(),
+      configured: configStore.isConfigured(),
+      connectionState: connectionConfig ? "connecting" : "not_configured",
+    });
+
+    if (options.exitAfterReady) {
+      await bridgeServer.stop();
+      await processState.release({
+        exitCode: 0,
+        reason: "exit_after_ready",
+      });
+      return 0;
+    }
+
+    if (connectionConfig) {
+      await aibotClient.start(connectionConfig);
+      await runtime.recoverPersistedDeliveryState();
+      await processState.markRunning({
+        bridgeURL: bridgeServer.getURL(),
+        configured: true,
+        connectionState: "connected",
+      });
+      print("Aibot: connected");
+    } else {
+      await runtime.recoverPersistedDeliveryState();
+      await processState.markRunning({
+        bridgeURL: bridgeServer.getURL(),
+        configured: false,
+        connectionState: "not_configured",
+      });
+      print("Aibot: not configured");
+    }
+
+    await new Promise((resolve) => {
+      const stop = async () => {
+        process.off("SIGINT", stop);
+        process.off("SIGTERM", stop);
+        await processState.markStopping("signal");
+        await aibotClient.stop();
+        await bridgeServer.stop();
+        resolve();
+      };
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+    });
+    await processState.release({
+      exitCode: 0,
+      reason: "signal",
+    });
+    return 0;
+  } catch (error) {
+    await processState.fail(error instanceof Error ? error.message : String(error));
+    throw error;
+  }
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env) {

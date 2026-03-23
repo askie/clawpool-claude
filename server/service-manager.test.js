@@ -1,0 +1,174 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { ServiceManager } from "./service/service-manager.js";
+import { ServiceInstallStore } from "./service/service-install-store.js";
+import { resolveServiceInstallRecordPath } from "./service/service-paths.js";
+import { DaemonProcessState, inspectDaemonProcessState } from "./daemon/process-state.js";
+
+test("service manager installs linux user service with absolute paths", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-linux-"));
+  const dataDir = path.join(tempRoot, "data");
+  const calls = [];
+  const manager = new ServiceManager({
+    platform: "linux",
+    homeDir: tempRoot,
+    nodePath: "/usr/local/bin/node",
+    cliPath: "/opt/clawpool/bin/clawpool-claude.js",
+    runCommandImpl: async (command, args, options = {}) => {
+      calls.push({ command, args, options });
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  });
+
+  const status = await manager.install({ dataDir });
+  const unitPath = status.definition_path;
+  const unitContent = await readFile(unitPath, "utf8");
+
+  assert.equal(status.installed, true);
+  assert.equal(status.service_kind, "systemd-user");
+  assert.match(unitContent, /ExecStart='\/usr\/local\/bin\/node' '\/opt\/clawpool\/bin\/clawpool-claude\.js' 'daemon' '--data-dir'/u);
+  assert.deepEqual(calls.map((entry) => `${entry.command} ${entry.args.join(" ")}`), [
+    `systemctl --user daemon-reload`,
+    `systemctl --user enable ${status.service_id}.service`,
+    `systemctl --user start ${status.service_id}.service`,
+  ]);
+});
+
+test("service manager install uses launchd bootstrap on macOS", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-macos-"));
+  const dataDir = path.join(tempRoot, "data");
+  const calls = [];
+  const manager = new ServiceManager({
+    platform: "darwin",
+    homeDir: tempRoot,
+    uid: 501,
+    nodePath: "/usr/local/bin/node",
+    cliPath: "/opt/clawpool/bin/clawpool-claude.js",
+    runCommandImpl: async (command, args, options = {}) => {
+      calls.push({ command, args, options });
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  });
+
+  const status = await manager.install({ dataDir });
+  const plist = await readFile(status.definition_path, "utf8");
+
+  assert.equal(status.installed, true);
+  assert.equal(status.service_kind, "launchd");
+  assert.match(plist, /<string>\/usr\/local\/bin\/node<\/string>/u);
+  assert.deepEqual(calls.map((entry) => `${entry.command} ${entry.args.join(" ")}`), [
+    `launchctl bootstrap gui/501 ${status.definition_path}`,
+    `launchctl kickstart -k gui/501/${status.service_id}`,
+  ]);
+});
+
+test("service manager install uses task scheduler on windows", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-win-"));
+  const dataDir = path.join(tempRoot, "data");
+  const calls = [];
+  const manager = new ServiceManager({
+    platform: "win32",
+    homeDir: tempRoot,
+    nodePath: "C:\\Program Files\\nodejs\\node.exe",
+    cliPath: "C:\\clawpool\\bin\\clawpool-claude.js",
+    runCommandImpl: async (command, args, options = {}) => {
+      calls.push({ command, args, options });
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  });
+
+  const status = await manager.install({ dataDir });
+
+  assert.equal(status.installed, true);
+  assert.equal(status.service_kind, "task-scheduler");
+  assert.deepEqual(calls.map((entry) => `${entry.command} ${entry.args.join(" ")}`), [
+    `schtasks /Create /TN ${status.service_id} /SC ONLOGON /RL LIMITED /F /TR "C:\\Program Files\\nodejs\\node.exe" C:\\clawpool\\bin\\clawpool-claude.js daemon --data-dir ${path.resolve(dataDir)}`,
+    `schtasks /Run /TN ${status.service_id}`,
+  ]);
+});
+
+test("service manager status reports stale install when launcher path changed", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-status-"));
+  const dataDir = path.join(tempRoot, "data");
+  const store = new ServiceInstallStore(resolveServiceInstallRecordPath(dataDir));
+  await store.save({
+    platform: "linux",
+    service_id: "com.example.clawpool",
+    node_path: "/old/node",
+    cli_path: "/old/bin/clawpool-claude.js",
+    definition_path: "/tmp/clawpool.service",
+    data_dir: path.resolve(dataDir),
+    installed_at: 1,
+    updated_at: 1,
+  });
+  const manager = new ServiceManager({
+    platform: "linux",
+    homeDir: tempRoot,
+    nodePath: "/new/node",
+    cliPath: "/new/bin/clawpool-claude.js",
+    runCommandImpl: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+  });
+
+  const status = await manager.status({ dataDir });
+  assert.equal(status.install_state, "stale");
+  assert.equal(status.installed, true);
+});
+
+test("daemon process state acquires lock and clears on release", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-state-"));
+  const dataDir = path.join(tempRoot, "data");
+  const state = new DaemonProcessState({
+    dataDir,
+    pid: process.pid,
+    now: (() => {
+      let current = 1000;
+      return () => {
+        current += 1;
+        return current;
+      };
+    })(),
+  });
+
+  await state.acquire();
+  await state.markRunning({
+    bridgeURL: "http://127.0.0.1:8000",
+    configured: true,
+    connectionState: "connected",
+  });
+
+  let inspection = await inspectDaemonProcessState({ dataDir });
+  assert.equal(inspection.running, true);
+  assert.equal(inspection.bridge_url, "http://127.0.0.1:8000");
+
+  await state.release({ exitCode: 0, reason: "shutdown" });
+  inspection = await inspectDaemonProcessState({ dataDir });
+  assert.equal(inspection.running, false);
+  assert.equal(inspection.state, "stopped");
+});
+
+test("daemon process state replaces stale lock file", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-stale-"));
+  const dataDir = path.join(tempRoot, "data");
+  const store = new ServiceInstallStore(resolveServiceInstallRecordPath(dataDir));
+  await store.clear();
+
+  const staleLockState = new DaemonProcessState({
+    dataDir,
+    pid: 999999,
+    isProcessRunningImpl: () => false,
+  });
+  await staleLockState.acquire();
+  await staleLockState.release();
+
+  const fresh = new DaemonProcessState({
+    dataDir,
+    pid: process.pid,
+  });
+  await fresh.acquire();
+  const inspection = await inspectDaemonProcessState({ dataDir });
+  assert.equal(inspection.pid, process.pid);
+  await fresh.release();
+});

@@ -27,6 +27,10 @@ export function resolvePackageRoot() {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 }
 
+export function resolvePackageBinPath() {
+  return path.join(resolvePackageRoot(), "bin", "clawpool-claude.js");
+}
+
 export function resolveServerEntryPath() {
   return path.join(resolvePackageRoot(), "dist", "index.js");
 }
@@ -98,9 +102,12 @@ export function validateConfig(config) {
 }
 
 export async function writeConfig({ dataDir, config }) {
-  await mkdir(dataDir, { recursive: true });
+  await mkdir(dataDir, { recursive: true, mode: 0o700 });
   const configPath = resolveConfigPath(dataDir);
-  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
   return configPath;
 }
 
