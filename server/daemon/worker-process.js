@@ -377,6 +377,42 @@ async function launchClaudeInVisibleTerminal({
   return { pid, pidPath, scriptPath };
 }
 
+async function launchClaudeInHiddenPty({
+  logsDir,
+  workerID,
+  cwd,
+  command,
+  args,
+  env,
+  spawnImpl,
+  stdoutFD,
+  stderrFD,
+}) {
+  const { expectPath, pidPath } = await createVisibleClaudeLaunchScript({
+    logsDir,
+    workerID,
+    cwd,
+    command,
+    args,
+    env,
+  });
+  const child = spawnImpl("/usr/bin/expect", [expectPath], {
+    cwd,
+    env,
+    stdio: ["ignore", stdoutFD, stderrFD],
+    detached: true,
+    windowsHide: true,
+  });
+  child.unref();
+  const pid = await waitForPidFile(pidPath);
+  return {
+    pid: Number(pid || child.pid || 0),
+    wrapperPID: Number(child.pid || 0),
+    expectPath,
+    pidPath,
+  };
+}
+
 export class WorkerProcessManager {
   constructor({
     env = process.env,
@@ -506,22 +542,37 @@ export class WorkerProcessManager {
       });
       pid = Number(visibleTerminal.pid ?? 0);
     } else {
-      child = this.spawnImpl(
-        claudeCommand,
-        claudeArgs,
-        {
+      if (process.platform === "darwin") {
+        const hiddenPty = await launchClaudeInHiddenPty({
+          logsDir,
+          workerID: normalizedWorkerID,
           cwd: normalizedCwd,
+          command: claudeCommand,
+          args: claudeArgs,
           env: workerEnv,
-          stdio: ["pipe", stdoutHandle.fd, stderrHandle.fd],
-          detached: true,
-          windowsHide: true,
-        },
-      );
+          spawnImpl: this.spawnImpl,
+          stdoutFD: stdoutHandle.fd,
+          stderrFD: stderrHandle.fd,
+        });
+        pid = hiddenPty.pid;
+      } else {
+        child = this.spawnImpl(
+          claudeCommand,
+          claudeArgs,
+          {
+            cwd: normalizedCwd,
+            env: workerEnv,
+            stdio: ["pipe", stdoutHandle.fd, stderrHandle.fd],
+            detached: true,
+            windowsHide: true,
+          },
+        );
 
-      child.stdin?.write("\n");
-      child.stdin?.end();
-      child.unref();
-      pid = child.pid ?? 0;
+        child.stdin?.write("\n");
+        child.stdin?.end();
+        child.unref();
+        pid = child.pid ?? 0;
+      }
     }
 
     const runtime = {

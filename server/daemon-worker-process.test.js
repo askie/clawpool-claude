@@ -96,12 +96,13 @@ test("spawnWorker feeds a startup enter key to Claude stdin", async () => {
   await writeFile(path.join(serverDir, "main.js"), "process.exit(0);\n", "utf8");
   await writeFile(fakeClaudePath, `#!/usr/bin/env node
 import { writeFile } from "node:fs/promises";
+import process from "node:process";
 
-const chunks = [];
-for await (const chunk of process.stdin) {
-  chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-}
-await writeFile(process.env.TEST_OUTPUT_PATH, Buffer.concat(chunks).toString("utf8"), "utf8");
+process.stdin.once("data", async (chunk) => {
+  const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+  await writeFile(process.env.TEST_OUTPUT_PATH, data.toString("utf8"), "utf8");
+  process.exit(0);
+});
 `, "utf8");
   await chmod(fakeClaudePath, 0o755);
 
@@ -137,6 +138,58 @@ await writeFile(process.env.TEST_OUTPUT_PATH, Buffer.concat(chunks).toString("ut
   assert.equal(actual, "\n");
 });
 
+test("spawnWorker allocates a hidden tty for Claude on macOS", async () => {
+  if (process.platform !== "darwin") {
+    return;
+  }
+
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-hidden-tty-"));
+  const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
+  const outputPath = path.join(tempDir, "tty-output.txt");
+  const serverDir = path.join(tempDir, "server");
+
+  await mkdir(serverDir, { recursive: true });
+  await writeFile(path.join(serverDir, "main.js"), "process.exit(0);\n", "utf8");
+  await writeFile(fakeClaudePath, `#!/usr/bin/env node
+import { writeFile } from "node:fs/promises";
+import process from "node:process";
+
+await writeFile(process.env.TEST_OUTPUT_PATH, process.stdout.isTTY ? "tty" : "notty", "utf8");
+`, "utf8");
+  await chmod(fakeClaudePath, 0o755);
+
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAUDE_BIN: fakeClaudePath,
+      CLAWPOOL_SHOW_CLAUDE_WINDOW: "0",
+      TEST_OUTPUT_PATH: outputPath,
+    },
+    packageRoot: tempDir,
+    async ensureUserMcpServer() {},
+  });
+
+  await manager.spawnWorker({
+    aibotSessionID: "chat-hidden-tty",
+    cwd: tempDir,
+    pluginDataDir: path.join(tempDir, "plugin-data"),
+    claudeSessionID: "claude-hidden-tty",
+    workerID: "worker-hidden-tty",
+  });
+
+  let actual = "";
+  for (let index = 0; index < 100; index += 1) {
+    try {
+      actual = await readFile(outputPath, "utf8");
+      break;
+    } catch {
+      await sleep(100);
+    }
+  }
+
+  assert.equal(actual, "tty");
+});
+
 test("spawnWorker ensures the user-scoped MCP server before launching Claude", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-mcp-server-"));
   const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
@@ -148,12 +201,13 @@ test("spawnWorker ensures the user-scoped MCP server before launching Claude", a
   await writeFile(path.join(serverDir, "main.js"), "process.exit(0);\n", "utf8");
   await writeFile(fakeClaudePath, `#!/usr/bin/env node
 import { writeFile } from "node:fs/promises";
+import process from "node:process";
 
-const chunks = [];
-for await (const chunk of process.stdin) {
-  chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-}
-await writeFile(process.env.TEST_OUTPUT_PATH, Buffer.concat(chunks).toString("utf8"), "utf8");
+process.stdin.once("data", async (chunk) => {
+  const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+  await writeFile(process.env.TEST_OUTPUT_PATH, data.toString("utf8"), "utf8");
+  process.exit(0);
+});
 `, "utf8");
   await chmod(fakeClaudePath, 0o755);
 
