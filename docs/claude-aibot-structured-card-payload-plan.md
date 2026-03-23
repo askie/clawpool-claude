@@ -42,6 +42,7 @@
 | Claude 提问状态 | Claude 状态卡 | `claude_status` |
 | Claude 配对提示 | Claude 配对卡 | `claude_pairing` |
 | Claude 访问状态 | Claude 状态卡 | `claude_status` |
+| Claude `open` 缺目录 | Claude 打开工作目录卡 | `claude_open_session` |
 
 这里最重要的一点是：
 
@@ -110,6 +111,14 @@
   }
 }
 ```
+
+这里已经不是“扁平字段直接塞进 `biz_card`”，而是统一信封：
+
+- `biz_card.version`
+- `biz_card.type`
+- `biz_card.payload`
+
+这样才能直接对齐 AIBot 前端现有的结构化卡片解码器。
 
 ## 4.1 Claude 审批请求
 
@@ -373,6 +382,41 @@ payload 例子：
 }
 ```
 
+## 4.7 Claude `open` 缺目录卡
+
+### 结构化类型
+
+- `biz_card.type = "claude_open_session"`
+
+### 触发时机
+
+- 用户在 AIBot chat 内发送 `open`
+- 或 `/clawpool open`
+- 但没有附带工作目录
+
+### 推荐 payload
+
+```json
+{
+  "summary_text": "open 缺少目录路径。",
+  "detail_text": "请输入工作目录来启动或恢复 Claude 会话。",
+  "command_prefix": "/clawpool open",
+  "command_hint": "/clawpool open <working-directory>",
+  "initial_cwd": ""
+}
+```
+
+### 交互约定
+
+- Windows:
+  - 显示输入框
+  - 同时显示“选择目录”按钮
+- iOS / Android:
+  - 只显示输入框
+  - 用户手工填写后直接提交
+- 提交后统一回发：
+  - `/clawpool open <working-directory>`
+
 ## 五、Claude 侧改造点
 
 Claude 插件侧实际只需要做两类改动。
@@ -392,6 +436,9 @@ Claude 插件侧实际只需要做两类改动。
 3. `server/worker/tool-service.js`
    - 配对通过/拒绝后的 access 状态
 
+4. `server/daemon/runtime.js`
+   - `open` 缺目录时回交互卡
+
 改造方式不是新增新消息类型，而是：
 
 - 在现有 `bridge.sendText({ extra })` 里补 `extra.biz_card`
@@ -401,6 +448,8 @@ Claude 插件侧实际只需要做两类改动。
 建议新增一个单独模块，例如：
 
 - `server/claude-card-payload.js`
+- `server/daemon/control-card.js`
+- `server/message-card-envelope.js`
 
 按单一职责拆成这些函数：
 
@@ -455,5 +504,6 @@ Claude 插件侧实际只需要做两类改动。
 2. Claude 插件补发 `extra.biz_card`
 3. 保留当前文本协议和 `reply_source` 作为兼容层
 4. 先完成审批、提问、配对、访问状态四条结构化链路
+5. 把 `open` 缺目录交互也卡片化，补齐桌面端和移动端的目录输入体验
 
 这样改动最小，收益最大，也最符合现有代码和前端能力。

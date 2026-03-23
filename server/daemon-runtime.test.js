@@ -332,6 +332,20 @@ test("daemon runtime invalid control command replies without timing out", async 
 
   assert.equal(workerCalls.length, 0);
   assert.match(sent.find((item) => item.kind === "text").payload.text, /open 缺少目录路径/u);
+  assert.deepEqual(
+    sent.find((item) => item.kind === "text")?.payload.extra?.biz_card,
+    {
+      version: 1,
+      type: "claude_open_session",
+      payload: {
+        summary_text: "open 缺少目录路径。",
+        detail_text: "请输入工作目录来启动或恢复 Claude 会话。",
+        command_prefix: "/clawpool open",
+        command_hint: "/clawpool open <working-directory>",
+        initial_cwd: "",
+      },
+    },
+  );
   assertRespondedEventResult(sent, "evt-invalid");
 });
 

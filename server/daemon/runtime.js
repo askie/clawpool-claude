@@ -5,6 +5,7 @@ import { normalizeInboundEventPayload } from "../inbound-event-meta.js";
 import { MessageDeliveryStore } from "./message-delivery-store.js";
 import { resolveWorkerPluginDataDir } from "./daemon-paths.js";
 import { WorkerControlClient } from "./worker-control-client.js";
+import { buildOpenWorkspaceCard } from "./control-card.js";
 import { claudeSessionExists as defaultClaudeSessionExists } from "./claude-session-store.js";
 import { isProcessRunning as defaultIsProcessRunning } from "../process-control.js";
 
@@ -834,6 +835,13 @@ export class DaemonRuntime {
     if (!parsed.ok) {
       await this.respond(event, parsed.error, {
         reply_source: "daemon_control_invalid",
+        ...(parsed.command === "open"
+          ? {
+              biz_card: buildOpenWorkspaceCard({
+                summaryText: parsed.error,
+              }),
+            }
+          : {}),
       });
       return true;
     }

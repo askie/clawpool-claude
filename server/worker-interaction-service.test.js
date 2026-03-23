@@ -169,10 +169,11 @@ test("worker inbound handling sends structured access status when channel is dis
 
   assert.equal(sentTexts.length, 1);
   assert.equal(sentTexts[0].extra.reply_source, "claude_channel_access");
+  assert.equal(sentTexts[0].extra.biz_card.version, 1);
   assert.equal(sentTexts[0].extra.biz_card.type, "claude_status");
-  assert.equal(sentTexts[0].extra.biz_card.category, "access");
-  assert.equal(sentTexts[0].extra.biz_card.status, "warning");
-  assert.equal(sentTexts[0].extra.biz_card.reference_id, "evt-disabled-1");
+  assert.equal(sentTexts[0].extra.biz_card.payload.category, "access");
+  assert.equal(sentTexts[0].extra.biz_card.payload.status, "warning");
+  assert.equal(sentTexts[0].extra.biz_card.payload.reference_id, "evt-disabled-1");
   assert.equal(sentResults.length, 1);
   assert.equal(sentResults[0].code, "policy_disabled");
 
@@ -214,10 +215,11 @@ test("worker inbound handling sends structured pairing card for blocked direct s
 
   assert.equal(sentTexts.length, 1);
   assert.equal(sentTexts[0].clientMsgID, "pair_evt-pairing-1");
+  assert.equal(sentTexts[0].extra.biz_card.version, 1);
   assert.equal(sentTexts[0].extra.biz_card.type, "claude_pairing");
-  assert.equal(sentTexts[0].extra.biz_card.pairing_code, "PAIR123");
+  assert.equal(sentTexts[0].extra.biz_card.payload.pairing_code, "PAIR123");
   assert.equal(
-    sentTexts[0].extra.biz_card.command_hint,
+    sentTexts[0].extra.biz_card.payload.command_hint,
     "/clawpool:access pair <code>",
   );
   assert.equal(sentResults.length, 1);

@@ -6,6 +6,7 @@ import {
   buildQuestionAnswerCommandHint,
   buildQuestionFooterText,
 } from "./question-text.js";
+import { buildMessageCardEnvelope } from "./message-card-envelope.js";
 
 const claudeHostLabel = "Claude Clawpool";
 const pairingCommandHint = "/clawpool:access pair <code>";
@@ -26,8 +27,7 @@ function normalizeQuestionOptions(question) {
 export function buildApprovalRequestBizCard(request) {
   const requestID = normalizeString(request?.request_id);
   const { allowedDecisions, decisionCommands } = buildApprovalDecisionCommands(request);
-  return {
-    type: "exec_approval",
+  return buildMessageCardEnvelope("exec_approval", {
     approval_id: requestID,
     approval_slug: requestID,
     approval_command_id: requestID,
@@ -35,7 +35,7 @@ export function buildApprovalRequestBizCard(request) {
     host: claudeHostLabel,
     allowed_decisions: allowedDecisions,
     decision_commands: decisionCommands,
-  };
+  });
 }
 
 export function buildApprovalResolutionBizCard({
@@ -57,8 +57,7 @@ export function buildApprovalResolutionBizCard({
     detailText = `Saved rule: ${resolution.suggestion_index}`;
   }
 
-  return {
-    type: "exec_status",
+  return buildMessageCardEnvelope("exec_status", {
     status,
     summary: normalizeString(summary),
     detail_text: detailText,
@@ -69,7 +68,7 @@ export function buildApprovalResolutionBizCard({
     resolved_by_id: normalizeString(resolvedByID),
     command: buildApprovalCardCommandText(request),
     channel_label: claudeHostLabel,
-  };
+  });
 }
 
 export function buildApprovalCommandStatusBizCard({
@@ -78,20 +77,18 @@ export function buildApprovalCommandStatusBizCard({
   detailText = "",
   status = "warning",
 }) {
-  return {
-    type: "claude_status",
+  return buildMessageCardEnvelope("claude_status", {
     category: "approval",
     status,
     summary: normalizeString(summary),
     detail_text: normalizeString(detailText),
     reference_id: normalizeString(referenceID),
-  };
+  });
 }
 
 export function buildQuestionRequestBizCard(request) {
   const questions = Array.isArray(request?.questions) ? request.questions : [];
-  return {
-    type: "claude_question",
+  return buildMessageCardEnvelope("claude_question", {
     request_id: normalizeString(request?.request_id),
     questions: questions.map((question, index) => ({
       index: index + 1,
@@ -102,7 +99,7 @@ export function buildQuestionRequestBizCard(request) {
     })),
     answer_command_hint: buildQuestionAnswerCommandHint(request),
     footer_text: buildQuestionFooterText(),
-  };
+  });
 }
 
 export function buildQuestionStatusBizCard({
@@ -111,14 +108,13 @@ export function buildQuestionStatusBizCard({
   detailText = "",
   status = "warning",
 }) {
-  return {
-    type: "claude_status",
+  return buildMessageCardEnvelope("claude_status", {
     category: "question",
     status,
     summary: normalizeString(summary),
     detail_text: normalizeString(detailText),
     reference_id: normalizeString(referenceID),
-  };
+  });
 }
 
 export function buildAccessStatusBizCard({
@@ -127,21 +123,19 @@ export function buildAccessStatusBizCard({
   status = "info",
   referenceID = "",
 }) {
-  return {
-    type: "claude_status",
+  return buildMessageCardEnvelope("claude_status", {
     category: "access",
     status,
     summary: normalizeString(summary),
     detail_text: normalizeString(detailText),
     reference_id: normalizeString(referenceID),
-  };
+  });
 }
 
 export function buildPairingBizCard(pairingCode) {
-  return {
-    type: "claude_pairing",
+  return buildMessageCardEnvelope("claude_pairing", {
     pairing_code: normalizeString(pairingCode),
     instruction_text: `Ask the Claude Code user to run ${pairingCommandHint} with this code to approve the sender.`,
     command_hint: pairingCommandHint,
-  };
+  });
 }
