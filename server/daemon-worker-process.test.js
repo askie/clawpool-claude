@@ -240,6 +240,32 @@ process.stdin.once("data", async (chunk) => {
   assert.equal(ensured[0].env.CLAWPOOL_AIBOT_SESSION_ID, "chat-mcp");
 });
 
+test("worker process manager can ensure the user-scoped MCP server before any worker starts", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-mcp-server-"));
+  const ensured = [];
+
+  await mkdir(path.join(tempDir, "dist"), { recursive: true });
+  await writeFile(path.join(tempDir, "dist", "index.js"), "process.exit(0);\n", "utf8");
+
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAUDE_BIN: "/tmp/fake-claude",
+    },
+    packageRoot: tempDir,
+    async ensureUserMcpServer(input) {
+      ensured.push(input);
+    },
+  });
+
+  await manager.ensureUserMcpServerConfigured();
+
+  assert.equal(ensured.length, 1);
+  assert.equal(ensured[0].claudeCommand, "/tmp/fake-claude");
+  assert.equal(ensured[0].serverCommand, process.execPath);
+  assert.deepEqual(ensured[0].serverArgs, [path.join(tempDir, "dist", "index.js")]);
+});
+
 test("spawnWorker terminates stale visible terminal wrapper processes before relaunch", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-stale-visible-"));
   const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");

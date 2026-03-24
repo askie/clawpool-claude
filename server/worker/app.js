@@ -146,19 +146,22 @@ export function createWorkerApp({ env = process.env } = {}) {
   return {
     logger,
     async bootstrap() {
-      bridge.requireDaemonBridge();
       await configStore.load();
       await accessStore.load();
       await approvalStore.init();
       await elicitationStore.init();
       await interactionService.restoreEventState();
       await bridge.startControlServer();
+      await mcp.connect(new StdioServerTransport());
+      if (!bridge.isDaemonBridgeActive()) {
+        logger.info("worker started without daemon bridge for MCP health checks");
+        return;
+      }
       await bridge.registerWorker({
         cwd: process.cwd(),
         pluginDataDir: normalizeOptionalString(env.CLAUDE_PLUGIN_DATA),
         pid: process.pid,
       });
-      await mcp.connect(new StdioServerTransport());
       await bridge.sendConnectedStatus();
       interactionService.startDispatchPumps();
       logger.info("worker connected in daemon bridge mode");

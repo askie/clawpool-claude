@@ -334,6 +334,8 @@ export async function run(argv = [], env = process.env) {
       return 0;
     }
 
+    await workerProcessManager.ensureUserMcpServerConfigured();
+
     if (connectionConfig) {
       await aibotClient.start(connectionConfig);
       await runtime.recoverPersistedDeliveryState();

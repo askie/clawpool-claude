@@ -463,6 +463,21 @@ export class WorkerProcessManager {
     return { ...next };
   }
 
+  async ensureUserMcpServerConfigured({ env = this.env } = {}) {
+    const claudeCommand = resolveClaudeCommand(env);
+    const serverEntryPath = resolveServerEntryPath(this.packageRoot);
+    await this.ensureUserMcpServer({
+      claudeCommand,
+      serverCommand: process.execPath,
+      serverArgs: [serverEntryPath],
+      env,
+    });
+    return {
+      claudeCommand,
+      serverEntryPath,
+    };
+  }
+
   async spawnWorker({
     aibotSessionID,
     cwd,
@@ -494,19 +509,14 @@ export class WorkerProcessManager {
       bridgeToken,
       connectionConfig: this.connectionConfig,
     });
-    const claudeCommand = resolveClaudeCommand(this.env);
-    const serverEntryPath = resolveServerEntryPath(this.packageRoot);
+    const { claudeCommand } = await this.ensureUserMcpServerConfigured({
+      env: workerEnv,
+    });
     const claudeArgs = buildWorkerClaudeArgs({
       packageRoot: this.packageRoot,
       aibotSessionID: normalizedSessionID,
       claudeSessionID: normalizedClaudeSessionID,
       resumeSession,
-    });
-    await this.ensureUserMcpServer({
-      claudeCommand,
-      serverCommand: process.execPath,
-      serverArgs: [serverEntryPath],
-      env: workerEnv,
     });
     const {
       stdoutLogPath,
