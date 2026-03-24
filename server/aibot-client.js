@@ -77,7 +77,7 @@ export class AibotClient {
     this.pending = new Map();
     this.reconnectTimer = null;
     this.seq = 1;
-    this.suppressReconnectOnce = false;
+    this.suppressReconnectSocket = null;
     this.pingTimer = null;
     this.reconnectDelay = 2000;
     this.reconnectDelayMax = 30000;
@@ -247,8 +247,8 @@ export class AibotClient {
         connected: false,
         authed: false,
       });
-      if (this.suppressReconnectOnce) {
-        this.suppressReconnectOnce = false;
+      if (this.suppressReconnectSocket === socket) {
+        this.suppressReconnectSocket = null;
         return;
       }
       this.scheduleReconnect(this.reconnectDelay);
@@ -268,22 +268,35 @@ export class AibotClient {
       return;
     }
     this.ws = null;
-    this.suppressReconnectOnce = suppressReconnect;
+    if (suppressReconnect) {
+      this.suppressReconnectSocket = socket;
+    }
     this.rejectPending(new Error("clawpool-claude websocket restarted"));
+    let didClose = socket.readyState === WebSocket.CLOSED;
     await new Promise((resolve) => {
-      if (socket.readyState === WebSocket.CLOSED) {
+      if (didClose) {
         resolve();
         return;
       }
-      socket.once("close", resolve);
+      const handleClose = () => {
+        didClose = true;
+        resolve();
+      };
+      socket.once("close", handleClose);
       socket.close();
-      setTimeout(resolve, 500);
+      setTimeout(() => {
+        socket.off?.("close", handleClose);
+        resolve();
+      }, 500);
     });
     this.setStatus({
       connecting: false,
       connected: false,
       authed: false,
     });
+    if (!suppressReconnect && !didClose) {
+      this.scheduleReconnect(0);
+    }
   }
 
   startPingHeartbeat() {

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import {
   AibotClient,
   buildAuthPayload,
@@ -151,4 +152,49 @@ test("aibot client setSessionComposing forwards explicit kind", () => {
     active: false,
     ref_event_id: "evt-2",
   });
+});
+
+test("aibot client schedules reconnect when forced close does not emit close", async () => {
+  const client = makeClient();
+  const reconnects = [];
+
+  client.scheduleReconnect = (delayMs) => {
+    reconnects.push(delayMs);
+  };
+  client.ws = {
+    readyState: 1,
+    once() {},
+    off() {},
+    close() {},
+  };
+
+  await client.closeCurrentSocket({ suppressReconnect: false });
+
+  assert.deepEqual(reconnects, [0]);
+  assert.equal(client.ws, null);
+  assert.equal(client.status.connected, false);
+  assert.equal(client.status.authed, false);
+});
+
+test("aibot client only suppresses reconnect for the socket being intentionally closed", () => {
+  const client = makeClient();
+  const reconnects = [];
+
+  client.scheduleReconnect = (delayMs) => {
+    reconnects.push(delayMs);
+  };
+
+  const oldSocket = new EventEmitter();
+  oldSocket.readyState = 1;
+  client.suppressReconnectSocket = oldSocket;
+
+  const nextSocket = new EventEmitter();
+  nextSocket.readyState = 1;
+  client.ws = nextSocket;
+  client.bindSocket(nextSocket);
+
+  nextSocket.emit("close");
+
+  assert.deepEqual(reconnects, [client.reconnectDelay]);
+  assert.equal(client.suppressReconnectSocket, oldSocket);
 });
