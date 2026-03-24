@@ -107,6 +107,32 @@ export class SessionBindingStore {
     return { ...normalized };
   }
 
+  async updateClaudeSessionID(aibotSessionID, claudeSessionID, { updatedAt = Date.now() } = {}) {
+    const normalizedAibotSessionID = normalizeString(aibotSessionID);
+    const normalizedClaudeSessionID = normalizeString(claudeSessionID);
+    if (!normalizedAibotSessionID || !normalizedClaudeSessionID) {
+      throw new Error("aibot_session_id and claude_session_id are required");
+    }
+
+    const existing = this.state.bindings[normalizedAibotSessionID];
+    if (!existing) {
+      throw new Error("binding not found");
+    }
+
+    const next = normalizeBinding({
+      ...existing,
+      claude_session_id: normalizedClaudeSessionID,
+      updated_at: updatedAt,
+    });
+    if (!next) {
+      throw new Error("valid binding is required");
+    }
+
+    this.state.bindings[normalizedAibotSessionID] = next;
+    await this.save();
+    return { ...next };
+  }
+
   async save() {
     await mkdir(path.dirname(this.filePath), { recursive: true });
     await writeJSONFileAtomic(this.filePath, this.state);

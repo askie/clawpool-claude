@@ -74,6 +74,28 @@ test("binding registry rejects duplicate aibot session bindings", async () => {
   );
 });
 
+test("binding registry can rotate Claude session id for a fixed binding", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-binding-registry-"));
+  const registry = new BindingRegistry(path.join(dir, "binding-registry.json"));
+  await registry.load();
+
+  await registry.createBinding({
+    aibot_session_id: "chat-rotate",
+    claude_session_id: "claude-old",
+    cwd: "/repo/rotate",
+    worker_id: "worker-rotate",
+    worker_status: "stopped",
+    plugin_data_dir: "/data/chat-rotate",
+  });
+
+  const rotated = await registry.updateClaudeSessionID("chat-rotate", {
+    claudeSessionID: "claude-new",
+    updatedAt: 101,
+  });
+  assert.equal(rotated.claude_session_id, "claude-new");
+  assert.equal(rotated.aibot_session_id, "chat-rotate");
+});
+
 test("binding registry resets transient worker states on daemon startup", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-binding-registry-"));
   const registry = new BindingRegistry(path.join(dir, "binding-registry.json"));

@@ -95,6 +95,21 @@ export class BindingRegistry {
     return mergeBindingWithRuntime(binding, runtime);
   }
 
+  async updateClaudeSessionID(aibotSessionID, {
+    claudeSessionID,
+    updatedAt = Date.now(),
+  } = {}) {
+    const binding = await this.bindingStore.updateClaudeSessionID(
+      aibotSessionID,
+      claudeSessionID,
+      { updatedAt },
+    );
+    return mergeBindingWithRuntime(
+      binding,
+      this.workerRuntimeStore.get(binding.aibot_session_id),
+    );
+  }
+
   async markWorkerStarting(aibotSessionID, {
     workerID = "",
     workerControlURL = "",

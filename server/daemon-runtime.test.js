@@ -87,6 +87,12 @@ function assertOpenWorkspaceCard(payload, {
   });
 }
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+function assertUUID(value) {
+  assert.match(String(value ?? ""), uuidPattern);
+}
+
 test("daemon runtime open creates a fixed binding and spawns worker", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
@@ -1193,7 +1199,12 @@ test("daemon runtime falls back to a fresh Claude session when resume target is 
   assert.equal(workerCalls.length, 2);
   assert.equal(workerCalls[0].input.resumeSession, true);
   assert.equal(workerCalls[1].input.resumeSession, false);
-  assert.equal(workerCalls[1].input.claudeSessionID, "claude-4d3");
+  assertUUID(workerCalls[1].input.claudeSessionID);
+  assert.notEqual(workerCalls[1].input.claudeSessionID, "claude-4d3");
+  assert.equal(
+    registry.getByAibotSessionID("chat-4d3")?.claude_session_id,
+    workerCalls[1].input.claudeSessionID,
+  );
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].payload.event_id, "evt-4d3");
   assert.equal(delivered[0].via, "http://127.0.0.1:99922");
@@ -1277,7 +1288,12 @@ test("daemon runtime skips resume and starts fresh when Claude session file is m
 
   assert.equal(workerCalls.length, 1);
   assert.equal(workerCalls[0].input.resumeSession, false);
-  assert.equal(workerCalls[0].input.claudeSessionID, "claude-4d4");
+  assertUUID(workerCalls[0].input.claudeSessionID);
+  assert.notEqual(workerCalls[0].input.claudeSessionID, "claude-4d4");
+  assert.equal(
+    registry.getByAibotSessionID("chat-4d4")?.claude_session_id,
+    workerCalls[0].input.claudeSessionID,
+  );
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].payload.event_id, "evt-4d4");
   assert.equal(delivered[0].via, "http://127.0.0.1:99923");

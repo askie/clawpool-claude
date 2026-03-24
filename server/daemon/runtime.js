@@ -229,6 +229,13 @@ export class DaemonRuntime {
     });
   }
 
+  async rotateClaudeSession(binding) {
+    return this.bindingRegistry.updateClaudeSessionID(binding.aibot_session_id, {
+      claudeSessionID: randomUUID(),
+      updatedAt: Date.now(),
+    });
+  }
+
   async ensureWorker(binding) {
     if (canDeliverToWorker(binding)) {
       return {
@@ -255,18 +262,24 @@ export class DaemonRuntime {
       }
     }
 
-    await this.bindingRegistry.markWorkerStarting(binding.aibot_session_id, {
-      workerID: binding.worker_id || randomUUID(),
+    const workerID = binding.worker_id || randomUUID();
+    const resumeSession = await this.shouldResumeClaudeSession(binding);
+    let launchBinding = binding;
+    if (!resumeSession) {
+      launchBinding = await this.rotateClaudeSession(binding);
+    }
+
+    await this.bindingRegistry.markWorkerStarting(launchBinding.aibot_session_id, {
+      workerID,
       updatedAt: Date.now(),
       lastStartedAt: Date.now(),
     });
-    const resumeSession = await this.shouldResumeClaudeSession(binding);
     return this.workerProcessManager.spawnWorker({
-      aibotSessionID: binding.aibot_session_id,
-      cwd: binding.cwd,
-      pluginDataDir: binding.plugin_data_dir,
-      claudeSessionID: binding.claude_session_id,
-      workerID: binding.worker_id || randomUUID(),
+      aibotSessionID: launchBinding.aibot_session_id,
+      cwd: launchBinding.cwd,
+      pluginDataDir: launchBinding.plugin_data_dir,
+      claudeSessionID: launchBinding.claude_session_id,
+      workerID,
       bridgeURL: this.bridgeServer.getURL(),
       bridgeToken: this.bridgeServer.token,
       resumeSession,
@@ -758,17 +771,19 @@ export class DaemonRuntime {
       readyBinding?.worker_launch_failure === "resume_session_missing" &&
       normalizeString(binding.claude_session_id)
     ) {
-      await this.bindingRegistry.markWorkerStarting(binding.aibot_session_id, {
-        workerID: binding.worker_id || randomUUID(),
+      const fallbackBinding = await this.rotateClaudeSession(binding);
+      const workerID = fallbackBinding.worker_id || randomUUID();
+      await this.bindingRegistry.markWorkerStarting(fallbackBinding.aibot_session_id, {
+        workerID,
         updatedAt: Date.now(),
         lastStartedAt: Date.now(),
       });
       await this.workerProcessManager.spawnWorker({
-        aibotSessionID: binding.aibot_session_id,
-        cwd: binding.cwd,
-        pluginDataDir: binding.plugin_data_dir,
-        claudeSessionID: binding.claude_session_id,
-        workerID: binding.worker_id || randomUUID(),
+        aibotSessionID: fallbackBinding.aibot_session_id,
+        cwd: fallbackBinding.cwd,
+        pluginDataDir: fallbackBinding.plugin_data_dir,
+        claudeSessionID: fallbackBinding.claude_session_id,
+        workerID,
         bridgeURL: this.bridgeServer.getURL(),
         bridgeToken: this.bridgeServer.token,
         resumeSession: false,
