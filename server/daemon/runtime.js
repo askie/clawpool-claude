@@ -14,7 +14,19 @@ function normalizeString(value) {
 }
 
 async function ensureDirectoryExists(directoryPath) {
-  const info = await stat(directoryPath);
+  let info;
+  try {
+    info = await stat(directoryPath);
+  } catch (error) {
+    const code = normalizeString(error?.code);
+    if (code === "ENOENT") {
+      throw new Error("指定路径不存在。");
+    }
+    if (code === "EACCES" || code === "EPERM") {
+      throw new Error("指定路径不可访问。");
+    }
+    throw error;
+  }
   if (!info.isDirectory()) {
     throw new Error("指定路径不是目录。");
   }
@@ -61,6 +73,11 @@ function withWorkerLaunchFailure(binding, code) {
     ...(binding ?? {}),
     worker_launch_failure: normalizeString(code),
   };
+}
+
+function formatRuntimeError(error, fallback = "处理失败。") {
+  const message = normalizeString(error?.message || error);
+  return message || fallback;
 }
 
 export class DaemonRuntime {
@@ -169,9 +186,10 @@ export class DaemonRuntime {
     initialCwd = "",
     replySource = "",
   } = {}, result = {}) {
+    const fallbackText = normalizeString(summaryText) || "当前会话还没有绑定目录。";
     return this.respond(
       event,
-      "",
+      fallbackText,
       {
         ...(replySource ? { reply_source: replySource } : {}),
         biz_card: buildOpenWorkspaceCard({
@@ -889,21 +907,37 @@ export class DaemonRuntime {
       return true;
     }
 
-    switch (parsed.command) {
-      case "open":
-        await this.handleOpenCommand(event, parsed);
+    try {
+      switch (parsed.command) {
+        case "open":
+          await this.handleOpenCommand(event, parsed);
+          return true;
+        case "status":
+          await this.handleStatusCommand(event);
+          return true;
+        case "where":
+          await this.handleWhereCommand(event);
+          return true;
+        case "stop":
+          await this.handleStopCommand(event);
+          return true;
+        default:
+          return false;
+      }
+    } catch (error) {
+      const message = formatRuntimeError(error, "命令执行失败。");
+      if (parsed.command === "open") {
+        await this.respondWithOpenWorkspaceCard(event, {
+          summaryText: message,
+          detailText: "发送 open <目录> 来创建会话。",
+          replySource: "daemon_control_open_error",
+        });
         return true;
-      case "status":
-        await this.handleStatusCommand(event);
-        return true;
-      case "where":
-        await this.handleWhereCommand(event);
-        return true;
-      case "stop":
-        await this.handleStopCommand(event);
-        return true;
-      default:
-        return false;
+      }
+      await this.respond(event, message, {
+        reply_source: "daemon_control_error",
+      });
+      return true;
     }
   }
 
@@ -920,75 +954,98 @@ export class DaemonRuntime {
       sender_id: event.sender_id,
     });
     this.ack(event);
+    try {
+      const parsed = parseControlCommand(event.content);
+      if (parsed.matched) {
+        await this.handleControlCommand(event, parsed);
+        return;
+      }
 
-    const parsed = parseControlCommand(event.content);
-    if (parsed.matched) {
-      await this.handleControlCommand(event, parsed);
-      return;
-    }
-
-    const binding = this.bindingRegistry.getByAibotSessionID(event.session_id);
-    if (!binding) {
-      this.trace({
-        stage: "event_binding_missing",
-        event_id: event.event_id,
-        session_id: event.session_id,
-      }, "error");
-      await this.respondWithOpenWorkspaceCard(event, {
-        ...buildMissingBindingCardOptions(),
-        replySource: "daemon_route_missing",
-      });
-      return;
-    }
-
-    const pending = await this.trackPendingEvent(rawPayload);
-    if (pending) {
-      this.trace({
-        stage: "event_tracked",
-        event_id: pending.eventID,
-        session_id: pending.sessionID,
-        msg_id: pending.msgID,
-      });
-      if (this.hasInFlightSessionEvent(binding.aibot_session_id, {
-        excludeEventID: pending.eventID,
-      })) {
+      const binding = this.bindingRegistry.getByAibotSessionID(event.session_id);
+      if (!binding) {
         this.trace({
-          stage: "event_queued_behind_inflight",
-          event_id: pending.eventID,
-          session_id: pending.sessionID,
-          worker_id: binding?.worker_id,
+          stage: "event_binding_missing",
+          event_id: event.event_id,
+          session_id: event.session_id,
+        }, "error");
+        await this.respondWithOpenWorkspaceCard(event, {
+          ...buildMissingBindingCardOptions(),
+          replySource: "daemon_route_missing",
         });
         return;
       }
-    }
-    const deliveredBinding = await this.deliverWithRecovery(
-      binding.aibot_session_id,
-      rawPayload,
-      this.deliverEventToWorker,
-    );
-    if (deliveredBinding) {
-      if (pending) {
-        await this.markPendingEventDelivered(pending.eventID, deliveredBinding);
-      }
-      this.trace({
-        stage: "event_forwarded",
-        event_id: event.event_id,
-        session_id: event.session_id,
-        worker_id: deliveredBinding?.worker_id,
-      });
-      return;
-    }
 
-    const readyBinding = this.bindingRegistry.getByAibotSessionID(binding.aibot_session_id) ?? binding;
-    if (!readyBinding.worker_control_url || !readyBinding.worker_control_token) {
+      const pending = await this.trackPendingEvent(rawPayload);
+      if (pending) {
+        this.trace({
+          stage: "event_tracked",
+          event_id: pending.eventID,
+          session_id: pending.sessionID,
+          msg_id: pending.msgID,
+        });
+        if (this.hasInFlightSessionEvent(binding.aibot_session_id, {
+          excludeEventID: pending.eventID,
+        })) {
+          this.trace({
+            stage: "event_queued_behind_inflight",
+            event_id: pending.eventID,
+            session_id: pending.sessionID,
+            worker_id: binding?.worker_id,
+          });
+          return;
+        }
+      }
+      const deliveredBinding = await this.deliverWithRecovery(
+        binding.aibot_session_id,
+        rawPayload,
+        this.deliverEventToWorker,
+      );
+      if (deliveredBinding) {
+        if (pending) {
+          await this.markPendingEventDelivered(pending.eventID, deliveredBinding);
+        }
+        this.trace({
+          stage: "event_forwarded",
+          event_id: event.event_id,
+          session_id: event.session_id,
+          worker_id: deliveredBinding?.worker_id,
+        });
+        return;
+      }
+
+      const readyBinding = this.bindingRegistry.getByAibotSessionID(binding.aibot_session_id) ?? binding;
+      if (!readyBinding.worker_control_url || !readyBinding.worker_control_token) {
+        this.trace({
+          stage: "event_worker_not_ready",
+          event_id: event.event_id,
+          session_id: event.session_id,
+          worker_id: readyBinding?.worker_id,
+          status: readyBinding?.worker_status,
+        }, "error");
+      }
+    } catch (error) {
+      const message = formatRuntimeError(error);
       this.trace({
-        stage: "event_worker_not_ready",
+        stage: "event_handle_failed",
         event_id: event.event_id,
         session_id: event.session_id,
-        worker_id: readyBinding?.worker_id,
-        status: readyBinding?.worker_status,
+        error: message,
       }, "error");
-      return;
+      try {
+        await this.respond(event, `处理失败：${message}`, {
+          reply_source: "daemon_event_error",
+        }, {
+          status: "failed",
+          code: "daemon_event_handle_failed",
+          msg: message,
+        });
+      } catch {
+        this.complete(event, {
+          status: "failed",
+          code: "daemon_event_handle_failed",
+          msg: message,
+        });
+      }
     }
   }
 

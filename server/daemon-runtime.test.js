@@ -73,7 +73,7 @@ function assertOpenWorkspaceCard(payload, {
   summaryText,
   detailText,
 } = {}) {
-  assert.equal(payload.text, "");
+  assert.equal(payload.text, summaryText);
   assert.deepEqual(payload.extra?.biz_card, {
     version: 1,
     type: "claude_open_session",
@@ -400,6 +400,42 @@ test("daemon runtime invalid control command replies without timing out", async 
     detailText: "请输入工作目录来启动或恢复 Claude 会话。",
   });
   assertRespondedEventResult(sent, "evt-invalid");
+});
+
+test("daemon runtime open command with missing directory replies with open workspace card", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const missingDir = path.join(tempDir, "missing-dir");
+  const sent = [];
+  const workerCalls = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+  });
+
+  await runtime.handleEvent({
+    event_id: "evt-open-missing-dir",
+    session_id: "chat-open-missing-dir",
+    msg_id: "msg-open-missing-dir",
+    content: `/clawpool open ${missingDir}`,
+  });
+
+  assert.equal(workerCalls.length, 0);
+  assertOpenWorkspaceCard(sent.find((item) => item.kind === "text")?.payload, {
+    summaryText: "指定路径不存在。",
+    detailText: "发送 open <目录> 来创建会话。",
+  });
+  assertRespondedEventResult(sent, "evt-open-missing-dir");
 });
 
 test("daemon runtime delivers normal message to ready worker control", async () => {
