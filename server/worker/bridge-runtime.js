@@ -21,10 +21,10 @@ export class DaemonBridgeRuntime {
   } = {}) {
     this.env = env;
     this.logger = logger;
-    this.daemonBridgeURL = normalizeOptionalString(env.CLAWPOOL_DAEMON_BRIDGE_URL);
-    this.daemonBridgeToken = normalizeOptionalString(env.CLAWPOOL_DAEMON_BRIDGE_TOKEN);
+    this.daemonBridgeURL = normalizeOptionalString(env.CLAWPOOL_CLAUDE_DAEMON_BRIDGE_URL);
+    this.daemonBridgeToken = normalizeOptionalString(env.CLAWPOOL_CLAUDE_DAEMON_BRIDGE_TOKEN);
     this.daemonModeEnabled = (
-      env.CLAWPOOL_DAEMON_MODE === "1"
+      env.CLAWPOOL_CLAUDE_DAEMON_MODE === "1"
       && this.daemonBridgeURL
       && this.daemonBridgeToken
     );
@@ -287,13 +287,13 @@ export class DaemonBridgeRuntime {
     this.logger?.trace?.({
       component: "worker.bridge",
       stage: "worker_register_requested",
-      aibot_session_id: this.env.CLAWPOOL_AIBOT_SESSION_ID,
-      worker_id: this.env.CLAWPOOL_WORKER_ID,
+      aibot_session_id: this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID,
+      worker_id: this.env.CLAWPOOL_CLAUDE_WORKER_ID,
       pid,
     });
     return this.workerBridgeClient.registerWorker({
-      worker_id: normalizeOptionalString(this.env.CLAWPOOL_WORKER_ID),
-      aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_AIBOT_SESSION_ID),
+      worker_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_WORKER_ID),
+      aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
       claude_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_SESSION_ID),
       cwd,
       plugin_data_dir: normalizeOptionalString(pluginDataDir),
@@ -308,13 +308,13 @@ export class DaemonBridgeRuntime {
     this.logger?.trace?.({
       component: "worker.bridge",
       stage: "worker_status_requested",
-      aibot_session_id: this.env.CLAWPOOL_AIBOT_SESSION_ID,
-      worker_id: this.env.CLAWPOOL_WORKER_ID,
+      aibot_session_id: this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID,
+      worker_id: this.env.CLAWPOOL_CLAUDE_WORKER_ID,
       status: "connected",
     });
     return this.workerBridgeClient.sendStatusUpdate({
-      worker_id: normalizeOptionalString(this.env.CLAWPOOL_WORKER_ID),
-      aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_AIBOT_SESSION_ID),
+      worker_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_WORKER_ID),
+      aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
       claude_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_SESSION_ID),
       worker_control_url: this.getWorkerControlURL(),
       worker_control_token: this.getWorkerControlToken(),
@@ -335,13 +335,13 @@ export class DaemonBridgeRuntime {
       this.logger?.trace?.({
         component: "worker.bridge",
         stage: "worker_status_requested",
-        aibot_session_id: this.env.CLAWPOOL_AIBOT_SESSION_ID,
-        worker_id: this.env.CLAWPOOL_WORKER_ID,
+        aibot_session_id: this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID,
+        worker_id: this.env.CLAWPOOL_CLAUDE_WORKER_ID,
         status: "ready",
       });
       await this.workerBridgeClient.sendStatusUpdate({
-        worker_id: normalizeOptionalString(this.env.CLAWPOOL_WORKER_ID),
-        aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_AIBOT_SESSION_ID),
+        worker_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_WORKER_ID),
+        aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
         claude_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_SESSION_ID),
         worker_control_url: this.getWorkerControlURL(),
         worker_control_token: this.getWorkerControlToken(),
@@ -366,8 +366,8 @@ export class DaemonBridgeRuntime {
     try {
       await this.stopControlServer();
       await this.workerBridgeClient.sendStatusUpdate({
-        worker_id: normalizeOptionalString(this.env.CLAWPOOL_WORKER_ID),
-        aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_AIBOT_SESSION_ID),
+        worker_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_WORKER_ID),
+        aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
         claude_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_SESSION_ID),
         status: "stopped",
       });

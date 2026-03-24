@@ -84,14 +84,14 @@ test("default cli path does not leak host process env into daemon config writes"
   const outputs = [];
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-env-cli-"));
   const originalStdoutWrite = process.stdout.write;
-  const originalAgentID = process.env.CLAWPOOL_AGENT_ID;
-  const originalAPIKey = process.env.CLAWPOOL_API_KEY;
+  const originalAgentID = process.env.CLAWPOOL_CLAUDE_AGENT_ID;
+  const originalAPIKey = process.env.CLAWPOOL_CLAUDE_API_KEY;
   process.stdout.write = (chunk) => {
     outputs.push(String(chunk));
     return true;
   };
-  process.env.CLAWPOOL_AGENT_ID = "stale-agent";
-  process.env.CLAWPOOL_API_KEY = "stale-key";
+  process.env.CLAWPOOL_CLAUDE_AGENT_ID = "stale-agent";
+  process.env.CLAWPOOL_CLAUDE_API_KEY = "stale-key";
 
   try {
     const exitCode = await run([
@@ -116,14 +116,14 @@ test("default cli path does not leak host process env into daemon config writes"
   } finally {
     process.stdout.write = originalStdoutWrite;
     if (originalAgentID === undefined) {
-      delete process.env.CLAWPOOL_AGENT_ID;
+      delete process.env.CLAWPOOL_CLAUDE_AGENT_ID;
     } else {
-      process.env.CLAWPOOL_AGENT_ID = originalAgentID;
+      process.env.CLAWPOOL_CLAUDE_AGENT_ID = originalAgentID;
     }
     if (originalAPIKey === undefined) {
-      delete process.env.CLAWPOOL_API_KEY;
+      delete process.env.CLAWPOOL_CLAUDE_API_KEY;
     } else {
-      process.env.CLAWPOOL_API_KEY = originalAPIKey;
+      process.env.CLAWPOOL_CLAUDE_API_KEY = originalAPIKey;
     }
   }
 });
@@ -151,6 +151,33 @@ test("default cli path can enable visible Claude debug mode", async () => {
       "key-show",
     ], {});
     assert.equal(exitCode, 0);
+    assert.match(outputs.join(""), /daemon 还没有启动/u);
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+  }
+});
+
+test("default cli path accepts CLAWPOOL_CLAUDE_ENDPOINT env for daemon config", async () => {
+  const outputs = [];
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-endpoint-env-cli-"));
+  const originalStdoutWrite = process.stdout.write;
+  process.stdout.write = (chunk) => {
+    outputs.push(String(chunk));
+    return true;
+  };
+
+  try {
+    const exitCode = await run([
+      "--no-launch",
+      "--data-dir",
+      tempDir,
+    ], {
+      CLAWPOOL_CLAUDE_ENDPOINT: "ws://127.0.0.1:27189/v1/agent-api/ws?agent_id=2035251418226495488",
+      CLAWPOOL_CLAUDE_AGENT_ID: "2035251418226495488",
+      CLAWPOOL_CLAUDE_API_KEY: "ak_2035251418226495488_Gyav9cyaOHbAUP7qrOJ4JHv13FR0XgwB",
+    });
+    assert.equal(exitCode, 0);
+    assert.match(outputs.join(""), /Agent ID: 2035251418226495488/u);
     assert.match(outputs.join(""), /daemon 还没有启动/u);
   } finally {
     process.stdout.write = originalStdoutWrite;

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { mkdir } from "node:fs/promises";
 import { readJSONFile, writeJSONFileAtomic } from "./json-file.js";
+import { readConnectionEnv } from "./connection-env.js";
 
 export const DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT = 1200;
 
@@ -39,23 +40,20 @@ function normalizeConfigShape(input = {}) {
 
 function applyEnvOverrides(config, env = process.env) {
   const next = { ...config };
-  const wsURL = normalizeString(env.CLAWPOOL_WS_URL);
-  const agentID = normalizeString(env.CLAWPOOL_AGENT_ID);
-  const apiKey = normalizeString(env.CLAWPOOL_API_KEY);
-  const outboundTextChunkLimit = normalizePositiveInt(
-    env.CLAWPOOL_OUTBOUND_TEXT_CHUNK_LIMIT,
+  const connectionEnv = readConnectionEnv(env);
+  if (connectionEnv.ws_url) {
+    next.ws_url = connectionEnv.ws_url;
+  }
+  if (connectionEnv.agent_id) {
+    next.agent_id = connectionEnv.agent_id;
+  }
+  if (connectionEnv.api_key) {
+    next.api_key = connectionEnv.api_key;
+  }
+  next.outbound_text_chunk_limit = normalizePositiveInt(
+    connectionEnv.outbound_text_chunk_limit,
     next.outbound_text_chunk_limit,
   );
-  if (wsURL) {
-    next.ws_url = wsURL;
-  }
-  if (agentID) {
-    next.agent_id = agentID;
-  }
-  if (apiKey) {
-    next.api_key = apiKey;
-  }
-  next.outbound_text_chunk_limit = outboundTextChunkLimit;
   return next;
 }
 

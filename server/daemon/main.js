@@ -105,8 +105,8 @@ export async function run(argv = [], env = process.env) {
 
   const runtimeEnv = {
     ...env,
-    ...(options.dataDir ? { CLAWPOOL_DAEMON_DATA_DIR: options.dataDir } : {}),
-    ...(options.showClaude ? { CLAWPOOL_SHOW_CLAUDE_WINDOW: "1" } : {}),
+    ...(options.dataDir ? { CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: options.dataDir } : {}),
+    ...(options.showClaude ? { CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "1" } : {}),
   };
   const logger = createProcessLogger({ env: runtimeEnv });
 

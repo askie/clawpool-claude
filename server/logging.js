@@ -28,7 +28,7 @@ function listTraceEntries(fields) {
 }
 
 export function isTraceLoggingEnabled(env = process.env) {
-  return env.CLAWPOOL_TRACE_LOG === "1" || env.CLAWPOOL_E2E_DEBUG === "1";
+  return env.CLAWPOOL_CLAUDE_TRACE_LOG === "1" || env.CLAWPOOL_CLAUDE_E2E_DEBUG === "1";
 }
 
 export function formatTraceLine(fields = {}) {
@@ -55,8 +55,8 @@ export function createProcessLogger({
   env = process.env,
   name = "clawpool-claude",
 } = {}) {
-  const verboseDebugEnabled = env.CLAWPOOL_E2E_DEBUG === "1";
-  const verboseDebugLogPath = normalizeString(env.CLAWPOOL_E2E_DEBUG_LOG);
+  const verboseDebugEnabled = env.CLAWPOOL_CLAUDE_E2E_DEBUG === "1";
+  const verboseDebugLogPath = normalizeString(env.CLAWPOOL_CLAUDE_E2E_DEBUG_LOG);
 
   function write(prefix, message) {
     if (verboseDebugLogPath) {

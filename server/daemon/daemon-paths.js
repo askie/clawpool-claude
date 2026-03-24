@@ -10,7 +10,7 @@ function sanitizeSegment(value) {
 }
 
 export function resolveDaemonDataDir(env = process.env) {
-  const explicit = normalizeString(env.CLAWPOOL_DAEMON_DATA_DIR);
+  const explicit = normalizeString(env.CLAWPOOL_CLAUDE_DAEMON_DATA_DIR);
   if (explicit) {
     return explicit;
   }

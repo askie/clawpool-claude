@@ -20,7 +20,8 @@ test("loadConfig merges stored values with cli input and environment", async () 
   const config = await loadConfig({
     dataDir: tempDir,
     env: {
-      CLAWPOOL_API_KEY: "env-key",
+      CLAWPOOL_CLAUDE_ENDPOINT: "ws://env.example/ws",
+      CLAWPOOL_CLAUDE_API_KEY: "env-key",
     },
     args: {
       wsUrl: "wss://example.com/ws",
@@ -31,7 +32,7 @@ test("loadConfig merges stored values with cli input and environment", async () 
 
   assert.deepEqual(config, {
     schema_version: 1,
-    ws_url: "wss://example.com/ws",
+    ws_url: "ws://env.example/ws",
     agent_id: "agent-1",
     api_key: "env-key",
     outbound_text_chunk_limit: 2048,

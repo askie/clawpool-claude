@@ -79,8 +79,8 @@ export async function inspectDaemonProcessState({
   dataDir = resolveDaemonDataDir(env),
   isProcessRunningImpl = isProcessRunning,
 } = {}) {
-  const statusPath = resolveDaemonStatusPath({ ...env, CLAWPOOL_DAEMON_DATA_DIR: dataDir });
-  const lockPath = resolveDaemonLockPath({ ...env, CLAWPOOL_DAEMON_DATA_DIR: dataDir });
+  const statusPath = resolveDaemonStatusPath({ ...env, CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: dataDir });
+  const lockPath = resolveDaemonLockPath({ ...env, CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: dataDir });
   const [status, lock] = await Promise.all([
     readJSONOrNull(statusPath),
     readJSONOrNull(lockPath),
@@ -122,11 +122,11 @@ export class DaemonProcessState {
     this.isProcessRunningImpl = isProcessRunningImpl;
     this.lockPath = resolveDaemonLockPath({
       ...env,
-      CLAWPOOL_DAEMON_DATA_DIR: dataDir,
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: dataDir,
     });
     this.statusPath = resolveDaemonStatusPath({
       ...env,
-      CLAWPOOL_DAEMON_DATA_DIR: dataDir,
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: dataDir,
     });
     this.startedAt = 0;
     this.acquired = false;

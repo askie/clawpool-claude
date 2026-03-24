@@ -126,8 +126,8 @@ function createServiceManager(env = process.env) {
 function buildRuntimeEnv(options, env) {
   return {
     ...env,
-    ...(options.dataDir ? { CLAWPOOL_DAEMON_DATA_DIR: options.dataDir } : {}),
-    ...(options.showClaude ? { CLAWPOOL_SHOW_CLAUDE_WINDOW: "1" } : {}),
+    ...(options.dataDir ? { CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: options.dataDir } : {}),
+    ...(options.showClaude ? { CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "1" } : {}),
   };
 }
 

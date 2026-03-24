@@ -32,15 +32,15 @@ test("buildWorkerEnvironment passes daemon connection config to worker", () => {
 
   assert.equal(env.PATH, "/usr/bin");
   assert.equal(env.CLAUDE_PLUGIN_DATA, "/tmp/plugin-data");
-  assert.equal(env.CLAWPOOL_AIBOT_SESSION_ID, "chat-1");
+  assert.equal(env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID, "chat-1");
   assert.equal(env.CLAWPOOL_CLAUDE_SESSION_ID, "claude-1");
-  assert.equal(env.CLAWPOOL_WORKER_ID, "worker-1");
-  assert.equal(env.CLAWPOOL_DAEMON_BRIDGE_URL, "http://127.0.0.1:9000");
-  assert.equal(env.CLAWPOOL_DAEMON_BRIDGE_TOKEN, "bridge-token");
-  assert.equal(env.CLAWPOOL_WS_URL, "ws://example.com/ws");
-  assert.equal(env.CLAWPOOL_AGENT_ID, "agent-1");
-  assert.equal(env.CLAWPOOL_API_KEY, "secret-key");
-  assert.equal(env.CLAWPOOL_OUTBOUND_TEXT_CHUNK_LIMIT, "2048");
+  assert.equal(env.CLAWPOOL_CLAUDE_WORKER_ID, "worker-1");
+  assert.equal(env.CLAWPOOL_CLAUDE_DAEMON_BRIDGE_URL, "http://127.0.0.1:9000");
+  assert.equal(env.CLAWPOOL_CLAUDE_DAEMON_BRIDGE_TOKEN, "bridge-token");
+  assert.equal(env.CLAWPOOL_CLAUDE_WS_URL, "ws://example.com/ws");
+  assert.equal(env.CLAWPOOL_CLAUDE_AGENT_ID, "agent-1");
+  assert.equal(env.CLAWPOOL_CLAUDE_API_KEY, "secret-key");
+  assert.equal(env.CLAWPOOL_CLAUDE_OUTBOUND_TEXT_CHUNK_LIMIT, "2048");
 });
 
 test("buildWorkerClaudeArgs launches Claude with plugin-dir development channel args", () => {
@@ -110,7 +110,7 @@ process.stdin.once("data", async (chunk) => {
     env: {
       ...process.env,
       CLAUDE_BIN: fakeClaudePath,
-      CLAWPOOL_SHOW_CLAUDE_WINDOW: "0",
+      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
       TEST_OUTPUT_PATH: outputPath,
     },
     packageRoot: tempDir,
@@ -162,7 +162,7 @@ await writeFile(process.env.TEST_OUTPUT_PATH, process.stdout.isTTY ? "tty" : "no
     env: {
       ...process.env,
       CLAUDE_BIN: fakeClaudePath,
-      CLAWPOOL_SHOW_CLAUDE_WINDOW: "0",
+      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
       TEST_OUTPUT_PATH: outputPath,
     },
     packageRoot: tempDir,
@@ -215,7 +215,7 @@ process.stdin.once("data", async (chunk) => {
     env: {
       ...process.env,
       CLAUDE_BIN: fakeClaudePath,
-      CLAWPOOL_SHOW_CLAUDE_WINDOW: "0",
+      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
       TEST_OUTPUT_PATH: outputPath,
     },
     packageRoot: tempDir,
@@ -236,8 +236,8 @@ process.stdin.once("data", async (chunk) => {
   assert.equal(ensured[0].claudeCommand, fakeClaudePath);
   assert.equal(ensured[0].serverCommand, process.execPath);
   assert.deepEqual(ensured[0].serverArgs, [path.join(tempDir, "server", "main.js")]);
-  assert.equal(ensured[0].env.CLAWPOOL_DAEMON_MODE, "1");
-  assert.equal(ensured[0].env.CLAWPOOL_AIBOT_SESSION_ID, "chat-mcp");
+  assert.equal(ensured[0].env.CLAWPOOL_CLAUDE_DAEMON_MODE, "1");
+  assert.equal(ensured[0].env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID, "chat-mcp");
 });
 
 test("worker process manager can ensure the user-scoped MCP server before any worker starts", async () => {
@@ -271,7 +271,7 @@ test("spawnWorker terminates stale visible terminal wrapper processes before rel
   const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
   const logsDir = resolveWorkerLogsDir("chat-stale", {
     ...process.env,
-    CLAWPOOL_DAEMON_DATA_DIR: tempDir,
+    CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
   });
   const scriptPath = path.join(logsDir, "old.launch.command");
   const expectPath = path.join(logsDir, "old.launch.expect");
@@ -299,8 +299,8 @@ test("spawnWorker terminates stale visible terminal wrapper processes before rel
     env: {
       ...process.env,
       CLAUDE_BIN: fakeClaudePath,
-      CLAWPOOL_SHOW_CLAUDE_WINDOW: "0",
-      CLAWPOOL_DAEMON_DATA_DIR: tempDir,
+      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
     },
     packageRoot: tempDir,
     spawnImpl,
@@ -343,7 +343,7 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude
     ],
     env: {
       CLAUDE_PLUGIN_DATA: "/tmp/plugin data",
-      CLAWPOOL_AIBOT_SESSION_ID: "chat-visible",
+      CLAWPOOL_CLAUDE_AIBOT_SESSION_ID: "chat-visible",
       "npm_package_bin_clawpool-claude": "./bin/clawpool-claude.js",
     },
   });
@@ -357,7 +357,7 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude
   assert.match(script, /\/usr\/bin\/env /u);
   assert.doesNotMatch(script, /exec \/usr\/bin\/env /u);
   assert.match(script, /'CLAUDE_PLUGIN_DATA=\/tmp\/plugin data'/u);
-  assert.match(script, /'CLAWPOOL_AIBOT_SESSION_ID=chat-visible'/u);
+  assert.match(script, /'CLAWPOOL_CLAUDE_AIBOT_SESSION_ID=chat-visible'/u);
   assert.match(script, /'npm_package_bin_clawpool-claude=\.\/bin\/clawpool-claude\.js'/u);
   assert.match(script, /\/usr\/bin\/expect '.*worker-visible\.launch\.expect'/u);
   assert.match(script, /cd '\/tmp\/demo path'/u);
@@ -383,8 +383,8 @@ test("worker process manager detects missing Claude session resume failure from 
   const manager = new WorkerProcessManager({
     env: {
       ...process.env,
-      CLAWPOOL_DAEMON_DATA_DIR: tempDir,
-      CLAWPOOL_SHOW_CLAUDE_WINDOW: "0",
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
     },
     packageRoot: tempDir,
   });

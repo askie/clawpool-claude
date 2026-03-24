@@ -6,8 +6,8 @@ function normalizeString(value) {
   return String(value ?? "").trim();
 }
 
-const verboseDebugEnabled = process.env.CLAWPOOL_E2E_DEBUG === "1";
-const verboseDebugLogPath = normalizeString(process.env.CLAWPOOL_E2E_DEBUG_LOG);
+const verboseDebugEnabled = process.env.CLAWPOOL_CLAUDE_E2E_DEBUG === "1";
+const verboseDebugLogPath = normalizeString(process.env.CLAWPOOL_CLAUDE_E2E_DEBUG_LOG);
 
 function logDebug(message) {
   if (!verboseDebugEnabled) {

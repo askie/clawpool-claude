@@ -67,7 +67,7 @@ function buildShellEnvArgs(env) {
 }
 
 function shouldShowClaudeWindow(env = process.env) {
-  return env.CLAWPOOL_SHOW_CLAUDE_WINDOW === "1";
+  return env.CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW === "1";
 }
 
 function buildWorkerSessionName(aibotSessionID) {
@@ -96,20 +96,20 @@ export function buildWorkerEnvironment({
   const env = {
     ...baseEnv,
     CLAUDE_PLUGIN_DATA: normalizeString(pluginDataDir),
-    CLAWPOOL_AIBOT_SESSION_ID: normalizeString(aibotSessionID),
+    CLAWPOOL_CLAUDE_AIBOT_SESSION_ID: normalizeString(aibotSessionID),
     CLAWPOOL_CLAUDE_SESSION_ID: normalizeString(claudeSessionID),
-    CLAWPOOL_DAEMON_MODE: "1",
-    CLAWPOOL_WORKER_ID: normalizeString(workerID),
-    CLAWPOOL_DAEMON_BRIDGE_URL: normalizeString(bridgeURL),
-    CLAWPOOL_DAEMON_BRIDGE_TOKEN: normalizeString(bridgeToken),
+    CLAWPOOL_CLAUDE_DAEMON_MODE: "1",
+    CLAWPOOL_CLAUDE_WORKER_ID: normalizeString(workerID),
+    CLAWPOOL_CLAUDE_DAEMON_BRIDGE_URL: normalizeString(bridgeURL),
+    CLAWPOOL_CLAUDE_DAEMON_BRIDGE_TOKEN: normalizeString(bridgeToken),
   };
 
   if (connectionConfig) {
-    env.CLAWPOOL_WS_URL = normalizeString(connectionConfig.wsURL);
-    env.CLAWPOOL_AGENT_ID = normalizeString(connectionConfig.agentID);
-    env.CLAWPOOL_API_KEY = normalizeString(connectionConfig.apiKey);
+    env.CLAWPOOL_CLAUDE_WS_URL = normalizeString(connectionConfig.wsURL);
+    env.CLAWPOOL_CLAUDE_AGENT_ID = normalizeString(connectionConfig.agentID);
+    env.CLAWPOOL_CLAUDE_API_KEY = normalizeString(connectionConfig.apiKey);
     if (Number.isFinite(Number(connectionConfig.outboundTextChunkLimit))) {
-      env.CLAWPOOL_OUTBOUND_TEXT_CHUNK_LIMIT = String(
+      env.CLAWPOOL_CLAUDE_OUTBOUND_TEXT_CHUNK_LIMIT = String(
         Math.floor(Number(connectionConfig.outboundTextChunkLimit)),
       );
     }

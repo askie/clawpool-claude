@@ -167,3 +167,14 @@ npm run daemon
 ```
 
 这样 daemon 进程和 Claude 会话里加载的 worker，都会使用当前刚编译出来的开发产物。
+
+如果你想让 `npm run daemon` 直接从环境变量取连接参数，可以这样跑：
+
+```bash
+CLAWPOOL_CLAUDE_ENDPOINT='ws://127.0.0.1:27189/v1/agent-api/ws?agent_id=2035251418226495488' \
+CLAWPOOL_CLAUDE_AGENT_ID='2035251418226495488' \
+CLAWPOOL_CLAUDE_API_KEY='ak_2035251418226495488_Gyav9cyaOHbAUP7qrOJ4JHv13FR0XgwB' \
+npm run daemon -- --no-launch
+```
+
+`CLAWPOOL_CLAUDE_WS_URL` 也仍然可用；如果两边都传了，daemon 会优先用环境变量。

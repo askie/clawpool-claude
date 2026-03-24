@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT } from "../server/config-store.js";
+import { readConnectionEnv } from "../server/connection-env.js";
 
 const serverName = "clawpool-claude";
 const configFileName = "clawpool-claude-config.json";
@@ -49,7 +50,7 @@ export function resolveDataDir(input) {
   if (explicitDir) {
     return explicitDir;
   }
-  const envDir = normalizeString(input.env?.CLAUDE_PLUGIN_DATA || input.env?.CLAWPOOL_DATA_DIR);
+  const envDir = normalizeString(input.env?.CLAUDE_PLUGIN_DATA || input.env?.CLAWPOOL_CLAUDE_DATA_DIR);
   if (envDir) {
     return envDir;
   }
@@ -83,13 +84,16 @@ async function readStoredConfig(filePath) {
 export async function loadConfig({ dataDir, env = process.env, args = {} }) {
   const configPath = resolveConfigPath(dataDir);
   const stored = await readStoredConfig(configPath);
+  const connectionEnv = readConnectionEnv(env);
   return {
     schema_version: 1,
-    ws_url: normalizeString(args.wsUrl || env.CLAWPOOL_WS_URL || stored.ws_url),
-    agent_id: normalizeString(args.agentId || env.CLAWPOOL_AGENT_ID || stored.agent_id),
-    api_key: normalizeString(args.apiKey || env.CLAWPOOL_API_KEY || stored.api_key),
+    ws_url: normalizeString(connectionEnv.ws_url || args.wsUrl || stored.ws_url),
+    agent_id: normalizeString(connectionEnv.agent_id || args.agentId || stored.agent_id),
+    api_key: normalizeString(connectionEnv.api_key || args.apiKey || stored.api_key),
     outbound_text_chunk_limit: normalizePositiveInteger(
-      args.chunkLimit || env.CLAWPOOL_TEXT_CHUNK_LIMIT || stored.outbound_text_chunk_limit,
+      connectionEnv.outbound_text_chunk_limit
+      || args.chunkLimit
+      || stored.outbound_text_chunk_limit,
       DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT,
     ),
   };

@@ -13,9 +13,9 @@ test("worker entry stays alive without daemon bridge for MCP health checks", asy
     env: {
       ...process.env,
       CLAUDE_PLUGIN_DATA: pluginDataDir,
-      CLAWPOOL_DAEMON_MODE: "",
-      CLAWPOOL_DAEMON_BRIDGE_URL: "",
-      CLAWPOOL_DAEMON_BRIDGE_TOKEN: "",
+      CLAWPOOL_CLAUDE_DAEMON_MODE: "",
+      CLAWPOOL_CLAUDE_DAEMON_BRIDGE_URL: "",
+      CLAWPOOL_CLAUDE_DAEMON_BRIDGE_TOKEN: "",
     },
     stdio: ["pipe", "pipe", "pipe"],
   });

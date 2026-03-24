@@ -4,7 +4,7 @@ import { resolveSessionContextsDir } from "../server/paths.js";
 import { extractLatestClawpoolChannelTag } from "../server/transcript-channel-context.js";
 
 function logDebug(message) {
-  if (process.env.CLAWPOOL_E2E_DEBUG !== "1") {
+  if (process.env.CLAWPOOL_CLAUDE_E2E_DEBUG !== "1") {
     return;
   }
   process.stderr.write(`[user-prompt-submit-hook] ${message}\n`);

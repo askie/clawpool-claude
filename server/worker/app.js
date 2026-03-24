@@ -113,7 +113,7 @@ export function createWorkerApp({ env = process.env } = {}) {
       interactionService?.finalizeEventSafely?.(eventID, result, context) ?? false
     ),
     logger,
-    aibotSessionID: normalizeOptionalString(env.CLAWPOOL_AIBOT_SESSION_ID),
+    aibotSessionID: normalizeOptionalString(env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
   });
 
   interactionService = new WorkerInteractionService({
