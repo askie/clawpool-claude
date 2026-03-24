@@ -163,7 +163,9 @@ export class WorkerPermissionRelayService {
         extra: {
           reply_source: "claude_permission_request",
           approval_request_id: request.request_id,
-          biz_card: buildPermissionRelayRequestBizCard(request),
+          biz_card: buildPermissionRelayRequestBizCard(request, {
+            expiresAtMs: request.created_at + pendingRequestTtlMs,
+          }),
         },
       });
       this.pendingRequests.set(request.request_id, {

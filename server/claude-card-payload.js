@@ -25,10 +25,10 @@ function normalizeQuestionOptions(question) {
     .filter(Boolean);
 }
 
-export function buildApprovalRequestBizCard(request) {
+export function buildApprovalRequestBizCard(request, { expiresAtMs } = {}) {
   const requestID = normalizeString(request?.request_id);
   const { allowedDecisions, decisionCommands } = buildApprovalDecisionCommands(request);
-  return buildMessageCardEnvelope("exec_approval", {
+  const payload = {
     approval_id: requestID,
     approval_slug: requestID,
     approval_command_id: requestID,
@@ -36,12 +36,17 @@ export function buildApprovalRequestBizCard(request) {
     host: claudeHostLabel,
     allowed_decisions: allowedDecisions,
     decision_commands: decisionCommands,
-  });
+  };
+  if (expiresAtMs > 0) {
+    payload.expires_at_ms = expiresAtMs;
+    payload.expires_in_seconds = Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000));
+  }
+  return buildMessageCardEnvelope("exec_approval", payload);
 }
 
-export function buildPermissionRelayRequestBizCard(request) {
+export function buildPermissionRelayRequestBizCard(request, { expiresAtMs } = {}) {
   const requestID = normalizeString(request?.request_id);
-  return buildMessageCardEnvelope("exec_approval", {
+  const payload = {
     approval_id: requestID,
     approval_slug: requestID,
     approval_command_id: requestID,
@@ -52,7 +57,12 @@ export function buildPermissionRelayRequestBizCard(request) {
       "allow-once": `yes ${requestID}`,
       deny: `no ${requestID}`,
     },
-  });
+  };
+  if (expiresAtMs > 0) {
+    payload.expires_at_ms = expiresAtMs;
+    payload.expires_in_seconds = Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000));
+  }
+  return buildMessageCardEnvelope("exec_approval", payload);
 }
 
 export function buildApprovalResolutionBizCard({
