@@ -80,6 +80,17 @@ function formatRuntimeError(error, fallback = "处理失败。") {
   return message || fallback;
 }
 
+const defaultDeliveredInFlightMaxAgeMs = 60 * 1000;
+const queuedEventRetryDelayMs = 200;
+
+function normalizeNonNegativeInt(value, fallbackValue) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallbackValue;
+  }
+  return Math.max(0, Math.floor(numeric));
+}
+
 export class DaemonRuntime {
   constructor({
     env = process.env,
@@ -93,6 +104,7 @@ export class DaemonRuntime {
     logger = null,
     workerRuntimeHealthCheckMs = 1000,
     isProcessRunning = defaultIsProcessRunning,
+    deliveredInFlightMaxAgeMs = null,
   }) {
     this.env = env;
     this.bindingRegistry = bindingRegistry;
@@ -115,6 +127,10 @@ export class DaemonRuntime {
     this.workerRuntimeHealthCheckMs = Number.isFinite(Number(workerRuntimeHealthCheckMs))
       ? Math.max(0, Math.floor(Number(workerRuntimeHealthCheckMs)))
       : 1000;
+    this.deliveredInFlightMaxAgeMs = normalizeNonNegativeInt(
+      deliveredInFlightMaxAgeMs ?? env.CLAWPOOL_CLAUDE_DELIVERED_INFLIGHT_MAX_AGE_MS,
+      defaultDeliveredInFlightMaxAgeMs,
+    );
     this.isProcessRunning = typeof isProcessRunning === "function"
       ? isProcessRunning
       : defaultIsProcessRunning;
@@ -417,7 +433,31 @@ export class DaemonRuntime {
       if (excludedEventID && normalizeString(record.eventID) === excludedEventID) {
         return false;
       }
-      return ["dispatching", "delivered"].includes(normalizeString(record.delivery_state));
+      const deliveryState = normalizeString(record.delivery_state);
+      if (deliveryState === "dispatching") {
+        return true;
+      }
+      if (deliveryState !== "delivered") {
+        return false;
+      }
+      if (this.deliveredInFlightMaxAgeMs <= 0) {
+        return false;
+      }
+      const updatedAt = Number(record.updated_at ?? 0);
+      if (!Number.isFinite(updatedAt) || updatedAt <= 0) {
+        return true;
+      }
+      const ageMs = Date.now() - updatedAt;
+      if (ageMs <= this.deliveredInFlightMaxAgeMs) {
+        return true;
+      }
+      this.trace({
+        stage: "delivered_inflight_released",
+        session_id: normalizedSessionID,
+        event_id: record.eventID,
+        age_ms: ageMs,
+      }, "error");
+      return false;
     });
   }
 
@@ -451,6 +491,7 @@ export class DaemonRuntime {
           event_id: currentRecord.eventID,
           session_id: currentRecord.sessionID,
           worker_id: binding?.worker_id,
+          attempt: 1,
         });
         await this.markPendingEventDispatching(currentRecord.eventID, binding);
         await this.deliverEventToWorker(binding, currentRecord.rawPayload);
@@ -465,10 +506,55 @@ export class DaemonRuntime {
       } catch (error) {
         await this.markPendingEventPending(currentRecord.eventID);
         this.trace({
-          stage: "pending_event_flush_failed",
+          stage: "pending_event_flush_retrying",
           event_id: currentRecord.eventID,
           session_id: currentRecord.sessionID,
           worker_id: binding?.worker_id,
+          attempt: 1,
+          error: error instanceof Error ? error.message : String(error),
+        }, "error");
+      }
+
+      await sleep(queuedEventRetryDelayMs);
+      const latestBinding = this.bindingRegistry.getByAibotSessionID(normalizedSessionID);
+      if (!canDeliverToWorker(latestBinding)) {
+        this.trace({
+          stage: "pending_event_flush_retry_aborted",
+          event_id: currentRecord.eventID,
+          session_id: currentRecord.sessionID,
+          worker_id: latestBinding?.worker_id,
+          status: latestBinding?.worker_status,
+        }, "error");
+        return;
+      }
+
+      try {
+        this.trace({
+          stage: "pending_event_flushing",
+          event_id: currentRecord.eventID,
+          session_id: currentRecord.sessionID,
+          worker_id: latestBinding?.worker_id,
+          attempt: 2,
+        });
+        await this.markPendingEventDispatching(currentRecord.eventID, latestBinding);
+        await this.deliverEventToWorker(latestBinding, currentRecord.rawPayload);
+        await this.markPendingEventDelivered(currentRecord.eventID, latestBinding);
+        this.trace({
+          stage: "pending_event_flushed",
+          event_id: currentRecord.eventID,
+          session_id: currentRecord.sessionID,
+          worker_id: latestBinding?.worker_id,
+          attempt: 2,
+        });
+        return;
+      } catch (error) {
+        await this.markPendingEventPending(currentRecord.eventID);
+        this.trace({
+          stage: "pending_event_flush_failed",
+          event_id: currentRecord.eventID,
+          session_id: currentRecord.sessionID,
+          worker_id: latestBinding?.worker_id || binding?.worker_id,
+          attempt: 2,
           error: error instanceof Error ? error.message : String(error),
         }, "error");
         return;

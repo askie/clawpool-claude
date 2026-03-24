@@ -641,6 +641,141 @@ test("daemon runtime does not flush a queued event while another session event i
   assert.equal(delivered[0].event_id, "evt-serial-ready-2");
 });
 
+test("daemon runtime can release queued events when delivered in-flight blocking is disabled", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const delivered = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-serial-free",
+    claude_session_id: "claude-serial-free",
+    cwd: tempDir,
+    worker_id: "worker-serial-free",
+    worker_status: "ready",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+    worker_control_url: "http://127.0.0.1:99971",
+    worker_control_token: "token-serial-free",
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    deliveredInFlightMaxAgeMs: 0,
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          delivered.push(payload);
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await runtime.handleEvent({
+    event_id: "evt-serial-free-1",
+    session_id: "chat-serial-free",
+    msg_id: "msg-serial-free-1",
+    sender_id: "sender-serial-free",
+    content: "first",
+  });
+  await runtime.handleEvent({
+    event_id: "evt-serial-free-2",
+    session_id: "chat-serial-free",
+    msg_id: "msg-serial-free-2",
+    sender_id: "sender-serial-free",
+    content: "second",
+  });
+
+  assert.equal(delivered.length, 2);
+  assert.equal(delivered[0].event_id, "evt-serial-free-1");
+  assert.equal(delivered[1].event_id, "evt-serial-free-2");
+  assert.equal(runtime.getPendingEvent("evt-serial-free-2")?.delivery_state, "delivered");
+});
+
+test("daemon runtime retries one time when flushing a queued event fails transiently", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const delivered = [];
+  let attempts = 0;
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  const binding = await registry.createBinding({
+    aibot_session_id: "chat-flush-retry",
+    claude_session_id: "claude-flush-retry",
+    cwd: tempDir,
+    worker_id: "worker-flush-retry",
+    worker_status: "ready",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+    worker_control_url: "http://127.0.0.1:99972",
+    worker_control_token: "token-flush-retry",
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          attempts += 1;
+          if (payload.event_id === "evt-flush-retry-2" && attempts === 1) {
+            throw new Error("transient delivery failure");
+          }
+          delivered.push(payload);
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await runtime.trackPendingEvent({
+    event_id: "evt-flush-retry-1",
+    session_id: "chat-flush-retry",
+    msg_id: "msg-flush-retry-1",
+    sender_id: "sender-flush-retry",
+    content: "first",
+  });
+  await runtime.markPendingEventDelivered("evt-flush-retry-1", binding);
+  await runtime.trackPendingEvent({
+    event_id: "evt-flush-retry-2",
+    session_id: "chat-flush-retry",
+    msg_id: "msg-flush-retry-2",
+    sender_id: "sender-flush-retry",
+    content: "second",
+  });
+
+  await runtime.handleEventCompleted("evt-flush-retry-1");
+
+  assert.equal(attempts, 2);
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].event_id, "evt-flush-retry-2");
+  assert.equal(runtime.getPendingEvent("evt-flush-retry-2")?.delivery_state, "delivered");
+});
+
 test("daemon runtime resumes the bound Claude session when restarting a stopped worker", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
