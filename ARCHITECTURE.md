@@ -35,10 +35,20 @@ clawpool-claude
 
 当 Claude 需要审批或补充信息时：
 
-1. 请求先落到本地数据目录
-2. 插件把请求发回对应的 ClawPool chat
-3. 用户在 ClawPool 里用命令回复
-4. 结果再回写给 Claude
+1. 审批走 Claude 原生 channel permission relay
+2. worker 把审批请求发回对应的 ClawPool chat，并复用 AIBot 审批卡
+3. 用户点卡片按钮，或手工回复 `yes <request_id>` / `no <request_id>`
+4. verdict 直接回送给 Claude
+
+补充提问主路径改成 Claude 官方 `Elicitation`：
+
+1. Claude 触发表单型 `Elicitation`
+2. hook 把请求落到本地数据目录，并映射成现有的提问卡片
+3. worker 把提问卡发回对应的 ClawPool chat
+4. 用户直接在卡片里提交答案
+5. hook 读到结果后，再按 Claude 的 `Elicitation` 结果格式回送
+
+不适合当前卡片的提问类型，会继续留在 Claude 本地处理。
 
 ## 本地数据
 
@@ -56,7 +66,7 @@ clawpool-claude
 - 每个会话独立的插件数据目录
 - 访问控制
 - 审批请求
-- 提问请求
+- 用户输入请求
 - 会话上下文
 - 事件状态
 

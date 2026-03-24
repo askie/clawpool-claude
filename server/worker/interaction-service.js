@@ -55,7 +55,8 @@ export class WorkerInteractionService {
     eventStatesDir,
     mcp,
     bridge,
-    humanLoopService = null,
+    permissionRelayService = null,
+    elicitationRelayService = null,
     logger,
   }) {
     this.eventState = eventState;
@@ -64,7 +65,8 @@ export class WorkerInteractionService {
     this.eventStatesDir = eventStatesDir;
     this.mcp = mcp;
     this.bridge = bridge;
-    this.humanLoopService = humanLoopService;
+    this.permissionRelayService = permissionRelayService;
+    this.elicitationRelayService = elicitationRelayService;
     this.logger = logger;
     this.composingKeepaliveTimers = new Map();
     this.resultTimeouts = new ResultTimeoutManager({
@@ -350,11 +352,11 @@ export class WorkerInteractionService {
   }
 
   startDispatchPumps() {
-    this.humanLoopService?.startDispatchPumps?.();
+    this.elicitationRelayService?.startDispatchPumps?.();
   }
 
   stopDispatchPumps() {
-    this.humanLoopService?.stopDispatchPumps?.();
+    this.elicitationRelayService?.stopDispatchPumps?.();
   }
 
   async handleInboundEvent(rawPayload) {
@@ -532,16 +534,29 @@ export class WorkerInteractionService {
       return;
     }
 
-    const humanLoopCommand = await this.humanLoopService?.handleCommandEvent?.(event);
-    if (humanLoopCommand?.handled) {
+    const permissionRelayCommand = await this.permissionRelayService?.handleCommandEvent?.(event);
+    if (permissionRelayCommand?.handled) {
       this.logger.trace?.({
         component: "worker.interaction",
-        stage: "human_loop_command_handled",
+        stage: "permission_relay_command_handled",
         event_id: event.event_id,
         session_id: event.session_id,
-        kind: humanLoopCommand.kind,
+        kind: permissionRelayCommand.kind,
       });
-      this.logger.debug(`event ${humanLoopCommand.kind}-command event=${event.event_id}`);
+      this.logger.debug(`event ${permissionRelayCommand.kind}-command event=${event.event_id}`);
+      return;
+    }
+
+    const elicitationCommand = await this.elicitationRelayService?.handleCommandEvent?.(event);
+    if (elicitationCommand?.handled) {
+      this.logger.trace?.({
+        component: "worker.interaction",
+        stage: "elicitation_command_handled",
+        event_id: event.event_id,
+        session_id: event.session_id,
+        kind: elicitationCommand.kind,
+      });
+      this.logger.debug(`event ${elicitationCommand.kind}-command event=${event.event_id}`);
       return;
     }
 
@@ -677,5 +692,7 @@ export class WorkerInteractionService {
     for (const eventID of this.composingKeepaliveTimers.keys()) {
       this.clearComposingKeepaliveTimer(eventID);
     }
+    await this.permissionRelayService?.shutdown?.();
+    await this.elicitationRelayService?.shutdown?.();
   }
 }

@@ -5,22 +5,23 @@ import { AccessStore } from "../access-store.js";
 import { ApprovalStore } from "../approval-store.js";
 import { ChannelContextStore } from "../channel-context-store.js";
 import { ConfigStore } from "../config-store.js";
+import { ElicitationStore } from "../elicitation-store.js";
 import { EventState } from "../event-state.js";
-import { QuestionStore } from "../question-store.js";
 import {
   resolveAccessPath,
   resolveApprovalNotificationsDir,
   resolveApprovalRequestsDir,
   resolveConfigPath,
+  resolveElicitationRequestsDir,
   resolveEventStatesDir,
-  resolveQuestionRequestsDir,
   resolveSessionContextsDir,
 } from "../paths.js";
 import { saveEventEntry } from "../event-state-persistence.js";
 import { createProcessLogger } from "../logging.js";
 import { DaemonBridgeRuntime } from "./bridge-runtime.js";
-import { WorkerHumanLoopService } from "./human-loop-service.js";
+import { WorkerElicitationRelayService } from "./elicitation-relay-service.js";
 import { WorkerInteractionService } from "./interaction-service.js";
+import { WorkerPermissionRelayService } from "./permission-relay-service.js";
 import { WorkerToolService } from "./tool-service.js";
 
 function normalizeString(value) {
@@ -53,8 +54,8 @@ export function createWorkerApp({ env = process.env } = {}) {
     requestsDir: resolveApprovalRequestsDir(),
     notificationsDir: resolveApprovalNotificationsDir(),
   });
-  const questionStore = new QuestionStore({
-    requestsDir: resolveQuestionRequestsDir(),
+  const elicitationStore = new ElicitationStore({
+    requestsDir: resolveElicitationRequestsDir(),
   });
   const sessionContextStore = new ChannelContextStore(resolveSessionContextsDir());
   const eventState = new EventState({
@@ -73,6 +74,7 @@ export function createWorkerApp({ env = process.env } = {}) {
       capabilities: {
         experimental: {
           "claude/channel": {},
+          "claude/channel/permission": {},
         },
         tools: {},
       },
@@ -94,15 +96,24 @@ export function createWorkerApp({ env = process.env } = {}) {
       await interactionService?.handleRevokeEvent(payload);
     },
   });
-  const humanLoopService = new WorkerHumanLoopService({
-    accessStore,
-    approvalStore,
-    questionStore,
+  const elicitationRelayService = new WorkerElicitationRelayService({
+    elicitationStore,
     bridge,
     finalizeEvent: async (eventID, result, context) => (
       interactionService?.finalizeEventSafely?.(eventID, result, context) ?? false
     ),
     logger,
+  });
+  const permissionRelayService = new WorkerPermissionRelayService({
+    mcp,
+    bridge,
+    accessStore,
+    eventState,
+    finalizeEvent: async (eventID, result, context) => (
+      interactionService?.finalizeEventSafely?.(eventID, result, context) ?? false
+    ),
+    logger,
+    aibotSessionID: normalizeOptionalString(env.CLAWPOOL_AIBOT_SESSION_ID),
   });
 
   interactionService = new WorkerInteractionService({
@@ -112,7 +123,8 @@ export function createWorkerApp({ env = process.env } = {}) {
     eventStatesDir,
     mcp,
     bridge,
-    humanLoopService,
+    permissionRelayService,
+    elicitationRelayService,
     logger,
   });
 
@@ -122,11 +134,13 @@ export function createWorkerApp({ env = process.env } = {}) {
     configStore,
     accessStore,
     approvalStore,
-    questionStore,
+    elicitationStore,
+    permissionRelayService,
     eventState,
     messageRuntime: interactionService,
     logger,
   });
+  permissionRelayService.registerHandlers();
   toolService.registerHandlers();
 
   return {
@@ -136,7 +150,7 @@ export function createWorkerApp({ env = process.env } = {}) {
       await configStore.load();
       await accessStore.load();
       await approvalStore.init();
-      await questionStore.init();
+      await elicitationStore.init();
       await interactionService.restoreEventState();
       await bridge.startControlServer();
       await bridge.registerWorker({

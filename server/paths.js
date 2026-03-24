@@ -42,8 +42,8 @@ export function resolveApprovalNotificationsDir(pluginID = defaultPluginID) {
   return path.join(resolvePluginDataDir(pluginID), "approval-notifications");
 }
 
-export function resolveQuestionRequestsDir(pluginID = defaultPluginID) {
-  return path.join(resolvePluginDataDir(pluginID), "question-requests");
+export function resolveElicitationRequestsDir(pluginID = defaultPluginID) {
+  return path.join(resolvePluginDataDir(pluginID), "elicitation-requests");
 }
 
 export function resolveSessionContextsDir(pluginID = defaultPluginID) {

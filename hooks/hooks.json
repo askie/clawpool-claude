@@ -1,22 +1,11 @@
 {
   "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "^AskUserQuestion$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/pre-tool-use-hook.js"
-          }
-        ]
-      }
-    ],
-    "PermissionRequest": [
+    "Elicitation": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/permission-request-hook.js"
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/elicitation-hook.js"
           }
         ]
       }

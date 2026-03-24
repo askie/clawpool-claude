@@ -101,10 +101,14 @@ open <你的工作目录>
 当 Claude 需要你确认或补充信息时，消息会回到 ClawPool。你在 ClawPool 里直接回复：
 
 ```text
-/clawpool-approval <request_id> allow
-/clawpool-approval <request_id> deny [原因]
+yes <request_id>
+no <request_id>
 /clawpool-question <request_id> 你的回答
 ```
+
+- 审批卡直接点按钮就行，手输时只需要 `yes <request_id>` 或 `no <request_id>`
+- 提问卡直接在卡片里填完提交，不需要复制命令
+- 只有调试或兜底时，才需要手工输入 `/clawpool-question ...`
 
 ## 文件发送
 

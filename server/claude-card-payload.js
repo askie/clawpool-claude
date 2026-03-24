@@ -3,9 +3,10 @@ import {
   buildApprovalDecisionCommands,
 } from "./approval-text.js";
 import {
-  buildQuestionAnswerCommandHint,
-  buildQuestionFooterText,
-} from "./question-text.js";
+  buildPermissionRelayCommandText,
+  buildPermissionRelayVerdictText,
+} from "./permission-relay-text.js";
+import { buildElicitationFooterText } from "./elicitation-text.js";
 import { buildMessageCardEnvelope } from "./message-card-envelope.js";
 
 const claudeHostLabel = "Claude Clawpool";
@@ -35,6 +36,22 @@ export function buildApprovalRequestBizCard(request) {
     host: claudeHostLabel,
     allowed_decisions: allowedDecisions,
     decision_commands: decisionCommands,
+  });
+}
+
+export function buildPermissionRelayRequestBizCard(request) {
+  const requestID = normalizeString(request?.request_id);
+  return buildMessageCardEnvelope("exec_approval", {
+    approval_id: requestID,
+    approval_slug: requestID,
+    approval_command_id: requestID,
+    command: buildPermissionRelayCommandText(request),
+    host: claudeHostLabel,
+    allowed_decisions: ["allow-once", "deny"],
+    decision_commands: {
+      "allow-once": `yes ${requestID}`,
+      deny: `no ${requestID}`,
+    },
   });
 }
 
@@ -86,6 +103,31 @@ export function buildApprovalCommandStatusBizCard({
   });
 }
 
+export function buildPermissionRelaySubmittedBizCard({
+  request,
+  behavior,
+  resolvedByID = "",
+}) {
+  const normalizedBehavior = normalizeString(behavior) === "allow" ? "allow" : "deny";
+  return buildMessageCardEnvelope("exec_status", {
+    status: "approval-forwarded",
+    summary: buildPermissionRelayVerdictText({
+      requestID: request?.request_id,
+      behavior: normalizedBehavior,
+    }),
+    detail_text: normalizedBehavior === "allow"
+      ? "Decision: allow-once"
+      : "Decision: deny",
+    approval_id: normalizeString(request?.request_id),
+    approval_command_id: normalizeString(request?.request_id),
+    host: claudeHostLabel,
+    decision: normalizedBehavior === "allow" ? "allow-once" : "deny",
+    resolved_by_id: normalizeString(resolvedByID),
+    command: buildPermissionRelayCommandText(request),
+    channel_label: claudeHostLabel,
+  });
+}
+
 export function buildQuestionRequestBizCard(request) {
   const questions = Array.isArray(request?.questions) ? request.questions : [];
   return buildMessageCardEnvelope("claude_question", {
@@ -97,8 +139,8 @@ export function buildQuestionRequestBizCard(request) {
       options: normalizeQuestionOptions(question),
       multi_select: question?.multiSelect === true,
     })),
-    answer_command_hint: buildQuestionAnswerCommandHint(request),
-    footer_text: buildQuestionFooterText(),
+    answer_command_hint: "",
+    footer_text: buildElicitationFooterText(),
   });
 }
 

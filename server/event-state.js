@@ -112,6 +112,32 @@ export class EventState {
     return cloneEntry(existing);
   }
 
+  getLatestActiveBySession(sessionID) {
+    const normalizedSessionID = normalizeString(sessionID);
+    if (!normalizedSessionID) {
+      return null;
+    }
+
+    let latest = null;
+    for (const entry of this.events.values()) {
+      if (normalizeString(entry.session_id) !== normalizedSessionID) {
+        continue;
+      }
+      if (entry.completed || entry.stopped) {
+        continue;
+      }
+      if (!latest || Number(entry.created_at ?? 0) >= Number(latest.created_at ?? 0)) {
+        latest = entry;
+      }
+    }
+
+    if (!latest) {
+      return null;
+    }
+    latest.last_seen_at = Date.now();
+    return cloneEntry(latest);
+  }
+
   markAcked(eventID, { ackedAt = Date.now() } = {}) {
     const entry = this.events.get(normalizeString(eventID));
     if (!entry) {

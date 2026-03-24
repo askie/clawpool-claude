@@ -140,3 +140,33 @@ test("event state keeps unresolved entries longer than completed ones", () => {
   assert.ok(state.get("evt-5"));
   assert.equal(state.get("evt-6"), null);
 });
+
+test("event state returns the latest active entry for a session", () => {
+  const state = new EventState();
+  state.registerInbound({
+    event_id: "evt-7",
+    session_id: "sess-7",
+    msg_id: "107",
+    sender_id: "207",
+  });
+  state.registerInbound({
+    event_id: "evt-8",
+    session_id: "sess-7",
+    msg_id: "108",
+    sender_id: "208",
+  });
+  state.markCompleted("evt-8", {
+    status: "responded",
+    updated_at: Date.now(),
+  });
+  state.registerInbound({
+    event_id: "evt-9",
+    session_id: "sess-7",
+    msg_id: "109",
+    sender_id: "209",
+  });
+
+  const latest = state.getLatestActiveBySession("sess-7");
+  assert.equal(latest?.event_id, "evt-9");
+  assert.equal(latest?.msg_id, "109");
+});

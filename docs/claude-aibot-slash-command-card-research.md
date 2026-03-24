@@ -1,5 +1,7 @@
 # Claude 对接文档清单与 AIBot 卡片渲染边界
 
+> 2026-03 更新：这份文档主要保留当时的调研过程。当前仓库已经改成“审批走 Claude 原生 channel permission relay，提问主路径走 Claude `Elicitation` hook”，所以下面不少“当前状态”描述已经过时，只适合拿来理解历史背景。
+
 ## 目标
 
 这份文档先回答两个问题：

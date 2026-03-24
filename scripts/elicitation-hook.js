@@ -2,27 +2,35 @@ import { randomUUID } from "node:crypto";
 import process from "node:process";
 import { resolveHookChannelContext } from "../server/channel-context-resolution.js";
 import { ChannelContextStore } from "../server/channel-context-store.js";
+import { ElicitationStore } from "../server/elicitation-store.js";
 import {
-  resolveQuestionRequestsDir,
+  buildQuestionPromptsFromFields,
+  deriveSupportedElicitationFields,
+} from "../server/elicitation-schema.js";
+import {
+  resolveElicitationRequestsDir,
   resolveSessionContextsDir,
 } from "../server/paths.js";
-import { QuestionStore } from "../server/question-store.js";
 import { writeTraceStderr } from "../server/logging.js";
 
-const remoteQuestionTimeoutMs = 10 * 60 * 1000;
+const remoteElicitationTimeoutMs = 10 * 60 * 1000;
 const pollIntervalMs = 1000;
 const recentChannelContextMaxAgeMs = 30 * 60 * 1000;
+
+function normalizeString(value) {
+  return String(value ?? "").trim();
+}
 
 function logDebug(message) {
   if (process.env.CLAWPOOL_E2E_DEBUG !== "1") {
     return;
   }
-  process.stderr.write(`[pre-tool-use-hook] ${message}\n`);
+  process.stderr.write(`[elicitation-hook] ${message}\n`);
 }
 
 function trace(fields) {
   writeTraceStderr({
-    component: "hook.pre_tool_use",
+    component: "hook.elicitation",
     ...fields,
   }, {
     env: process.env,
@@ -48,37 +56,41 @@ function writeResult(result) {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
-function buildAllowResult(updatedInput) {
+function buildHookResult(action, content = undefined) {
   return {
-    continue: true,
     hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "allow",
-      updatedInput,
-    },
-  };
-}
-
-function buildDenyResult(reason) {
-  return {
-    continue: true,
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: reason,
+      hookEventName: "Elicitation",
+      action,
+      ...(action === "accept" ? { content } : {}),
     },
   };
 }
 
 async function main() {
   const input = await readStdinJSON();
-  if (input?.hook_event_name !== "PreToolUse" || input?.tool_name !== "AskUserQuestion") {
+  if (input?.hook_event_name !== "Elicitation") {
     writeResult({});
     return;
   }
 
-  const questions = Array.isArray(input?.tool_input?.questions) ? input.tool_input.questions : [];
-  if (questions.length === 0) {
+  if (normalizeString(input.mode || "form") !== "form") {
+    trace({
+      stage: "elicitation_passthrough",
+      session_id: input.session_id,
+      reason: "unsupported_mode",
+      mode: normalizeString(input.mode),
+    });
+    writeResult({});
+    return;
+  }
+
+  const fieldsResult = deriveSupportedElicitationFields(input.requested_schema);
+  if (!fieldsResult.supported) {
+    trace({
+      stage: "elicitation_passthrough",
+      session_id: input.session_id,
+      reason: fieldsResult.reason,
+    });
     writeResult({});
     return;
   }
@@ -98,56 +110,62 @@ async function main() {
     trace({
       stage: "channel_context_missing",
       session_id: input.session_id,
-      tool_name: input.tool_name,
       reason: contextResolution.reason || "no_channel_context",
     });
     process.stderr.write(
-      `pre-tool-use-hook bridge skipped: ${contextResolution.reason || "no_channel_context"}\n`,
+      `elicitation-hook bridge skipped: ${contextResolution.reason || "no_channel_context"}\n`,
     );
     writeResult({});
     return;
   }
 
-  const questionStore = new QuestionStore({
-    requestsDir: resolveQuestionRequestsDir(),
+  const requestID = normalizeString(input.elicitation_id) || randomUUID();
+  const elicitationStore = new ElicitationStore({
+    requestsDir: resolveElicitationRequestsDir(),
   });
-  await questionStore.init();
+  await elicitationStore.init();
 
-  const request = await questionStore.createQuestionRequest({
-    request_id: randomUUID(),
+  const request = await elicitationStore.createRequest({
+    request_id: requestID,
     created_at: Date.now(),
     session_id: input.session_id,
     transcript_path: input.transcript_path,
-    questions,
+    mcp_server_name: input.mcp_server_name,
+    elicitation_id: input.elicitation_id,
+    message: input.message,
+    mode: input.mode || "form",
+    url: input.url,
+    requested_schema: input.requested_schema ?? null,
+    fields: fieldsResult.fields,
+    questions: buildQuestionPromptsFromFields(fieldsResult.fields),
     channel_context: contextResolution.context,
   });
   trace({
-    stage: "question_request_created",
+    stage: "elicitation_request_created",
     request_id: request.request_id,
     event_id: request.channel_context.event_id,
     chat_id: request.channel_context.chat_id,
     session_id: request.session_id,
+    mcp_server_name: request.mcp_server_name,
   });
   logDebug(
-    `created request_id=${request.request_id} chat_id=${request.channel_context.chat_id} question_count=${request.questions.length}`,
+    `created request_id=${request.request_id} chat_id=${request.channel_context.chat_id} field_count=${request.fields.length}`,
   );
 
-  const deadlineAt = Date.now() + remoteQuestionTimeoutMs;
+  const deadlineAt = Date.now() + remoteElicitationTimeoutMs;
   while (Date.now() < deadlineAt) {
-    const current = await questionStore.getRequest(request.request_id);
-    if (current?.status === "resolved" && current.answers) {
+    const current = await elicitationStore.getRequest(request.request_id);
+    if (current?.status === "resolved" && normalizeString(current.response_action)) {
       trace({
-        stage: "question_request_resolved",
+        stage: "elicitation_request_resolved",
         request_id: current.request_id,
         event_id: current.channel_context.event_id,
         chat_id: current.channel_context.chat_id,
         session_id: current.session_id,
+        action: current.response_action,
       });
       logDebug(`resolved request_id=${request.request_id}`);
-      writeResult(buildAllowResult({
-        questions: current.questions,
-        answers: current.answers,
-      }));
+      writeResult(buildHookResult(current.response_action, current.response_content ?? undefined));
       return;
     }
     if (current?.status === "expired") {
@@ -156,19 +174,19 @@ async function main() {
     await sleep(pollIntervalMs);
   }
 
-  await questionStore.markExpired(request.request_id);
+  await elicitationStore.markExpired(request.request_id);
   trace({
-    stage: "question_request_expired",
+    stage: "elicitation_request_expired",
     request_id: request.request_id,
     event_id: request.channel_context.event_id,
     chat_id: request.channel_context.chat_id,
     session_id: request.session_id,
   });
   logDebug(`expired request_id=${request.request_id}`);
-  writeResult(buildDenyResult("Remote question timed out."));
+  writeResult(buildHookResult("cancel"));
 }
 
 main().catch((error) => {
-  process.stderr.write(`pre-tool-use-hook failed: ${String(error)}\n`);
+  process.stderr.write(`elicitation-hook failed: ${String(error)}\n`);
   writeResult({});
 });

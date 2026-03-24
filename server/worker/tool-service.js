@@ -197,7 +197,8 @@ export class WorkerToolService {
     configStore,
     accessStore,
     approvalStore,
-    questionStore,
+    elicitationStore,
+    permissionRelayService = null,
     eventState,
     messageRuntime,
     logger,
@@ -207,7 +208,8 @@ export class WorkerToolService {
     this.configStore = configStore;
     this.accessStore = accessStore;
     this.approvalStore = approvalStore;
-    this.questionStore = questionStore;
+    this.elicitationStore = elicitationStore;
+    this.permissionRelayService = permissionRelayService;
     this.eventState = eventState;
     this.messageRuntime = messageRuntime;
     this.logger = logger;
@@ -217,8 +219,8 @@ export class WorkerToolService {
     return {
       config: this.configStore.getStatus(),
       access: this.accessStore.getStatus(),
-      approvals: await this.approvalStore.getStatus(),
-      questions: await this.questionStore.getStatus(),
+      approvals: this.permissionRelayService?.getStatus?.() ?? await this.approvalStore.getStatus(),
+      questions: await this.elicitationStore.getStatus(),
       connection: this.bridge.getConnectionStatus(),
       hints: this.bridge.buildStatusHints(),
     };

@@ -1,6 +1,11 @@
 import { mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 import { readJSONFile, writeJSONFileAtomic } from "./json-file.js";
+import {
+  buildQuestionPromptsFromFields,
+  cloneRequestedSchema,
+  normalizeElicitationFields,
+} from "./elicitation-schema.js";
 
 const schemaVersion = 1;
 
@@ -10,6 +15,41 @@ function normalizeString(value) {
 
 function cloneJSON(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeChannelContext(input) {
+  const context = input ?? {};
+  return {
+    chat_id: normalizeString(context.chat_id),
+    event_id: normalizeString(context.event_id),
+    message_id: normalizeString(context.message_id),
+    sender_id: normalizeString(context.sender_id),
+    user_id: normalizeString(context.user_id),
+    msg_id: normalizeString(context.msg_id),
+  };
+}
+
+function normalizeResolvedBy(input) {
+  if (!isRecord(input)) {
+    return null;
+  }
+  return {
+    sender_id: normalizeString(input.sender_id),
+    session_id: normalizeString(input.session_id),
+    event_id: normalizeString(input.event_id),
+    msg_id: normalizeString(input.msg_id),
+  };
+}
+
+function normalizeResponseContent(input) {
+  if (!isRecord(input)) {
+    return null;
+  }
+  return cloneJSON(input);
 }
 
 function normalizeQuestions(input) {
@@ -32,51 +72,13 @@ function normalizeQuestions(input) {
     .filter(Boolean);
 }
 
-function normalizeAnswers(input) {
-  if (!input || typeof input !== "object") {
-    return null;
-  }
-
-  const answers = {};
-  for (const [key, value] of Object.entries(input)) {
-    const normalizedKey = normalizeString(key);
-    const normalizedValue = normalizeString(value);
-    if (normalizedKey && normalizedValue) {
-      answers[normalizedKey] = normalizedValue;
-    }
-  }
-  return Object.keys(answers).length > 0 ? answers : null;
-}
-
-function normalizeChannelContext(input) {
-  const context = input ?? {};
-  return {
-    chat_id: normalizeString(context.chat_id),
-    event_id: normalizeString(context.event_id),
-    message_id: normalizeString(context.message_id),
-    sender_id: normalizeString(context.sender_id),
-    user_id: normalizeString(context.user_id),
-    msg_id: normalizeString(context.msg_id),
-  };
-}
-
-function normalizeResolvedBy(input) {
-  if (!input || typeof input !== "object") {
-    return null;
-  }
-  return {
-    sender_id: normalizeString(input.sender_id),
-    session_id: normalizeString(input.session_id),
-    event_id: normalizeString(input.event_id),
-    msg_id: normalizeString(input.msg_id),
-  };
-}
-
 function normalizeRequest(input) {
-  if (!input || typeof input !== "object" || Number(input.schema_version) !== schemaVersion) {
+  if (!isRecord(input) || Number(input.schema_version) !== schemaVersion) {
     return null;
   }
 
+  const fields = normalizeElicitationFields(input.fields);
+  const storedQuestions = normalizeQuestions(input.questions);
   return {
     schema_version: schemaVersion,
     request_id: normalizeString(input.request_id),
@@ -85,12 +87,20 @@ function normalizeRequest(input) {
     updated_at: Number(input.updated_at ?? 0),
     dispatched_at: Number(input.dispatched_at ?? 0),
     dispatch_error: normalizeString(input.dispatch_error),
-    question_message_id: normalizeString(input.question_message_id),
+    prompt_message_id: normalizeString(input.prompt_message_id),
     session_id: normalizeString(input.session_id),
     transcript_path: normalizeString(input.transcript_path),
-    questions: normalizeQuestions(input.questions),
+    mcp_server_name: normalizeString(input.mcp_server_name),
+    elicitation_id: normalizeString(input.elicitation_id),
+    message: normalizeString(input.message),
+    mode: normalizeString(input.mode) || "form",
+    url: normalizeString(input.url),
+    requested_schema: input.requested_schema === null ? null : cloneRequestedSchema(input.requested_schema),
+    fields,
+    questions: storedQuestions.length > 0 ? storedQuestions : buildQuestionPromptsFromFields(fields),
     channel_context: normalizeChannelContext(input.channel_context),
-    answers: input.answers === null ? null : normalizeAnswers(input.answers),
+    response_action: normalizeString(input.response_action),
+    response_content: input.response_content === null ? null : normalizeResponseContent(input.response_content),
     resolved_by: normalizeResolvedBy(input.resolved_by),
   };
 }
@@ -108,7 +118,7 @@ async function listJSONFiles(dirPath) {
   return names.filter((name) => name.endsWith(".json"));
 }
 
-export class QuestionStore {
+export class ElicitationStore {
   constructor({ requestsDir }) {
     this.requestsDir = requestsDir;
   }
@@ -121,11 +131,16 @@ export class QuestionStore {
     return path.join(this.requestsDir, `${normalizeString(requestID)}.json`);
   }
 
-  async createQuestionRequest(input) {
+  async createRequest(input) {
     const requestID = normalizeString(input.request_id);
     const now = Math.floor(input.created_at ?? Date.now());
     if (!requestID) {
       throw new Error("request_id is required");
+    }
+
+    const fields = normalizeElicitationFields(input.fields);
+    if (fields.length === 0) {
+      throw new Error("elicitation request fields are required");
     }
 
     const request = normalizeRequest({
@@ -136,12 +151,20 @@ export class QuestionStore {
       updated_at: now,
       dispatched_at: 0,
       dispatch_error: "",
-      question_message_id: "",
+      prompt_message_id: "",
       session_id: input.session_id,
       transcript_path: input.transcript_path,
-      questions: input.questions ?? [],
+      mcp_server_name: input.mcp_server_name,
+      elicitation_id: input.elicitation_id,
+      message: input.message,
+      mode: input.mode,
+      url: input.url,
+      requested_schema: input.requested_schema ?? null,
+      fields,
+      questions: buildQuestionPromptsFromFields(fields),
       channel_context: input.channel_context ?? {},
-      answers: null,
+      response_action: "",
+      response_content: null,
       resolved_by: null,
     });
     await writeJSONFileAtomic(this.resolveRequestPath(requestID), request);
@@ -186,42 +209,49 @@ export class QuestionStore {
     return requests;
   }
 
-  async markDispatched(requestID, { dispatchedAt = Date.now(), questionMessageID = "" } = {}) {
+  async markDispatched(requestID, { dispatchedAt = Date.now(), promptMessageID = "" } = {}) {
     const request = await this.getRequest(requestID);
     if (!request) {
-      throw new Error("question request not found");
+      throw new Error("elicitation request not found");
     }
     request.dispatched_at = Math.floor(dispatchedAt);
     request.dispatch_error = "";
-    request.question_message_id = normalizeString(questionMessageID);
+    request.prompt_message_id = normalizeString(promptMessageID);
     return this.saveRequest(request);
   }
 
   async markDispatchFailed(requestID, errorText) {
     const request = await this.getRequest(requestID);
     if (!request) {
-      throw new Error("question request not found");
+      throw new Error("elicitation request not found");
     }
     request.dispatch_error = normalizeString(errorText);
     return this.saveRequest(request);
   }
 
-  async resolveRequest(requestID, { answers, resolvedBy }) {
+  async resolveRequest(requestID, { action, content, resolvedBy }) {
     const request = await this.getRequest(requestID);
     if (!request) {
-      throw new Error("question request not found");
+      throw new Error("elicitation request not found");
     }
     if (request.status !== "pending") {
-      throw new Error(`question request is ${request.status}`);
+      throw new Error(`elicitation request is ${request.status}`);
     }
 
-    const normalizedAnswers = normalizeAnswers(answers);
-    if (!normalizedAnswers) {
-      throw new Error("invalid question answers");
+    const normalizedAction = normalizeString(action);
+    if (!["accept", "decline", "cancel"].includes(normalizedAction)) {
+      throw new Error("invalid elicitation action");
+    }
+    const normalizedContent = normalizedAction === "accept"
+      ? normalizeResponseContent(content)
+      : null;
+    if (normalizedAction === "accept" && !normalizedContent) {
+      throw new Error("invalid elicitation response content");
     }
 
     request.status = "resolved";
-    request.answers = normalizedAnswers;
+    request.response_action = normalizedAction;
+    request.response_content = normalizedContent;
     request.resolved_by = normalizeResolvedBy(resolvedBy);
     return this.saveRequest(request);
   }
