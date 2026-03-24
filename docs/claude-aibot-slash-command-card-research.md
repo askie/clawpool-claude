@@ -115,7 +115,6 @@
 
 - `/clawpool:status`
 - `/clawpool:access`
-- `configure` 相关 skill（存在能力文件，但不是 README 里强调的主交互路径）
 
 这些命令的定位是：
 
