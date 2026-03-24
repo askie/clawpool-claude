@@ -2036,3 +2036,74 @@ test("daemon runtime reconciles an exited worker and fails delivered pending eve
     },
   );
 });
+
+test("daemon runtime fails pending events when worker stops before becoming ready", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-start-fail",
+    claude_session_id: "claude-start-fail",
+    cwd: tempDir,
+    worker_id: "worker-start-fail",
+    worker_status: "starting",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-start-fail",
+    session_id: "chat-start-fail",
+    msg_id: "msg-start-fail",
+    sender_id: "sender-start-fail",
+    content: "hello",
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+  });
+
+  const previousBinding = registry.getByAibotSessionID("chat-start-fail");
+  await runtime.handleWorkerStatusUpdate(previousBinding, {
+    ...previousBinding,
+    worker_status: "stopped",
+  });
+
+  assert.equal(deliveryStore.getPendingEvent("evt-start-fail"), null);
+  assert.equal(
+    sent.some(
+      (item) =>
+        item.kind === "text"
+        && item.payload.eventID === "evt-start-fail"
+        && /没有处理完成/u.test(item.payload.text),
+    ),
+    true,
+  );
+  assert.deepEqual(
+    sent.find(
+      (item) => item.kind === "event_result" && item.payload.event_id === "evt-start-fail",
+    )?.payload,
+    {
+      event_id: "evt-start-fail",
+      status: "failed",
+      code: "worker_interrupted",
+      msg: "worker interrupted while processing event",
+    },
+  );
+});

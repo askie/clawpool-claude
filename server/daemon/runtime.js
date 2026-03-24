@@ -538,11 +538,13 @@ export class DaemonRuntime {
 
     const previousWorkerID = normalizeString(previousBinding?.worker_id);
     for (const record of this.listPendingEventsForSession(sessionID)) {
-      if (record.delivery_state !== "delivered") {
-        continue;
-      }
       if (previousWorkerID && normalizeString(record.last_worker_id) !== previousWorkerID) {
-        continue;
+        if (normalizeString(record.last_worker_id)) {
+          continue;
+        }
+        if (!["pending", "dispatching", "interrupted"].includes(normalizeString(record.delivery_state))) {
+          continue;
+        }
       }
       await this.markPendingEventInterrupted(record.eventID);
       await this.failPendingEvent(record);
