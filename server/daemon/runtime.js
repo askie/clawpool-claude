@@ -84,6 +84,7 @@ const defaultDeliveredInFlightMaxAgeMs = 60 * 1000;
 const queuedEventRetryDelayMs = 200;
 const defaultWorkerControlProbeFailureThreshold = 3;
 const defaultMcpInteractionIdleMs = 5 * 60 * 1000;
+const defaultMcpResultTimeoutMs = 12 * 60 * 1000;
 
 function normalizeNonNegativeInt(value, fallbackValue) {
   const numeric = Number(value);
@@ -109,6 +110,7 @@ export class DaemonRuntime {
     deliveredInFlightMaxAgeMs = null,
     workerControlProbeFailureThreshold = defaultWorkerControlProbeFailureThreshold,
     mcpInteractionIdleMs = defaultMcpInteractionIdleMs,
+    mcpResultTimeoutMs = defaultMcpResultTimeoutMs,
   }) {
     this.env = env;
     this.bindingRegistry = bindingRegistry;
@@ -142,6 +144,10 @@ export class DaemonRuntime {
     this.mcpInteractionIdleMs = normalizeNonNegativeInt(
       mcpInteractionIdleMs ?? env.CLAWPOOL_CLAUDE_MCP_INTERACTION_IDLE_MS,
       defaultMcpInteractionIdleMs,
+    );
+    this.mcpResultTimeoutMs = normalizeNonNegativeInt(
+      mcpResultTimeoutMs ?? env.CLAWPOOL_CLAUDE_MCP_RESULT_TIMEOUT_MS,
+      defaultMcpResultTimeoutMs,
     );
     this.isProcessRunning = typeof isProcessRunning === "function"
       ? isProcessRunning
@@ -444,6 +450,27 @@ export class DaemonRuntime {
       };
     }
     return { ok: true };
+  }
+
+  listTimedOutMcpResultRecords(sessionID, now = Date.now()) {
+    if (this.mcpResultTimeoutMs <= 0) {
+      return [];
+    }
+    const normalizedSessionID = normalizeString(sessionID);
+    if (!normalizedSessionID) {
+      return [];
+    }
+    return this.listPendingEventsForSession(normalizedSessionID).filter((record) => {
+      const deliveryState = normalizeString(record.delivery_state);
+      if (deliveryState !== "dispatching" && deliveryState !== "delivered") {
+        return false;
+      }
+      const updatedAt = Number(record.updated_at ?? 0);
+      if (!Number.isFinite(updatedAt) || updatedAt <= 0) {
+        return true;
+      }
+      return now - updatedAt > this.mcpResultTimeoutMs;
+    });
   }
 
   async probeWorkerControl(binding) {
@@ -762,16 +789,42 @@ export class DaemonRuntime {
       return false;
     }
 
-    const runtime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
-    if (!runtime) {
-      return false;
-    }
-
     const previousBinding = this.bindingRegistry.getByAibotSessionID(sessionID) ?? binding;
     if (
       normalizeString(previousBinding?.worker_id) !== workerID
       || ["stopped", "failed"].includes(normalizeString(previousBinding?.worker_status))
     ) {
+      return false;
+    }
+
+    const timedOutMcpResults = this.listTimedOutMcpResultRecords(sessionID);
+    if (timedOutMcpResults.length > 0) {
+      const runtime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
+      const pid = Number(runtime?.pid ?? 0);
+      this.workerProcessManager?.markWorkerRuntimeStopped?.(workerID, {
+        exitCode: Number(runtime?.exit_code ?? 0),
+        exitSignal: "mcp_result_timeout",
+      });
+      this.trace({
+        stage: "worker_mcp_result_timeout_detected",
+        session_id: sessionID,
+        worker_id: workerID,
+        pid,
+        previous_status: workerStatus,
+        timeout_ms: this.mcpResultTimeoutMs,
+        timed_out_count: timedOutMcpResults.length,
+        event_ids: timedOutMcpResults.map((record) => record.eventID).slice(0, 5),
+      }, "error");
+      const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
+        updatedAt: Date.now(),
+        lastStoppedAt: Date.now(),
+      });
+      await this.handleWorkerStatusUpdate(previousBinding, nextBinding);
+      return true;
+    }
+
+    const runtime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
+    if (!runtime) {
       return false;
     }
 

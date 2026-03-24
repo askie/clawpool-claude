@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { mkdtemp } from "node:fs/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import { BindingRegistry } from "./daemon/binding-registry.js";
 import { MessageDeliveryStore } from "./daemon/message-delivery-store.js";
 import { DaemonRuntime } from "./daemon/runtime.js";
@@ -2483,6 +2484,113 @@ test("daemon runtime marks worker stopped when MCP interaction is stale for in-f
     )?.payload,
     {
       event_id: "evt-mcp-stale",
+      status: "failed",
+      code: "worker_interrupted",
+      msg: "worker interrupted while processing event",
+    },
+  );
+});
+
+test("daemon runtime marks worker stopped when MCP result timeout is reached", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-mcp-result-timeout",
+    claude_session_id: "claude-mcp-result-timeout",
+    cwd: tempDir,
+    worker_id: "worker-mcp-result-timeout",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-mcp-result-timeout",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-mcp-result-timeout",
+    session_id: "chat-mcp-result-timeout",
+    msg_id: "msg-mcp-result-timeout",
+    sender_id: "sender-mcp-result-timeout",
+    content: "probe",
+  });
+  await deliveryStore.markPendingEventDelivered("evt-mcp-result-timeout", "worker-mcp-result-timeout");
+  await sleep(10);
+
+  const workerProcessManager = {
+    getWorkerRuntime() {
+      return {
+        worker_id: "worker-mcp-result-timeout",
+        aibot_session_id: "chat-mcp-result-timeout",
+        pid: 50003,
+        status: "ready",
+      };
+    },
+    markWorkerRuntimeStopped(workerID, { exitSignal = "" } = {}) {
+      workerCalls.push({ kind: "mark_stopped", workerID, exitSignal });
+      return {
+        worker_id: workerID,
+        status: "stopped",
+        exit_signal: exitSignal,
+      };
+    },
+  };
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    workerControlProbeFailureThreshold: 3,
+    mcpInteractionIdleMs: 0,
+    mcpResultTimeoutMs: 1,
+    isProcessRunning() {
+      return true;
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async ping() {
+          return {
+            ok: true,
+            mcp_ready: true,
+            mcp_last_activity_at: Date.now(),
+          };
+        },
+      };
+    },
+  });
+
+  const changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-mcp-result-timeout"),
+  );
+
+  assert.equal(changed, true);
+  assert.equal(registry.getByAibotSessionID("chat-mcp-result-timeout")?.worker_status, "stopped");
+  assert.equal(workerCalls.length, 1);
+  assert.equal(workerCalls[0].exitSignal, "mcp_result_timeout");
+  assert.equal(deliveryStore.getPendingEvent("evt-mcp-result-timeout"), null);
+  assert.deepEqual(
+    sent.find(
+      (item) => item.kind === "event_result" && item.payload.event_id === "evt-mcp-result-timeout",
+    )?.payload,
+    {
+      event_id: "evt-mcp-result-timeout",
       status: "failed",
       code: "worker_interrupted",
       msg: "worker interrupted while processing event",
