@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import os from "node:os";
+import path from "node:path";
+import { mkdtemp } from "node:fs/promises";
 import { EventState } from "./event-state.js";
+import { saveEventEntry } from "./event-state-persistence.js";
 import { WorkerInteractionService } from "./worker/interaction-service.js";
 
 function createLogger() {
@@ -15,6 +19,7 @@ function createService({
   bridge = {},
   accessStore = {},
   mcp = {},
+  eventStatesDir = "/tmp/clawpool-claude-test-event-states",
 } = {}) {
   const eventState = new EventState();
   const service = new WorkerInteractionService({
@@ -49,7 +54,7 @@ function createService({
         return [];
       },
     },
-    eventStatesDir: "/tmp/clawpool-claude-test-event-states",
+    eventStatesDir,
     mcp: {
       async notification() {},
       ...mcp,
@@ -79,6 +84,50 @@ function createService({
     service,
     eventState,
   };
+}
+
+async function writePendingEventState(eventStatesDir, {
+  eventID,
+  sessionID = "chat-1",
+  msgID = "msg-1",
+  content = "hello",
+  resultIntent = null,
+  resultDeadlineAt = 0,
+  completed = null,
+  stopped = null,
+}) {
+  const now = Date.now();
+  await saveEventEntry(eventStatesDir, {
+    event_id: eventID,
+    session_id: sessionID,
+    msg_id: msgID,
+    quoted_message_id: "",
+    sender_id: "sender-1",
+    event_type: "user_chat",
+    session_type: "1",
+    content,
+    owner_id: "owner-1",
+    agent_id: "agent-1",
+    msg_type: "1",
+    message_created_at: now,
+    mention_user_ids: [],
+    extra_json: "",
+    attachments_json: "",
+    attachment_count: "",
+    biz_card_json: "",
+    channel_data_json: "",
+    acked: true,
+    ack_at: now,
+    notification_dispatched_at: now,
+    pairing_sent_at: 0,
+    pairing_retry_after: 0,
+    result_deadline_at: resultDeadlineAt,
+    result_intent: resultIntent,
+    completed,
+    stopped,
+    created_at: now,
+    last_seen_at: now,
+  });
 }
 
 test("worker inbound handling records local acceptance without sending a second upstream ack", async () => {
@@ -224,6 +273,49 @@ test("worker inbound handling sends structured pairing card for blocked direct s
   );
   assert.equal(sentResults.length, 1);
   assert.equal(sentResults[0].code, "pairing_required");
+
+  await service.shutdown();
+});
+
+test("restoreEventState rearms timeout for unresolved events without persisted deadline", async () => {
+  const eventStatesDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-restore-timeout-"));
+  const { service, eventState } = createService({ eventStatesDir });
+  await writePendingEventState(eventStatesDir, {
+    eventID: "evt-restore-no-deadline",
+    resultIntent: null,
+    resultDeadlineAt: 0,
+  });
+
+  await service.restoreEventState();
+
+  const restored = eventState.get("evt-restore-no-deadline");
+  assert.ok(restored);
+  assert.equal(restored.completed, null);
+  assert.ok(Number(restored.result_deadline_at) > Date.now());
+
+  await service.shutdown();
+});
+
+test("restoreEventState rearms retry for unresolved events with result intent but no deadline", async () => {
+  const eventStatesDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-restore-intent-"));
+  const { service, eventState } = createService({ eventStatesDir });
+  await writePendingEventState(eventStatesDir, {
+    eventID: "evt-restore-intent-no-deadline",
+    resultIntent: {
+      status: "failed",
+      code: "claude_result_timeout",
+      msg: "Claude did not call reply or complete before timeout.",
+      updated_at: Date.now(),
+    },
+    resultDeadlineAt: 0,
+  });
+
+  await service.restoreEventState();
+
+  const restored = eventState.get("evt-restore-intent-no-deadline");
+  assert.ok(restored);
+  assert.equal(restored.completed, null);
+  assert.ok(Number(restored.result_deadline_at) > Date.now());
 
   await service.shutdown();
 });

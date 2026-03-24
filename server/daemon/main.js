@@ -142,6 +142,9 @@ export async function run(argv = [], env = process.env) {
     env: runtimeEnv,
     connectionConfig: configStore.getConnectionConfig(),
   });
+  await workerProcessManager.cleanupStaleManagedProcesses(
+    bindingRegistry.listBindings().map((binding) => binding.aibot_session_id),
+  );
   let aibotClient = null;
   let runtime = null;
   const dispatchSessionActivity = createSessionActivityDispatcher(async ({

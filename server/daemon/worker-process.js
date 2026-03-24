@@ -286,36 +286,6 @@ function isManagedVisibleTerminalCommand(command, { logsDir }) {
   );
 }
 
-async function terminateStaleClaudeProcesses({
-  packageRoot,
-  aibotSessionID,
-  logsDir = "",
-  platform = process.platform,
-  spawnImpl = spawn,
-  terminateProcessTreeImpl = defaultTerminateProcessTree,
-}) {
-  const sessionName = buildWorkerSessionName(aibotSessionID);
-  const processes = await listManagedClaudeProcesses({
-    platform,
-    spawnImpl,
-  });
-  const staleEntries = processes.filter((entry) => (
-    isManagedClaudeCommand(entry.command, { packageRoot, sessionName })
-    || isManagedVisibleTerminalCommand(entry.command, { logsDir })
-  ));
-  staleEntries.sort((left, right) => {
-    const leftIsWrapper = isManagedVisibleTerminalCommand(left.command, { logsDir });
-    const rightIsWrapper = isManagedVisibleTerminalCommand(right.command, { logsDir });
-    return Number(leftIsWrapper) - Number(rightIsWrapper);
-  });
-  for (const entry of staleEntries) {
-    if (!entry?.pid) {
-      continue;
-    }
-    await terminateProcessTreeImpl(entry.pid, { platform });
-  }
-}
-
 async function waitForPidFile(pidPath, attempts = 50, delayMs = 100) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
@@ -478,6 +448,53 @@ export class WorkerProcessManager {
     };
   }
 
+  async cleanupStaleManagedProcesses(aibotSessionIDs = []) {
+    const normalizedSessionIDs = Array.from(new Set(
+      (Array.isArray(aibotSessionIDs) ? aibotSessionIDs : [])
+        .map((value) => normalizeString(value))
+        .filter((value) => value),
+    ));
+    if (normalizedSessionIDs.length === 0) {
+      return [];
+    }
+
+    const sessionTargets = normalizedSessionIDs.map((aibotSessionID) => ({
+      aibotSessionID,
+      sessionName: buildWorkerSessionName(aibotSessionID),
+      logsDir: resolveWorkerLogsDir(aibotSessionID, this.env),
+    }));
+    const processes = await listManagedClaudeProcesses({
+      platform: process.platform,
+      spawnImpl: this.spawnImpl,
+    });
+    const staleEntries = processes.filter((entry) => sessionTargets.some((target) => (
+      isManagedClaudeCommand(entry.command, {
+        packageRoot: this.packageRoot,
+        sessionName: target.sessionName,
+      })
+      || isManagedVisibleTerminalCommand(entry.command, { logsDir: target.logsDir })
+    )));
+    staleEntries.sort((left, right) => {
+      const leftIsWrapper = sessionTargets.some((target) => (
+        isManagedVisibleTerminalCommand(left.command, { logsDir: target.logsDir })
+      ));
+      const rightIsWrapper = sessionTargets.some((target) => (
+        isManagedVisibleTerminalCommand(right.command, { logsDir: target.logsDir })
+      ));
+      return Number(leftIsWrapper) - Number(rightIsWrapper);
+    });
+
+    const terminatedPIDs = [];
+    for (const entry of staleEntries) {
+      if (!entry?.pid) {
+        continue;
+      }
+      await this.terminateProcessTree(entry.pid, { platform: process.platform });
+      terminatedPIDs.push(entry.pid);
+    }
+    return terminatedPIDs;
+  }
+
   async spawnWorker({
     aibotSessionID,
     cwd,
@@ -528,14 +545,7 @@ export class WorkerProcessManager {
     const stdoutHandle = await open(stdoutLogPath, "w");
     const stderrHandle = await open(stderrLogPath, "w");
 
-    await terminateStaleClaudeProcesses({
-      packageRoot: this.packageRoot,
-      aibotSessionID: normalizedSessionID,
-      logsDir,
-      platform: process.platform,
-      spawnImpl: this.spawnImpl,
-      terminateProcessTreeImpl: this.terminateProcessTree,
-    });
+    await this.cleanupStaleManagedProcesses([normalizedSessionID]);
 
     let child = null;
     let pid = 0;

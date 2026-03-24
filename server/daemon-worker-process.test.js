@@ -322,6 +322,58 @@ test("spawnWorker terminates stale visible terminal wrapper processes before rel
   assert.deepEqual(killed, [113, 111, 112]);
 });
 
+test("cleanupStaleManagedProcesses terminates stale Claude processes for bound sessions", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-cleanup-stale-"));
+  const logsDirA = resolveWorkerLogsDir("chat-a", {
+    ...process.env,
+    CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+  });
+  const logsDirB = resolveWorkerLogsDir("chat-b", {
+    ...process.env,
+    CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+  });
+  const scriptPathA = path.join(logsDirA, "old.launch.command");
+  const scriptPathB = path.join(logsDirB, "old.launch.expect");
+  const killed = [];
+
+  await mkdir(path.join(tempDir, "server"), { recursive: true });
+  await writeFile(path.join(tempDir, "server", "main.js"), "process.exit(0);\n", "utf8");
+
+  const psOutput = [
+    `211 ${scriptPathA}`,
+    `212 claude --name clawpool-chat-a --plugin-dir ${tempDir} --dangerously-skip-permissions --session-id stale-a --dangerously-load-development-channels server:clawpool-claude`,
+    `213 ${scriptPathB}`,
+    `214 claude --name clawpool-chat-b --plugin-dir ${tempDir} --dangerously-skip-permissions --session-id stale-b --dangerously-load-development-channels server:clawpool-claude`,
+    `215 claude --name clawpool-chat-c --plugin-dir ${tempDir} --dangerously-skip-permissions --session-id keep --dangerously-load-development-channels server:clawpool-claude`,
+  ].join("\n");
+
+  const spawnImpl = (command, args, options) => {
+    if (command === "ps") {
+      return realSpawn("/bin/sh", ["-lc", `printf '%s\n' "${psOutput}"`], options);
+    }
+    return realSpawn(command, args, options);
+  };
+
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+    },
+    packageRoot: tempDir,
+    spawnImpl,
+    async ensureUserMcpServer() {},
+    async terminateProcessTree(pid) {
+      killed.push(pid);
+      return true;
+    },
+  });
+
+  const terminated = await manager.cleanupStaleManagedProcesses(["chat-a", "chat-b"]);
+
+  assert.deepEqual(terminated, [212, 214, 211, 213]);
+  assert.deepEqual(killed, [212, 214, 211, 213]);
+});
+
 test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude pid file", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-visible-launch-script-"));
   const logsDir = path.join(tempDir, "logs");

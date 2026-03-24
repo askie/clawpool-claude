@@ -674,11 +674,22 @@ export class WorkerInteractionService {
     for (const entry of entries) {
       this.eventState.restore(entry);
       restored += 1;
-      if (!entry.completed && Number(entry.result_deadline_at) > 0) {
-        const remaining = Math.max(0, Number(entry.result_deadline_at) - now);
-        const deadlineAt = this.resultTimeouts.arm(entry.event_id, { timeoutMs: remaining });
-        this.eventState.setResultDeadline(entry.event_id, { deadlineAt });
+      if (entry.completed || entry.stopped) {
+        continue;
       }
+
+      const persistedDeadline = Number(entry.result_deadline_at);
+      let remaining = 0;
+      if (persistedDeadline > 0) {
+        remaining = Math.max(0, persistedDeadline - now);
+      } else if (entry.result_intent) {
+        remaining = resultTimeoutRetryMs;
+      } else {
+        remaining = defaultResultTimeoutMs;
+      }
+
+      const deadlineAt = this.resultTimeouts.arm(entry.event_id, { timeoutMs: remaining });
+      this.eventState.setResultDeadline(entry.event_id, { deadlineAt });
     }
     if (restored > 0) {
       this.logger.info(`restored ${restored} event state entries`);
