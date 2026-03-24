@@ -1,4 +1,4 @@
-import { chmod, mkdir, open, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, readdir, readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { resolvePackageRoot, resolveServerEntryPath } from "../../cli/config.js";
 import { ensureUserMcpServer as defaultEnsureUserMcpServer } from "../../cli/mcp.js";
 import { resolveWorkerLogsDir } from "./daemon-paths.js";
-import { runCommand, terminateProcessTree as defaultTerminateProcessTree } from "../process-control.js";
+import { terminateProcessTree as defaultTerminateProcessTree } from "../process-control.js";
 
 const missingResumeSessionPattern = /No conversation found with session ID:/u;
 
@@ -207,85 +207,6 @@ export async function createVisibleClaudeLaunchScript({
   return { scriptPath, expectPath, pidPath };
 }
 
-async function listManagedClaudeProcesses({
-  platform = process.platform,
-  spawnImpl = spawn,
-} = {}) {
-  if (platform === "win32") {
-    const result = await runCommand("powershell", [
-      "-NoProfile",
-      "-Command",
-      "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
-    ], {
-      allowFailure: true,
-      spawnImpl,
-    });
-    const parsed = JSON.parse(result.stdout || "[]");
-    const list = Array.isArray(parsed) ? parsed : [parsed];
-    return list
-      .map((entry) => ({
-        pid: Number.parseInt(String(entry?.ProcessId ?? ""), 10),
-        command: String(entry?.CommandLine ?? "").trim(),
-      }))
-      .filter((entry) => Number.isFinite(entry.pid) && entry.pid > 0 && entry.command);
-  }
-  const child = spawnImpl("ps", ["-ax", "-o", "pid=,command="], {
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  const chunks = [];
-  for await (const chunk of child.stdout) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-  }
-  const exitCode = await new Promise((resolve) => {
-    child.on("close", (code) => resolve(Number(code ?? 0)));
-    child.on("error", () => resolve(1));
-  });
-  if (exitCode !== 0) {
-    return [];
-  }
-  return Buffer.concat(chunks)
-    .toString("utf8")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line)
-    .map((line) => {
-      const match = line.match(/^(\d+)\s+(.*)$/u);
-      if (!match) {
-        return null;
-      }
-      return {
-        pid: Number.parseInt(match[1], 10),
-        command: match[2],
-      };
-    })
-    .filter((entry) => entry && Number.isFinite(entry.pid) && entry.pid > 0);
-}
-
-function isManagedClaudeCommand(command, { packageRoot, sessionName }) {
-  const normalizedCommand = normalizeString(command);
-  return (
-    normalizedCommand.includes("claude") &&
-    normalizedCommand.includes(`--plugin-dir ${normalizeString(packageRoot)}`) &&
-    normalizedCommand.includes(`--name ${normalizeString(sessionName)}`) &&
-    normalizedCommand.includes("--dangerously-load-development-channels server:clawpool-claude")
-  );
-}
-
-function isManagedVisibleTerminalCommand(command, { logsDir }) {
-  const normalizedCommand = normalizeString(command);
-  const normalizedLogsDir = normalizeString(logsDir);
-  if (!normalizedLogsDir) {
-    return false;
-  }
-  return (
-    normalizedCommand.includes(normalizedLogsDir) &&
-    (
-      normalizedCommand.includes(".launch.command")
-      || normalizedCommand.includes(".launch.expect")
-    )
-  );
-}
-
 async function waitForPidFile(pidPath, attempts = 50, delayMs = 100) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
@@ -383,6 +304,39 @@ async function launchClaudeInHiddenPty({
   };
 }
 
+function resolveWorkerPIDPath(logsDir, workerID) {
+  const normalizedWorkerID = normalizeString(workerID) || randomUUID();
+  return path.join(logsDir, `${normalizedWorkerID}.pid`);
+}
+
+async function listManagedPIDFiles(logsDir) {
+  const normalizedLogsDir = normalizeString(logsDir);
+  if (!normalizedLogsDir) {
+    return [];
+  }
+  try {
+    const entries = await readdir(normalizedLogsDir, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".pid"))
+      .map((entry) => path.join(normalizedLogsDir, entry.name));
+  } catch {
+    return [];
+  }
+}
+
+async function readManagedPID(pidPath) {
+  try {
+    const raw = await readFile(pidPath, "utf8");
+    const pid = Number.parseInt(String(raw).trim(), 10);
+    if (Number.isFinite(pid) && pid > 0) {
+      return pid;
+    }
+  } catch {
+    // ignore unreadable pid files
+  }
+  return 0;
+}
+
 export class WorkerProcessManager {
   constructor({
     env = process.env,
@@ -458,31 +412,24 @@ export class WorkerProcessManager {
       return [];
     }
 
-    const sessionTargets = normalizedSessionIDs.map((aibotSessionID) => ({
-      aibotSessionID,
-      sessionName: buildWorkerSessionName(aibotSessionID),
-      logsDir: resolveWorkerLogsDir(aibotSessionID, this.env),
-    }));
-    const processes = await listManagedClaudeProcesses({
-      platform: process.platform,
-      spawnImpl: this.spawnImpl,
-    });
-    const staleEntries = processes.filter((entry) => sessionTargets.some((target) => (
-      isManagedClaudeCommand(entry.command, {
-        packageRoot: this.packageRoot,
-        sessionName: target.sessionName,
-      })
-      || isManagedVisibleTerminalCommand(entry.command, { logsDir: target.logsDir })
-    )));
-    staleEntries.sort((left, right) => {
-      const leftIsWrapper = sessionTargets.some((target) => (
-        isManagedVisibleTerminalCommand(left.command, { logsDir: target.logsDir })
-      ));
-      const rightIsWrapper = sessionTargets.some((target) => (
-        isManagedVisibleTerminalCommand(right.command, { logsDir: target.logsDir })
-      ));
-      return Number(leftIsWrapper) - Number(rightIsWrapper);
-    });
+    const sessionTargets = normalizedSessionIDs.map((aibotSessionID) => (
+      resolveWorkerLogsDir(aibotSessionID, this.env)
+    ));
+    const pidFiles = [];
+    for (const logsDir of sessionTargets) {
+      const matched = await listManagedPIDFiles(logsDir);
+      pidFiles.push(...matched);
+    }
+
+    const staleEntries = [];
+    const seenPIDs = new Set();
+    for (const pidPath of pidFiles) {
+      const pid = await readManagedPID(pidPath);
+      if (pid > 0 && !seenPIDs.has(pid)) {
+        seenPIDs.add(pid);
+        staleEntries.push({ pid, pidPath });
+      }
+    }
 
     const terminatedPIDs = [];
     for (const entry of staleEntries) {
@@ -491,6 +438,9 @@ export class WorkerProcessManager {
       }
       await this.terminateProcessTree(entry.pid, { platform: process.platform });
       terminatedPIDs.push(entry.pid);
+      if (entry.pidPath) {
+        await writeFile(entry.pidPath, "", "utf8").catch(() => {});
+      }
     }
     return terminatedPIDs;
   }
@@ -549,6 +499,7 @@ export class WorkerProcessManager {
 
     let child = null;
     let pid = 0;
+    let pidPath = "";
     let visibleTerminal = null;
     if (shouldShowClaudeWindow(this.env)) {
       visibleTerminal = await launchClaudeInVisibleTerminal({
@@ -561,6 +512,7 @@ export class WorkerProcessManager {
         spawnImpl: this.spawnImpl,
       });
       pid = Number(visibleTerminal.pid ?? 0);
+      pidPath = normalizeString(visibleTerminal.pidPath);
     } else {
       if (process.platform === "darwin") {
         const hiddenPty = await launchClaudeInHiddenPty({
@@ -575,6 +527,7 @@ export class WorkerProcessManager {
           stderrFD: stderrHandle.fd,
         });
         pid = hiddenPty.pid;
+        pidPath = normalizeString(hiddenPty.pidPath);
       } else {
         child = this.spawnImpl(
           claudeCommand,
@@ -592,6 +545,8 @@ export class WorkerProcessManager {
         child.stdin?.end();
         child.unref();
         pid = child.pid ?? 0;
+        pidPath = resolveWorkerPIDPath(logsDir, normalizedWorkerID);
+        await writeFile(pidPath, `${pid}\n`, "utf8");
       }
     }
 
@@ -604,6 +559,7 @@ export class WorkerProcessManager {
       logs_dir: logsDir,
       stdout_log_path: stdoutLogPath,
       stderr_log_path: stderrLogPath,
+      pid_path: pidPath,
       pid,
       started_at: Date.now(),
       status: "starting",
