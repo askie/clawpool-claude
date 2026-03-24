@@ -82,6 +82,7 @@ function formatRuntimeError(error, fallback = "处理失败。") {
 
 const defaultDeliveredInFlightMaxAgeMs = 60 * 1000;
 const queuedEventRetryDelayMs = 200;
+const defaultWorkerControlProbeFailureThreshold = 3;
 
 function normalizeNonNegativeInt(value, fallbackValue) {
   const numeric = Number(value);
@@ -105,6 +106,7 @@ export class DaemonRuntime {
     workerRuntimeHealthCheckMs = 1000,
     isProcessRunning = defaultIsProcessRunning,
     deliveredInFlightMaxAgeMs = null,
+    workerControlProbeFailureThreshold = defaultWorkerControlProbeFailureThreshold,
   }) {
     this.env = env;
     this.bindingRegistry = bindingRegistry;
@@ -131,9 +133,14 @@ export class DaemonRuntime {
       deliveredInFlightMaxAgeMs ?? env.CLAWPOOL_CLAUDE_DELIVERED_INFLIGHT_MAX_AGE_MS,
       defaultDeliveredInFlightMaxAgeMs,
     );
+    this.workerControlProbeFailureThreshold = normalizeNonNegativeInt(
+      workerControlProbeFailureThreshold ?? env.CLAWPOOL_CLAUDE_WORKER_CONTROL_PROBE_FAILURE_THRESHOLD,
+      defaultWorkerControlProbeFailureThreshold,
+    );
     this.isProcessRunning = typeof isProcessRunning === "function"
       ? isProcessRunning
       : defaultIsProcessRunning;
+    this.workerControlProbeFailures = new Map();
     this.workerRuntimeHealthCheckTimer = null;
     if (this.workerRuntimeHealthCheckMs > 0) {
       this.workerRuntimeHealthCheckTimer = setInterval(() => {
@@ -155,6 +162,7 @@ export class DaemonRuntime {
       clearInterval(this.workerRuntimeHealthCheckTimer);
       this.workerRuntimeHealthCheckTimer = null;
     }
+    this.workerControlProbeFailures.clear();
   }
 
   async reply(event, text, extra = {}) {
@@ -355,6 +363,65 @@ export class DaemonRuntime {
       return withWorkerLaunchFailure(current, "resume_session_missing");
     }
     return current;
+  }
+
+  clearWorkerControlProbeFailure(workerID) {
+    const normalizedWorkerID = normalizeString(workerID);
+    if (!normalizedWorkerID) {
+      return;
+    }
+    this.workerControlProbeFailures.delete(normalizedWorkerID);
+  }
+
+  markWorkerControlProbeFailure(workerID, error) {
+    const normalizedWorkerID = normalizeString(workerID);
+    if (!normalizedWorkerID) {
+      return 0;
+    }
+    const nextFailures = Number(this.workerControlProbeFailures.get(normalizedWorkerID) ?? 0) + 1;
+    this.workerControlProbeFailures.set(normalizedWorkerID, nextFailures);
+    this.trace({
+      stage: "worker_control_probe_failed",
+      worker_id: normalizedWorkerID,
+      failures: nextFailures,
+      threshold: this.workerControlProbeFailureThreshold,
+      error: error instanceof Error ? error.message : String(error),
+    }, nextFailures >= this.workerControlProbeFailureThreshold ? "error" : "info");
+    return nextFailures;
+  }
+
+  async probeWorkerControl(binding) {
+    if (this.workerControlProbeFailureThreshold <= 0) {
+      return { ok: true };
+    }
+    if (normalizeString(binding?.worker_status) !== "ready") {
+      return { ok: true };
+    }
+    const workerID = normalizeString(binding?.worker_id);
+    if (!workerID) {
+      return { ok: true };
+    }
+    let client = null;
+    try {
+      client = this.workerControlClientFactory(binding);
+    } catch (error) {
+      const failures = this.markWorkerControlProbeFailure(workerID, error);
+      return { ok: false, failures };
+    }
+    if (!client?.isConfigured?.()) {
+      return { ok: true };
+    }
+    if (typeof client.ping !== "function") {
+      return { ok: true };
+    }
+    try {
+      await client.ping();
+      this.clearWorkerControlProbeFailure(workerID);
+      return { ok: true };
+    } catch (error) {
+      const failures = this.markWorkerControlProbeFailure(workerID, error);
+      return { ok: false, failures };
+    }
   }
 
   async deliverEventToWorker(binding, rawPayload) {
@@ -625,16 +692,6 @@ export class DaemonRuntime {
       return false;
     }
 
-    const pid = Number(runtime.pid ?? 0);
-    if (!Number.isFinite(pid) || pid <= 0 || this.isProcessRunning(pid)) {
-      return false;
-    }
-
-    this.workerProcessManager?.markWorkerRuntimeStopped?.(workerID, {
-      exitCode: Number(runtime.exit_code ?? 0),
-      exitSignal: normalizeString(runtime.exit_signal) || "worker_exited",
-    });
-
     const previousBinding = this.bindingRegistry.getByAibotSessionID(sessionID) ?? binding;
     if (
       normalizeString(previousBinding?.worker_id) !== workerID
@@ -643,20 +700,53 @@ export class DaemonRuntime {
       return false;
     }
 
-    this.trace({
-      stage: "worker_process_exit_detected",
-      session_id: sessionID,
-      worker_id: workerID,
-      pid,
-      previous_status: workerStatus,
-    }, "error");
+    const pid = Number(runtime.pid ?? 0);
+    if (Number.isFinite(pid) && pid > 0 && !this.isProcessRunning(pid)) {
+      this.workerProcessManager?.markWorkerRuntimeStopped?.(workerID, {
+        exitCode: Number(runtime.exit_code ?? 0),
+        exitSignal: normalizeString(runtime.exit_signal) || "worker_exited",
+      });
 
-    const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
-      updatedAt: Date.now(),
-      lastStoppedAt: Date.now(),
-    });
-    await this.handleWorkerStatusUpdate(previousBinding, nextBinding);
-    return true;
+      this.trace({
+        stage: "worker_process_exit_detected",
+        session_id: sessionID,
+        worker_id: workerID,
+        pid,
+        previous_status: workerStatus,
+      }, "error");
+
+      const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
+        updatedAt: Date.now(),
+        lastStoppedAt: Date.now(),
+      });
+      await this.handleWorkerStatusUpdate(previousBinding, nextBinding);
+      return true;
+    }
+
+    const probe = await this.probeWorkerControl(previousBinding);
+    if (!probe.ok && probe.failures >= this.workerControlProbeFailureThreshold) {
+      this.workerProcessManager?.markWorkerRuntimeStopped?.(workerID, {
+        exitCode: Number(runtime.exit_code ?? 0),
+        exitSignal: "worker_control_unreachable",
+      });
+      this.trace({
+        stage: "worker_control_unreachable_detected",
+        session_id: sessionID,
+        worker_id: workerID,
+        pid,
+        previous_status: workerStatus,
+        failures: probe.failures,
+      }, "error");
+
+      const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
+        updatedAt: Date.now(),
+        lastStoppedAt: Date.now(),
+      });
+      await this.handleWorkerStatusUpdate(previousBinding, nextBinding);
+      return true;
+    }
+
+    return false;
   }
 
   async handleWorkerStatusUpdate(previousBinding, nextBinding) {
@@ -673,6 +763,17 @@ export class DaemonRuntime {
       status: nextStatus,
     });
 
+    const previousWorkerID = normalizeString(previousBinding?.worker_id);
+    const nextWorkerID = normalizeString(nextBinding?.worker_id);
+    if (nextStatus === "ready" || nextStatus === "connected") {
+      if (nextWorkerID) {
+        this.clearWorkerControlProbeFailure(nextWorkerID);
+      }
+      if (previousWorkerID && previousWorkerID !== nextWorkerID) {
+        this.clearWorkerControlProbeFailure(previousWorkerID);
+      }
+    }
+
     if (canDeliverToWorker(nextBinding)) {
       await this.flushPendingSessionEvents(sessionID, nextBinding);
     }
@@ -681,7 +782,13 @@ export class DaemonRuntime {
       return;
     }
 
-    const previousWorkerID = normalizeString(previousBinding?.worker_id);
+    if (nextWorkerID) {
+      this.clearWorkerControlProbeFailure(nextWorkerID);
+    }
+    if (previousWorkerID && previousWorkerID !== nextWorkerID) {
+      this.clearWorkerControlProbeFailure(previousWorkerID);
+    }
+
     for (const record of this.listPendingEventsForSession(sessionID)) {
       if (previousWorkerID && normalizeString(record.last_worker_id) !== previousWorkerID) {
         if (normalizeString(record.last_worker_id)) {

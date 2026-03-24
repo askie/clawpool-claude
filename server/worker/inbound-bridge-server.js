@@ -137,6 +137,14 @@ export class WorkerInboundBridgeServer {
       return;
     }
 
+    if (pathname === "/v1/worker/ping") {
+      writeJSON(response, 200, {
+        ok: true,
+        ts: Date.now(),
+      });
+      return;
+    }
+
     writeJSON(response, 404, { error: "not_found" });
   }
 }

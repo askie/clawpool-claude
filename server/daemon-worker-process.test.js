@@ -354,6 +354,52 @@ test("cleanupStaleManagedProcesses terminates stale Claude processes for bound s
   assert.equal(await readFile(ignoredPIDPathB, "utf8"), "not-a-pid\n");
 });
 
+test("stopWorker escalates to SIGKILL when graceful stop does not exit in time", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-stop-escalate-"));
+  const pidPath = path.join(tempDir, "worker-stop.pid");
+  const signals = [];
+  const waitCalls = [];
+  await writeFile(pidPath, "3456\n", "utf8");
+
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+    },
+    packageRoot: tempDir,
+    async terminateProcessTree(pid, { signal = "SIGTERM" } = {}) {
+      signals.push([pid, signal]);
+      return true;
+    },
+    async waitForProcessExit(pid, { timeoutMs = 0 } = {}) {
+      waitCalls.push([pid, timeoutMs]);
+      return waitCalls.length >= 2;
+    },
+  });
+
+  manager.runtimes.set("worker-stop", {
+    worker_id: "worker-stop",
+    pid: 3456,
+    pid_path: pidPath,
+    status: "ready",
+  });
+
+  const stopped = await manager.stopWorker("worker-stop");
+
+  assert.equal(stopped, true);
+  assert.deepEqual(signals, [
+    [3456, "SIGTERM"],
+    [3456, "SIGKILL"],
+  ]);
+  assert.deepEqual(waitCalls, [
+    [3456, 5000],
+    [3456, 3000],
+  ]);
+  assert.equal(await readFile(pidPath, "utf8"), "");
+  assert.equal(manager.getWorkerRuntime("worker-stop")?.status, "stopped");
+  assert.equal(manager.getWorkerRuntime("worker-stop")?.exit_signal, "SIGKILL");
+});
+
 test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude pid file", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-visible-launch-script-"));
   const logsDir = path.join(tempDir, "logs");

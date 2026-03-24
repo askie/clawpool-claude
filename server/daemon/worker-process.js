@@ -6,7 +6,10 @@ import { randomUUID } from "node:crypto";
 import { resolvePackageRoot, resolveServerEntryPath } from "../../cli/config.js";
 import { ensureUserMcpServer as defaultEnsureUserMcpServer } from "../../cli/mcp.js";
 import { resolveWorkerLogsDir } from "./daemon-paths.js";
-import { terminateProcessTree as defaultTerminateProcessTree } from "../process-control.js";
+import {
+  terminateProcessTree as defaultTerminateProcessTree,
+  waitForProcessExit as defaultWaitForProcessExit,
+} from "../process-control.js";
 
 const missingResumeSessionPattern = /No conversation found with session ID:/u;
 
@@ -345,6 +348,7 @@ export class WorkerProcessManager {
     spawnImpl = spawn,
     ensureUserMcpServer = defaultEnsureUserMcpServer,
     terminateProcessTree = defaultTerminateProcessTree,
+    waitForProcessExit = defaultWaitForProcessExit,
   } = {}) {
     this.env = env;
     this.packageRoot = packageRoot;
@@ -356,6 +360,9 @@ export class WorkerProcessManager {
     this.terminateProcessTree = typeof terminateProcessTree === "function"
       ? terminateProcessTree
       : defaultTerminateProcessTree;
+    this.waitForProcessExit = typeof waitForProcessExit === "function"
+      ? waitForProcessExit
+      : defaultWaitForProcessExit;
     this.runtimes = new Map();
   }
 
@@ -494,27 +501,26 @@ export class WorkerProcessManager {
     });
     const stdoutHandle = await open(stdoutLogPath, "w");
     const stderrHandle = await open(stderrLogPath, "w");
+    try {
+      await this.cleanupStaleManagedProcesses([normalizedSessionID]);
 
-    await this.cleanupStaleManagedProcesses([normalizedSessionID]);
-
-    let child = null;
-    let pid = 0;
-    let pidPath = "";
-    let visibleTerminal = null;
-    if (shouldShowClaudeWindow(this.env)) {
-      visibleTerminal = await launchClaudeInVisibleTerminal({
-        logsDir,
-        workerID: normalizedWorkerID,
-        cwd: normalizedCwd,
-        command: claudeCommand,
-        args: claudeArgs,
-        env: workerEnv,
-        spawnImpl: this.spawnImpl,
-      });
-      pid = Number(visibleTerminal.pid ?? 0);
-      pidPath = normalizeString(visibleTerminal.pidPath);
-    } else {
-      if (process.platform === "darwin") {
+      let child = null;
+      let pid = 0;
+      let pidPath = "";
+      let visibleTerminal = null;
+      if (shouldShowClaudeWindow(this.env)) {
+        visibleTerminal = await launchClaudeInVisibleTerminal({
+          logsDir,
+          workerID: normalizedWorkerID,
+          cwd: normalizedCwd,
+          command: claudeCommand,
+          args: claudeArgs,
+          env: workerEnv,
+          spawnImpl: this.spawnImpl,
+        });
+        pid = Number(visibleTerminal.pid ?? 0);
+        pidPath = normalizeString(visibleTerminal.pidPath);
+      } else if (process.platform === "darwin") {
         const hiddenPty = await launchClaudeInHiddenPty({
           logsDir,
           workerID: normalizedWorkerID,
@@ -544,36 +550,43 @@ export class WorkerProcessManager {
         child.stdin?.write("\n");
         child.stdin?.end();
         child.unref();
-        pid = child.pid ?? 0;
+        pid = Number(child.pid ?? 0);
+        if (!Number.isFinite(pid) || pid <= 0) {
+          throw new Error("failed to determine spawned Claude pid");
+        }
         pidPath = resolveWorkerPIDPath(logsDir, normalizedWorkerID);
         await writeFile(pidPath, `${pid}\n`, "utf8");
       }
+
+      if (!Number.isFinite(pid) || pid <= 0) {
+        throw new Error("failed to determine spawned Claude pid");
+      }
+
+      const runtime = {
+        worker_id: normalizedWorkerID,
+        aibot_session_id: normalizedSessionID,
+        claude_session_id: normalizedClaudeSessionID,
+        cwd: normalizedCwd,
+        plugin_data_dir: normalizedPluginDataDir,
+        logs_dir: logsDir,
+        stdout_log_path: stdoutLogPath,
+        stderr_log_path: stderrLogPath,
+        pid_path: pidPath,
+        pid,
+        started_at: Date.now(),
+        status: "starting",
+        resume_session: resumeSession,
+        visible_terminal: Boolean(visibleTerminal),
+      };
+      this.runtimes.set(normalizedWorkerID, runtime);
+
+      return { ...runtime };
+    } finally {
+      await Promise.allSettled([
+        stdoutHandle.close(),
+        stderrHandle.close(),
+      ]);
     }
-
-    const runtime = {
-      worker_id: normalizedWorkerID,
-      aibot_session_id: normalizedSessionID,
-      claude_session_id: normalizedClaudeSessionID,
-      cwd: normalizedCwd,
-      plugin_data_dir: normalizedPluginDataDir,
-      logs_dir: logsDir,
-      stdout_log_path: stdoutLogPath,
-      stderr_log_path: stderrLogPath,
-      pid_path: pidPath,
-      pid,
-      started_at: Date.now(),
-      status: "starting",
-      resume_session: resumeSession,
-      visible_terminal: Boolean(visibleTerminal),
-    };
-    this.runtimes.set(normalizedWorkerID, runtime);
-
-    await Promise.allSettled([
-      stdoutHandle.close(),
-      stderrHandle.close(),
-    ]);
-
-    return { ...runtime };
   }
 
   async stopWorker(workerID) {
@@ -583,14 +596,37 @@ export class WorkerProcessManager {
       return false;
     }
     const pid = Number(runtime.pid ?? 0);
+    let exitSignal = "SIGTERM";
     if (pid > 0) {
-      const terminated = await this.terminateProcessTree(pid);
+      const terminated = await this.terminateProcessTree(pid, {
+        platform: process.platform,
+        signal: exitSignal,
+      });
       if (!terminated) {
         return false;
       }
+      const exited = await this.waitForProcessExit(pid, {
+        timeoutMs: 5000,
+      });
+      if (!exited) {
+        exitSignal = "SIGKILL";
+        await this.terminateProcessTree(pid, {
+          platform: process.platform,
+          signal: exitSignal,
+        });
+        const forceExited = await this.waitForProcessExit(pid, {
+          timeoutMs: 3000,
+        });
+        if (!forceExited) {
+          return false;
+        }
+      }
+    }
+    if (runtime.pid_path) {
+      await writeFile(runtime.pid_path, "", "utf8").catch(() => {});
     }
     this.markWorkerRuntimeStopped(normalizedWorkerID, {
-      exitSignal: "SIGTERM",
+      exitSignal,
     });
     return true;
   }

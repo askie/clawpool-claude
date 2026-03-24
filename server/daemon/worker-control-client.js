@@ -77,4 +77,23 @@ export class WorkerControlClient {
     }
     return json;
   }
+
+  async ping() {
+    if (!this.isConfigured()) {
+      throw new Error("worker control is not configured");
+    }
+    const response = await this.fetchImpl(`${this.controlURL}/v1/worker/ping`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${this.token}`,
+      },
+      body: JSON.stringify({}),
+    });
+    const json = await parseJSONResponse(response);
+    if (!response.ok) {
+      throw new Error(normalizeString(json.error) || `worker control failed ${response.status}`);
+    }
+    return json;
+  }
 }

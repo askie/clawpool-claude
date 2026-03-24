@@ -2277,6 +2277,114 @@ test("daemon runtime reconciles an exited worker and fails delivered pending eve
   );
 });
 
+test("daemon runtime marks worker stopped after repeated worker control probe failures", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-probe",
+    claude_session_id: "claude-probe",
+    cwd: tempDir,
+    worker_id: "worker-probe",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-probe",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-probe",
+    session_id: "chat-probe",
+    msg_id: "msg-probe",
+    sender_id: "sender-probe",
+    content: "probe",
+  });
+  await deliveryStore.markPendingEventDelivered("evt-probe", "worker-probe");
+
+  let pingCount = 0;
+  const workerProcessManager = {
+    getWorkerRuntime() {
+      return {
+        worker_id: "worker-probe",
+        aibot_session_id: "chat-probe",
+        pid: 50001,
+        status: "ready",
+      };
+    },
+    markWorkerRuntimeStopped(workerID, { exitSignal = "" } = {}) {
+      workerCalls.push({ kind: "mark_stopped", workerID, exitSignal });
+      return {
+        worker_id: workerID,
+        status: "stopped",
+        exit_signal: exitSignal,
+      };
+    },
+  };
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    workerControlProbeFailureThreshold: 2,
+    isProcessRunning() {
+      return true;
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async ping() {
+          pingCount += 1;
+          throw new Error("connection refused");
+        },
+      };
+    },
+  });
+
+  const unchanged = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-probe"),
+  );
+  assert.equal(unchanged, false);
+  assert.equal(registry.getByAibotSessionID("chat-probe")?.worker_status, "ready");
+
+  const changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-probe"),
+  );
+  assert.equal(changed, true);
+  assert.equal(registry.getByAibotSessionID("chat-probe")?.worker_status, "stopped");
+  assert.equal(pingCount, 2);
+  assert.equal(workerCalls.length, 1);
+  assert.equal(workerCalls[0].exitSignal, "worker_control_unreachable");
+  assert.equal(deliveryStore.getPendingEvent("evt-probe"), null);
+  assert.deepEqual(
+    sent.find(
+      (item) => item.kind === "event_result" && item.payload.event_id === "evt-probe",
+    )?.payload,
+    {
+      event_id: "evt-probe",
+      status: "failed",
+      code: "worker_interrupted",
+      msg: "worker interrupted while processing event",
+    },
+  );
+});
+
 test("daemon runtime fails pending events when worker stops before becoming ready", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
