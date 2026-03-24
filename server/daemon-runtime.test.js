@@ -69,6 +69,24 @@ function assertRespondedEventResult(sent, eventID) {
   );
 }
 
+function assertOpenWorkspaceCard(payload, {
+  summaryText,
+  detailText,
+} = {}) {
+  assert.equal(payload.text, "");
+  assert.deepEqual(payload.extra?.biz_card, {
+    version: 1,
+    type: "claude_open_session",
+    payload: {
+      summary_text: summaryText,
+      detail_text: detailText,
+      command_prefix: "/clawpool open",
+      command_hint: "/clawpool open <working-directory>",
+      initial_cwd: "",
+    },
+  });
+}
+
 test("daemon runtime open creates a fixed binding and spawns worker", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
@@ -299,8 +317,54 @@ test("daemon runtime missing binding replies without leaving the event pending",
   });
 
   assert.equal(workerCalls.length, 0);
-  assert.match(sent.find((item) => item.kind === "text").payload.text, /先发送 open/u);
+  assertOpenWorkspaceCard(sent.find((item) => item.kind === "text")?.payload, {
+    summaryText: "当前会话还没有绑定目录。",
+    detailText: "发送 open <目录> 来创建会话。",
+  });
   assertRespondedEventResult(sent, "evt-missing");
+});
+
+test("daemon runtime missing binding control commands send only the open workspace card", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+  });
+
+  for (const content of ["status", "where", "stop"]) {
+    await runtime.handleEvent({
+      event_id: `evt-${content}`,
+      session_id: `chat-${content}`,
+      msg_id: `msg-${content}`,
+      content,
+    });
+  }
+
+  assert.equal(workerCalls.length, 0);
+  const textReplies = sent.filter((item) => item.kind === "text");
+  assert.equal(textReplies.length, 3);
+  for (const reply of textReplies) {
+    assertOpenWorkspaceCard(reply.payload, {
+      summaryText: "当前会话还没有绑定目录。",
+      detailText: "发送 open <目录> 来创建会话。",
+    });
+  }
+  for (const eventID of ["evt-status", "evt-where", "evt-stop"]) {
+    assertRespondedEventResult(sent, eventID);
+  }
 });
 
 test("daemon runtime invalid control command replies without timing out", async () => {
@@ -331,21 +395,10 @@ test("daemon runtime invalid control command replies without timing out", async 
   });
 
   assert.equal(workerCalls.length, 0);
-  assert.match(sent.find((item) => item.kind === "text").payload.text, /open 缺少目录路径/u);
-  assert.deepEqual(
-    sent.find((item) => item.kind === "text")?.payload.extra?.biz_card,
-    {
-      version: 1,
-      type: "claude_open_session",
-      payload: {
-        summary_text: "open 缺少目录路径。",
-        detail_text: "请输入工作目录来启动或恢复 Claude 会话。",
-        command_prefix: "/clawpool open",
-        command_hint: "/clawpool open <working-directory>",
-        initial_cwd: "",
-      },
-    },
-  );
+  assertOpenWorkspaceCard(sent.find((item) => item.kind === "text")?.payload, {
+    summaryText: "open 缺少目录路径。",
+    detailText: "请输入工作目录来启动或恢复 Claude 会话。",
+  });
   assertRespondedEventResult(sent, "evt-invalid");
 });
 

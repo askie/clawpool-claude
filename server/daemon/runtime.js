@@ -40,6 +40,13 @@ function buildInterruptedEventNotice() {
   return "Claude 刚刚中断了，这条消息没有处理完成。请再发一次。";
 }
 
+function buildMissingBindingCardOptions() {
+  return {
+    summaryText: "当前会话还没有绑定目录。",
+    detailText: "发送 open <目录> 来创建会话。",
+  };
+}
+
 function hasWorkerControl(binding) {
   return Boolean(binding?.worker_control_url && binding?.worker_control_token);
 }
@@ -154,6 +161,27 @@ export class DaemonRuntime {
     const response = await this.reply(event, text, extra);
     this.complete(event, result);
     return response;
+  }
+
+  async respondWithOpenWorkspaceCard(event, {
+    summaryText,
+    detailText,
+    initialCwd = "",
+    replySource = "",
+  } = {}, result = {}) {
+    return this.respond(
+      event,
+      "",
+      {
+        ...(replySource ? { reply_source: replySource } : {}),
+        biz_card: buildOpenWorkspaceCard({
+          summaryText,
+          detailText,
+          initialCwd,
+        }),
+      },
+      result,
+    );
   }
 
   ack(event) {
@@ -794,6 +822,13 @@ export class DaemonRuntime {
 
   async handleStatusCommand(event) {
     const binding = this.bindingRegistry.getByAibotSessionID(event.session_id);
+    if (!binding) {
+      await this.respondWithOpenWorkspaceCard(event, {
+        ...buildMissingBindingCardOptions(),
+        replySource: "daemon_control_status_missing",
+      });
+      return;
+    }
     await this.respond(event, formatBindingSummary(binding), {
       reply_source: "daemon_control_status",
     });
@@ -801,9 +836,14 @@ export class DaemonRuntime {
 
   async handleWhereCommand(event) {
     const binding = this.bindingRegistry.getByAibotSessionID(event.session_id);
-    const text = binding
-      ? `当前目录: ${binding.cwd}`
-      : "当前会话还没有绑定目录。";
+    if (!binding) {
+      await this.respondWithOpenWorkspaceCard(event, {
+        ...buildMissingBindingCardOptions(),
+        replySource: "daemon_control_where_missing",
+      });
+      return;
+    }
+    const text = `当前目录: ${binding.cwd}`;
     await this.respond(event, text, {
       reply_source: "daemon_control_where",
     });
@@ -812,8 +852,9 @@ export class DaemonRuntime {
   async handleStopCommand(event) {
     const binding = this.bindingRegistry.getByAibotSessionID(event.session_id);
     if (!binding) {
-      await this.respond(event, "当前会话还没有绑定目录。", {
-        reply_source: "daemon_control_stop_missing",
+      await this.respondWithOpenWorkspaceCard(event, {
+        ...buildMissingBindingCardOptions(),
+        replySource: "daemon_control_stop_missing",
       });
       return;
     }
@@ -835,15 +876,15 @@ export class DaemonRuntime {
 
   async handleControlCommand(event, parsed) {
     if (!parsed.ok) {
+      if (parsed.command === "open") {
+        await this.respondWithOpenWorkspaceCard(event, {
+          summaryText: parsed.error,
+          replySource: "daemon_control_invalid",
+        });
+        return true;
+      }
       await this.respond(event, parsed.error, {
         reply_source: "daemon_control_invalid",
-        ...(parsed.command === "open"
-          ? {
-              biz_card: buildOpenWorkspaceCard({
-                summaryText: parsed.error,
-              }),
-            }
-          : {}),
       });
       return true;
     }
@@ -893,11 +934,10 @@ export class DaemonRuntime {
         event_id: event.event_id,
         session_id: event.session_id,
       }, "error");
-      await this.respond(
-        event,
-        "当前会话还没有绑定目录。先发送 open <目录> 来创建会话。",
-        { reply_source: "daemon_route_missing" },
-      );
+      await this.respondWithOpenWorkspaceCard(event, {
+        ...buildMissingBindingCardOptions(),
+        replySource: "daemon_route_missing",
+      });
       return;
     }
 
