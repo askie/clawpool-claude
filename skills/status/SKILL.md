@@ -1,5 +1,5 @@
 ---
-name: status
+name: clawpool:status
 description: Show Clawpool configuration, connection state, access policy, and startup hints.
 user-invocable: true
 allowed-tools:

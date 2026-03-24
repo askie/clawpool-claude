@@ -1,11 +1,11 @@
 ---
-name: configure
+name: clawpool:configure
 description: Explain that Clawpool connection settings are now managed only by the host daemon CLI.
 user-invocable: true
 allowed-tools: []
 ---
 
-# configure
+# /clawpool:configure
 
 Arguments passed: `$ARGUMENTS`
 
