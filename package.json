@@ -22,9 +22,11 @@
   "scripts": {
     "prepublishOnly": "npm run build",
     "clean": "node -e \"const fs=require('node:fs'); fs.rmSync('dist', { recursive: true, force: true });\"",
-    "build": "npm run clean && esbuild server/main.js --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js",
-    "dev": "npm run clean && esbuild server/main.js --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js --watch",
-    "deamon": "node ./bin/clawpool-claude.js daemon --agent-id 2035251418226495488 --ws-url ws://127.0.0.1:27189/v1/agent-api/ws?agent_id=2035251418226495488 --api-key ak_2035251418226495488_XUizZj3TnLwcHOsaGnWr67vdWZ9KCLA6",
+    "build:worker": "esbuild server/main.js --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js",
+    "build:daemon": "esbuild bin/clawpool-claude.js --bundle --platform=node --format=esm --target=node20 --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=dist/daemon.js",
+    "build": "npm run clean && npm run build:worker && npm run build:daemon",
+    "dev": "node ./scripts/dev-build.js",
+    "daemon": "node ./dist/daemon.js --show-claude",
     "test": "node --test server/*.test.js cli/*.test.js"
   },
   "dependencies": {

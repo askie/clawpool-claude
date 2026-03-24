@@ -155,4 +155,15 @@ clawpool-claude [options]
 npm run dev
 ```
 
-它会持续监听源码变化，并把最新产物自动编译到当前项目的 `dist/index.js`。这条命令只服务本地开发，不影响用户正式安装后的使用流程。
+它会持续监听源码变化，并把最新产物自动编译到当前项目的：
+
+- `dist/index.js`
+- `dist/daemon.js`
+
+本地联调时，再开一个窗口运行：
+
+```bash
+npm run daemon
+```
+
+这样 daemon 进程和 Claude 会话里加载的 worker，都会使用当前刚编译出来的开发产物。
