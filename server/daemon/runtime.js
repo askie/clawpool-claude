@@ -83,6 +83,7 @@ function formatRuntimeError(error, fallback = "处理失败。") {
 const defaultDeliveredInFlightMaxAgeMs = 60 * 1000;
 const queuedEventRetryDelayMs = 200;
 const defaultWorkerControlProbeFailureThreshold = 3;
+const defaultMcpInteractionIdleMs = 5 * 60 * 1000;
 
 function normalizeNonNegativeInt(value, fallbackValue) {
   const numeric = Number(value);
@@ -107,6 +108,7 @@ export class DaemonRuntime {
     isProcessRunning = defaultIsProcessRunning,
     deliveredInFlightMaxAgeMs = null,
     workerControlProbeFailureThreshold = defaultWorkerControlProbeFailureThreshold,
+    mcpInteractionIdleMs = defaultMcpInteractionIdleMs,
   }) {
     this.env = env;
     this.bindingRegistry = bindingRegistry;
@@ -136,6 +138,10 @@ export class DaemonRuntime {
     this.workerControlProbeFailureThreshold = normalizeNonNegativeInt(
       workerControlProbeFailureThreshold ?? env.CLAWPOOL_CLAUDE_WORKER_CONTROL_PROBE_FAILURE_THRESHOLD,
       defaultWorkerControlProbeFailureThreshold,
+    );
+    this.mcpInteractionIdleMs = normalizeNonNegativeInt(
+      mcpInteractionIdleMs ?? env.CLAWPOOL_CLAUDE_MCP_INTERACTION_IDLE_MS,
+      defaultMcpInteractionIdleMs,
     );
     this.isProcessRunning = typeof isProcessRunning === "function"
       ? isProcessRunning
@@ -390,6 +396,56 @@ export class DaemonRuntime {
     return nextFailures;
   }
 
+  hasPendingDeliveredOrDispatchingEvent(sessionID) {
+    const normalizedSessionID = normalizeString(sessionID);
+    if (!normalizedSessionID) {
+      return false;
+    }
+    return this.listPendingEventsForSession(normalizedSessionID).some((record) => {
+      const deliveryState = normalizeString(record.delivery_state);
+      return deliveryState === "dispatching" || deliveryState === "delivered";
+    });
+  }
+
+  inspectMcpInteractionHealth(binding, pingPayload) {
+    if (normalizeString(binding?.worker_status) !== "ready") {
+      return { ok: true };
+    }
+
+    if (pingPayload && Object.hasOwn(pingPayload, "mcp_ready") && pingPayload.mcp_ready === false) {
+      return {
+        ok: false,
+        reason: "mcp_not_ready",
+      };
+    }
+
+    if (this.mcpInteractionIdleMs <= 0) {
+      return { ok: true };
+    }
+
+    const sessionID = normalizeString(binding?.aibot_session_id);
+    if (!this.hasPendingDeliveredOrDispatchingEvent(sessionID)) {
+      return { ok: true };
+    }
+
+    const activityAt = Number(pingPayload?.mcp_last_activity_at ?? 0);
+    if (!Number.isFinite(activityAt) || activityAt <= 0) {
+      return {
+        ok: false,
+        reason: "mcp_activity_missing",
+      };
+    }
+    const idleMs = Date.now() - activityAt;
+    if (idleMs > this.mcpInteractionIdleMs) {
+      return {
+        ok: false,
+        reason: "mcp_activity_stale",
+        idleMs,
+      };
+    }
+    return { ok: true };
+  }
+
   async probeWorkerControl(binding) {
     if (this.workerControlProbeFailureThreshold <= 0) {
       return { ok: true };
@@ -415,12 +471,31 @@ export class DaemonRuntime {
       return { ok: true };
     }
     try {
-      await client.ping();
+      const pingPayload = await client.ping();
+      const mcpHealth = this.inspectMcpInteractionHealth(binding, pingPayload);
+      if (!mcpHealth.ok) {
+        const details = [
+          `reason=${mcpHealth.reason}`,
+          Number.isFinite(mcpHealth.idleMs) ? `idle_ms=${mcpHealth.idleMs}` : "",
+        ]
+          .filter((part) => part)
+          .join(" ");
+        const failures = this.markWorkerControlProbeFailure(
+          workerID,
+          new Error(details || "mcp interaction unhealthy"),
+        );
+        return {
+          ok: false,
+          failures,
+          reason: mcpHealth.reason,
+          idleMs: mcpHealth.idleMs,
+        };
+      }
       this.clearWorkerControlProbeFailure(workerID);
       return { ok: true };
     } catch (error) {
       const failures = this.markWorkerControlProbeFailure(workerID, error);
-      return { ok: false, failures };
+      return { ok: false, failures, reason: "worker_control_probe_failed" };
     }
   }
 
@@ -736,6 +811,8 @@ export class DaemonRuntime {
         pid,
         previous_status: workerStatus,
         failures: probe.failures,
+        reason: probe.reason,
+        idle_ms: probe.idleMs,
       }, "error");
 
       const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {

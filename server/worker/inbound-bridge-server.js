@@ -35,6 +35,7 @@ export class WorkerInboundBridgeServer {
     onDeliverEvent = null,
     onDeliverStop = null,
     onDeliverRevoke = null,
+    onPing = null,
   } = {}) {
     this.host = host;
     this.port = port;
@@ -42,6 +43,7 @@ export class WorkerInboundBridgeServer {
     this.onDeliverEvent = typeof onDeliverEvent === "function" ? onDeliverEvent : null;
     this.onDeliverStop = typeof onDeliverStop === "function" ? onDeliverStop : null;
     this.onDeliverRevoke = typeof onDeliverRevoke === "function" ? onDeliverRevoke : null;
+    this.onPing = typeof onPing === "function" ? onPing : null;
     this.server = null;
     this.address = null;
   }
@@ -138,7 +140,15 @@ export class WorkerInboundBridgeServer {
     }
 
     if (pathname === "/v1/worker/ping") {
-      writeJSON(response, 200, {
+      if (!this.onPing) {
+        writeJSON(response, 200, {
+          ok: true,
+          ts: Date.now(),
+        });
+        return;
+      }
+      const result = await this.onPing(payload);
+      writeJSON(response, 200, result ?? {
         ok: true,
         ts: Date.now(),
       });

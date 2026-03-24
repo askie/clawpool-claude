@@ -28,6 +28,7 @@ export class DaemonBridgeRuntime {
       && this.daemonBridgeURL
       && this.daemonBridgeToken
     );
+    this.lastMcpActivityAt = 0;
     this.workerBridgeClient = new WorkerBridgeClient({
       bridgeURL: this.daemonBridgeURL,
       token: this.daemonBridgeToken,
@@ -74,6 +75,12 @@ export class DaemonBridgeRuntime {
             }
             return { ok: true };
           },
+          onPing: async () => ({
+            ok: true,
+            ts: Date.now(),
+            mcp_ready: this.workerReadyReported,
+            mcp_last_activity_at: this.lastMcpActivityAt,
+          }),
         })
       : null;
     this.workerReadyReported = false;
@@ -323,6 +330,7 @@ export class DaemonBridgeRuntime {
   }
 
   async reportWorkerReadyOnce() {
+    this.lastMcpActivityAt = Date.now();
     if (!this.daemonModeEnabled || !this.workerBridgeClient.isConfigured() || this.workerReadyReported) {
       return;
     }

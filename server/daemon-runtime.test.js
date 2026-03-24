@@ -2385,6 +2385,111 @@ test("daemon runtime marks worker stopped after repeated worker control probe fa
   );
 });
 
+test("daemon runtime marks worker stopped when MCP interaction is stale for in-flight events", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-mcp-stale",
+    claude_session_id: "claude-mcp-stale",
+    cwd: tempDir,
+    worker_id: "worker-mcp-stale",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-mcp-stale",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-mcp-stale",
+    session_id: "chat-mcp-stale",
+    msg_id: "msg-mcp-stale",
+    sender_id: "sender-mcp-stale",
+    content: "probe",
+  });
+  await deliveryStore.markPendingEventDelivered("evt-mcp-stale", "worker-mcp-stale");
+
+  const workerProcessManager = {
+    getWorkerRuntime() {
+      return {
+        worker_id: "worker-mcp-stale",
+        aibot_session_id: "chat-mcp-stale",
+        pid: 50002,
+        status: "ready",
+      };
+    },
+    markWorkerRuntimeStopped(workerID, { exitSignal = "" } = {}) {
+      workerCalls.push({ kind: "mark_stopped", workerID, exitSignal });
+      return {
+        worker_id: workerID,
+        status: "stopped",
+        exit_signal: exitSignal,
+      };
+    },
+  };
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    workerControlProbeFailureThreshold: 1,
+    mcpInteractionIdleMs: 60 * 1000,
+    isProcessRunning() {
+      return true;
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async ping() {
+          return {
+            ok: true,
+            mcp_ready: true,
+            mcp_last_activity_at: Date.now() - (10 * 60 * 1000),
+          };
+        },
+      };
+    },
+  });
+
+  const changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-mcp-stale"),
+  );
+
+  assert.equal(changed, true);
+  assert.equal(registry.getByAibotSessionID("chat-mcp-stale")?.worker_status, "stopped");
+  assert.equal(workerCalls.length, 1);
+  assert.equal(workerCalls[0].exitSignal, "worker_control_unreachable");
+  assert.equal(deliveryStore.getPendingEvent("evt-mcp-stale"), null);
+  assert.deepEqual(
+    sent.find(
+      (item) => item.kind === "event_result" && item.payload.event_id === "evt-mcp-stale",
+    )?.payload,
+    {
+      event_id: "evt-mcp-stale",
+      status: "failed",
+      code: "worker_interrupted",
+      msg: "worker interrupted while processing event",
+    },
+  );
+});
+
 test("daemon runtime fails pending events when worker stops before becoming ready", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];

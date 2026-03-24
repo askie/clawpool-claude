@@ -25,3 +25,39 @@ test("worker inbound bridge server responds to ping", async () => {
     await server.stop();
   }
 });
+
+test("worker inbound bridge server returns custom ping payload", async () => {
+  const server = new WorkerInboundBridgeServer({
+    token: "token-ping-custom",
+    async onPing() {
+      return {
+        ok: true,
+        ts: 123,
+        mcp_ready: true,
+        mcp_last_activity_at: 456,
+      };
+    },
+  });
+  await server.start();
+
+  try {
+    const response = await fetch(`${server.getURL()}/v1/worker/ping`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer token-ping-custom",
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.deepEqual(payload, {
+      ok: true,
+      ts: 123,
+      mcp_ready: true,
+      mcp_last_activity_at: 456,
+    });
+  } finally {
+    await server.stop();
+  }
+});
