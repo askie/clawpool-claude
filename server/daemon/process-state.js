@@ -68,8 +68,8 @@ function buildStatusRecord({
     bridge_url: normalizeString(bridgeURL),
     configured: Boolean(configured),
     connection_state: normalizeString(connectionState),
-    stopped_at: state === "stopped" ? now : Number(previous?.stopped_at ?? 0),
-    exit_code: state === "stopped" ? Number(exitCode ?? 0) : Number(previous?.exit_code ?? 0),
+    stopped_at: state === "stopped" ? now : 0,
+    exit_code: state === "stopped" ? Number(exitCode ?? 0) : 0,
     reason: normalizeString(reason),
   };
 }

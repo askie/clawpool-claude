@@ -145,6 +145,11 @@ test("daemon process state acquires lock and clears on release", async () => {
   let inspection = await inspectDaemonProcessState({ dataDir });
   assert.equal(inspection.running, true);
   assert.equal(inspection.bridge_url, "http://127.0.0.1:8000");
+  const runningStatus = JSON.parse(
+    await readFile(path.join(dataDir, "daemon-status.json"), "utf8"),
+  );
+  assert.equal(runningStatus.stopped_at, 0);
+  assert.equal(runningStatus.exit_code, 0);
 
   await state.release({ exitCode: 0, reason: "shutdown" });
   inspection = await inspectDaemonProcessState({ dataDir });
