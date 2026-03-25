@@ -68,6 +68,7 @@ export class ServiceManager {
       cliPath: descriptor.cli_path,
       definitionPath: descriptor.definition_path,
       dataDir: descriptor.data_dir,
+      environmentPath: normalizeString(this.env.PATH),
     };
   }
 

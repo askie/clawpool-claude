@@ -59,6 +59,9 @@ test("service manager install uses launchd bootstrap on macOS", async () => {
   assert.equal(status.installed, true);
   assert.equal(status.service_kind, "launchd");
   assert.match(plist, /<string>\/usr\/local\/bin\/node<\/string>/u);
+  assert.match(plist, /<key>EnvironmentVariables<\/key>/u);
+  assert.match(plist, /<key>PATH<\/key>/u);
+  assert.match(plist, /\/usr\/bin/u);
   assert.deepEqual(calls.map((entry) => `${entry.command} ${entry.args.join(" ")}`), [
     `launchctl bootstrap gui/501 ${status.definition_path}`,
     `launchctl kickstart -k gui/501/${status.service_id}`,

@@ -43,6 +43,7 @@ function buildMacOSLaunchAgentPlist({
   dataDir,
   stdoutPath,
   stderrPath,
+  environmentPath = "",
 }) {
   const args = buildProgramArgs({ nodePath, cliPath, dataDir });
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -61,7 +62,12 @@ ${args.map((item) => `    <string>${xmlEscape(item)}</string>`).join("\n")}
   <true/>
   <key>WorkingDirectory</key>
   <string>${xmlEscape(path.dirname(cliPath))}</string>
-  <key>StandardOutPath</key>
+${environmentPath ? `  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${xmlEscape(environmentPath)}</string>
+  </dict>
+` : ""}  <key>StandardOutPath</key>
   <string>${xmlEscape(stdoutPath)}</string>
   <key>StandardErrorPath</key>
   <string>${xmlEscape(stderrPath)}</string>
@@ -125,6 +131,7 @@ export function getPlatformServiceAdapter(platform = process.platform) {
         dataDir,
         stdoutPath,
         stderrPath,
+        environmentPath = "",
         homeDir = os.homedir(),
       }) {
         const definitionPath = resolveMacOSLaunchAgentPath(serviceID, homeDir);
@@ -136,6 +143,7 @@ export function getPlatformServiceAdapter(platform = process.platform) {
           dataDir,
           stdoutPath,
           stderrPath,
+          environmentPath,
         }), {
           encoding: "utf8",
           mode: 0o600,
