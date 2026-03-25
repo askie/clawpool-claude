@@ -52,6 +52,38 @@ test("worker health inspector gives grace window for missing mcp activity right 
   assert.equal(stale.reason, "mcp_activity_missing");
 });
 
+test("worker health inspector accepts recent composing heartbeat as interaction activity", () => {
+  const baseTime = Date.now();
+  const inspector = new WorkerHealthInspector({
+    mcpInteractionIdleMs: 50,
+    getPendingEventsForSession() {
+      return [
+        {
+          eventID: "evt-1",
+          delivery_state: "delivered",
+          updated_at: baseTime - 1000,
+          last_composing_at: baseTime,
+        },
+      ];
+    },
+  });
+
+  const healthy = inspector.inspectMcpInteractionHealth(
+    { worker_status: "ready", aibot_session_id: "chat-1" },
+    { ok: true, mcp_ready: true, mcp_last_activity_at: 0 },
+    { now: baseTime + 20 },
+  );
+  assert.equal(healthy.ok, true);
+
+  const stale = inspector.inspectMcpInteractionHealth(
+    { worker_status: "ready", aibot_session_id: "chat-1" },
+    { ok: true, mcp_ready: true, mcp_last_activity_at: 0 },
+    { now: baseTime + 120 },
+  );
+  assert.equal(stale.ok, false);
+  assert.equal(stale.reason, "mcp_activity_missing");
+});
+
 test("worker health inspector detects pid mismatch in ping identity", () => {
   const inspector = new WorkerHealthInspector({
     getPendingEventsForSession() {
@@ -178,4 +210,27 @@ test("worker health inspector timeout check accepts fresh ping activity", () => 
     },
   );
   assert.equal(timedOutWithFreshPing.length, 0);
+});
+
+test("worker health inspector ignores composing heartbeat for result timeout", () => {
+  const baseTime = Date.now();
+  const inspector = new WorkerHealthInspector({
+    mcpResultTimeoutMs: 30,
+    getPendingEventsForSession() {
+      return [
+        {
+          eventID: "evt-1",
+          delivery_state: "delivered",
+          updated_at: baseTime - 100,
+          last_composing_at: baseTime - 10,
+        },
+      ];
+    },
+  });
+
+  const timedOut = inspector.listTimedOutMcpResultRecords(
+    "chat-1",
+    baseTime,
+  );
+  assert.equal(timedOut.length, 1);
 });

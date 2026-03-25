@@ -3468,6 +3468,8 @@ test("daemon runtime does not treat composing heartbeat as MCP result progress",
   const after = deliveryStore.getPendingEvent("evt-mcp-heartbeat");
   assert.equal(runtime.listTimedOutMcpResultRecords("chat-mcp-heartbeat").length, 1);
   assert.equal(after?.updated_at, before?.updated_at);
+  assert.match(String(after?.last_composing_at ?? 0), /^[1-9]\d*$/u);
+  assert.ok(Number(after?.last_composing_at ?? 0) >= Number(before?.last_composing_at ?? 0));
 
   const changed = await runtime.reconcileWorkerProcess(
     registry.getByAibotSessionID("chat-mcp-heartbeat"),
@@ -3707,6 +3709,7 @@ test("daemon runtime rejects composing heartbeat with mismatched worker pid", as
 
   const after = deliveryStore.getPendingEvent("evt-mcp-heartbeat-pid");
   assert.equal(after?.updated_at, before?.updated_at);
+  assert.equal(after?.last_composing_at, before?.last_composing_at);
 });
 
 test("daemon runtime accepts composing heartbeat when only launch wrapper pid differs", async () => {
@@ -3803,6 +3806,120 @@ test("daemon runtime accepts composing heartbeat when only launch wrapper pid di
 
   const after = deliveryStore.getPendingEvent("evt-mcp-heartbeat-wrapper-pid");
   assert.equal(after.updated_at, before.updated_at);
+  assert.match(String(after.last_composing_at ?? 0), /^[1-9]\d*$/u);
+});
+
+test("daemon runtime uses composing heartbeat for worker health and in-flight serialization", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-mcp-heartbeat-health",
+    claude_session_id: "claude-mcp-heartbeat-health",
+    cwd: tempDir,
+    worker_id: "worker-mcp-heartbeat-health",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-mcp-heartbeat-health",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-mcp-heartbeat-health",
+    session_id: "chat-mcp-heartbeat-health",
+    msg_id: "msg-mcp-heartbeat-health",
+    sender_id: "sender-mcp-heartbeat-health",
+    content: "probe",
+  });
+  await deliveryStore.markPendingEventDelivered(
+    "evt-mcp-heartbeat-health",
+    "worker-mcp-heartbeat-health",
+  );
+  await sleep(40);
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: {
+      getWorkerRuntime() {
+        return {
+          worker_id: "worker-mcp-heartbeat-health",
+          aibot_session_id: "chat-mcp-heartbeat-health",
+          pid: 50012,
+          status: "ready",
+        };
+      },
+      markWorkerRuntimeStopped(workerID, { exitSignal = "" } = {}) {
+        workerCalls.push({ kind: "mark_stopped", workerID, exitSignal });
+        return {
+          worker_id: workerID,
+          status: "stopped",
+          exit_signal: exitSignal,
+        };
+      },
+    },
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    deliveredInFlightMaxAgeMs: 30,
+    workerControlProbeFailureThreshold: 1,
+    mcpInteractionIdleMs: 50,
+    mcpResultTimeoutMs: 0,
+    isProcessRunning() {
+      return true;
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async ping() {
+          return {
+            ok: true,
+            worker_id: "worker-mcp-heartbeat-health",
+            aibot_session_id: "chat-mcp-heartbeat-health",
+            claude_session_id: "claude-mcp-heartbeat-health",
+            pid: 50012,
+            mcp_ready: true,
+            mcp_last_activity_at: 0,
+          };
+        },
+      };
+    },
+  });
+
+  assert.equal(runtime.hasInFlightSessionEvent("chat-mcp-heartbeat-health"), false);
+
+  await runtime.handleWorkerSessionComposing({
+    worker_id: "worker-mcp-heartbeat-health",
+    aibot_session_id: "chat-mcp-heartbeat-health",
+    session_id: "chat-mcp-heartbeat-health",
+    claude_session_id: "claude-mcp-heartbeat-health",
+    pid: 50012,
+    ref_event_id: "evt-mcp-heartbeat-health",
+    active: true,
+  });
+
+  assert.equal(runtime.hasInFlightSessionEvent("chat-mcp-heartbeat-health"), true);
+
+  const changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-mcp-heartbeat-health"),
+  );
+  assert.equal(changed, false);
+  assert.equal(registry.getByAibotSessionID("chat-mcp-heartbeat-health")?.worker_status, "ready");
+  assert.equal(workerCalls.length, 0);
 });
 
 test("daemon runtime fails pending events when worker stops before becoming ready", async () => {

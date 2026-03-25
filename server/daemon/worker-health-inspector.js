@@ -18,6 +18,14 @@ function resolvePersistedWorkerPid(binding) {
   return 0;
 }
 
+function resolveRecordInteractionAt(record) {
+  const updatedAt = Number(record?.updated_at ?? 0);
+  const composingAt = Number(record?.last_composing_at ?? 0);
+  const normalizedUpdatedAt = Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : 0;
+  const normalizedComposingAt = Number.isFinite(composingAt) && composingAt > 0 ? composingAt : 0;
+  return Math.max(normalizedUpdatedAt, normalizedComposingAt);
+}
+
 export class WorkerHealthInspector {
   constructor({
     getPendingEventsForSession,
@@ -129,39 +137,35 @@ export class WorkerHealthInspector {
       return { ok: true };
     }
 
-    const latestDispatchAt = inFlightRecords.reduce((latest, record) => {
-      const updatedAt = Number(record.updated_at ?? 0);
-      if (!Number.isFinite(updatedAt) || updatedAt <= 0) {
-        return latest;
-      }
-      return Math.max(latest, updatedAt);
+    const latestInteractionAt = inFlightRecords.reduce((latest, record) => {
+      return Math.max(latest, resolveRecordInteractionAt(record));
     }, 0);
 
-    const graceFromDispatch = (reason) => {
-      if (!Number.isFinite(latestDispatchAt) || latestDispatchAt <= 0) {
+    const graceFromPendingActivity = (reason) => {
+      if (!Number.isFinite(latestInteractionAt) || latestInteractionAt <= 0) {
         return {
           ok: false,
           reason,
         };
       }
-      const idleSinceDispatchMs = Math.max(0, now - latestDispatchAt);
-      if (idleSinceDispatchMs <= this.mcpInteractionIdleMs) {
+      const idleSinceActivityMs = Math.max(0, now - latestInteractionAt);
+      if (idleSinceActivityMs <= this.mcpInteractionIdleMs) {
         return { ok: true };
       }
       return {
         ok: false,
         reason,
-        idleMs: idleSinceDispatchMs,
+        idleMs: idleSinceActivityMs,
       };
     };
 
     const activityAt = Number(pingPayload?.mcp_last_activity_at ?? 0);
     if (!Number.isFinite(activityAt) || activityAt <= 0) {
-      return graceFromDispatch("mcp_activity_missing");
+      return graceFromPendingActivity("mcp_activity_missing");
     }
 
-    if (Number.isFinite(latestDispatchAt) && latestDispatchAt > 0 && activityAt < latestDispatchAt) {
-      return graceFromDispatch("mcp_activity_before_dispatch");
+    if (Number.isFinite(latestInteractionAt) && latestInteractionAt > 0 && activityAt < latestInteractionAt) {
+      return graceFromPendingActivity("mcp_activity_before_event_activity");
     }
 
     const idleMs = Math.max(0, now - activityAt);

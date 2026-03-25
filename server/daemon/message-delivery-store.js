@@ -16,6 +16,14 @@ function normalizeTimestamp(value, fallbackValue = Date.now()) {
   return Math.floor(numeric);
 }
 
+function normalizeOptionalTimestamp(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 0;
+  }
+  return Math.floor(numeric);
+}
+
 function normalizeDeliveryState(value) {
   const normalized = normalizeString(value);
   if (
@@ -79,6 +87,7 @@ function normalizePendingEvent(input) {
     delivery_state: normalizeDeliveryState(input.delivery_state),
     last_worker_id: normalizeString(input.last_worker_id),
     updated_at: normalizeTimestamp(input.updated_at),
+    last_composing_at: normalizeOptionalTimestamp(input.last_composing_at),
   };
 }
 
@@ -143,6 +152,7 @@ function toPendingRecord(record) {
     delivery_state: record.delivery_state,
     last_worker_id: record.last_worker_id,
     updated_at: record.updated_at,
+    last_composing_at: record.last_composing_at,
   };
 }
 
@@ -244,6 +254,7 @@ export class MessageDeliveryStore {
       delivery_state: "pending",
       last_worker_id: "",
       updated_at: Date.now(),
+      last_composing_at: 0,
     });
     if (!pendingEvent) {
       return null;
@@ -277,23 +288,33 @@ export class MessageDeliveryStore {
       delivery_attempts_delta: 1,
       delivery_state: "dispatching",
       last_worker_id: workerID,
+      last_composing_at: 0,
     });
   }
 
   async markPendingEventPending(eventID) {
     return this.updatePendingEvent(eventID, {
       delivery_state: "pending",
+      last_composing_at: 0,
     });
   }
 
   async markPendingEventInterrupted(eventID) {
     return this.updatePendingEvent(eventID, {
       delivery_state: "interrupted",
+      last_composing_at: 0,
     });
   }
 
   async touchPendingEvent(eventID) {
     return this.updatePendingEvent(eventID);
+  }
+
+  async touchPendingEventComposing(eventID) {
+    return this.updatePendingEvent(eventID, {
+      touch_updated_at: false,
+      last_composing_at: Date.now(),
+    });
   }
 
   async clearEventState(eventID) {
@@ -333,12 +354,16 @@ export class MessageDeliveryStore {
       return null;
     }
 
+    const touchUpdatedAt = patch.touch_updated_at !== false;
     const next = normalizePendingEvent({
       ...existing,
       delivery_attempts: existing.delivery_attempts + Number(patch.delivery_attempts_delta ?? 0),
       delivery_state: patch.delivery_state ?? existing.delivery_state,
       last_worker_id: patch.last_worker_id ?? existing.last_worker_id,
-      updated_at: Date.now(),
+      updated_at: touchUpdatedAt ? Date.now() : existing.updated_at,
+      last_composing_at: Object.hasOwn(patch, "last_composing_at")
+        ? patch.last_composing_at
+        : existing.last_composing_at,
     });
     this.state.pending_events[normalizedEventID] = next;
     await this.save();

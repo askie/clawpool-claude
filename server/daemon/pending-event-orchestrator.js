@@ -2,6 +2,14 @@ function normalizeString(value) {
   return String(value ?? "").trim();
 }
 
+function resolveRecordInFlightActivityAt(record) {
+  const updatedAt = Number(record?.updated_at ?? 0);
+  const composingAt = Number(record?.last_composing_at ?? 0);
+  const normalizedUpdatedAt = Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : 0;
+  const normalizedComposingAt = Number.isFinite(composingAt) && composingAt > 0 ? composingAt : 0;
+  return Math.max(normalizedUpdatedAt, normalizedComposingAt);
+}
+
 function hasWorkerControl(binding) {
   return Boolean(binding?.worker_control_url && binding?.worker_control_token);
 }
@@ -82,6 +90,10 @@ export class PendingEventOrchestrator {
     return this.messageDeliveryStore.touchPendingEvent(eventID);
   }
 
+  async touchPendingEventComposing(eventID) {
+    return this.messageDeliveryStore.touchPendingEventComposing(eventID);
+  }
+
   hasInFlightSessionEvent(sessionID, { excludeEventID = "" } = {}) {
     const normalizedSessionID = normalizeString(sessionID);
     const excludedEventID = normalizeString(excludeEventID);
@@ -102,11 +114,11 @@ export class PendingEventOrchestrator {
       if (this.deliveredInFlightMaxAgeMs <= 0) {
         return false;
       }
-      const updatedAt = Number(record.updated_at ?? 0);
-      if (!Number.isFinite(updatedAt) || updatedAt <= 0) {
+      const activityAt = resolveRecordInFlightActivityAt(record);
+      if (!Number.isFinite(activityAt) || activityAt <= 0) {
         return true;
       }
-      const ageMs = Date.now() - updatedAt;
+      const ageMs = Date.now() - activityAt;
       if (ageMs <= this.deliveredInFlightMaxAgeMs) {
         return true;
       }

@@ -703,6 +703,10 @@ export class DaemonRuntime {
     return this.pendingEventOrchestrator.touchPendingEvent(eventID);
   }
 
+  async touchPendingEventComposingActivity(eventID) {
+    return this.pendingEventOrchestrator.touchPendingEventComposing(eventID);
+  }
+
   async handleWorkerSessionComposing(payload = {}) {
     const eventID = normalizeString(payload.ref_event_id);
     if (!eventID) {
@@ -808,17 +812,22 @@ export class DaemonRuntime {
       return null;
     }
 
+    const active = Boolean(payload.active);
+    const nextRecord = active
+      ? (await this.touchPendingEventComposingActivity(record.eventID)) ?? record
+      : record;
+
     this.trace({
       stage: "pending_event_activity_observed",
-      event_id: record.eventID,
-      session_id: record.sessionID,
+      event_id: nextRecord.eventID,
+      session_id: nextRecord.sessionID,
       worker_id: workerID,
       worker_pid: reportedPid,
       worker_session_id: workerSessionID,
       claude_session_id: claudeSessionID,
-      active: Boolean(payload.active),
+      active,
     }, "debug");
-    return record;
+    return nextRecord;
   }
 
   hasInFlightSessionEvent(sessionID, { excludeEventID = "" } = {}) {

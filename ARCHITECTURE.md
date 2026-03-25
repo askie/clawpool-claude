@@ -98,7 +98,7 @@ flowchart TD
   L -- "否" --> H
   L -- "是" --> M{"MCP 交互是否健康"}
   M -- "否" --> H
-  M -- "是" --> N["计算结果超时集合<br/>基准=max(事件活跃时间, 最新 mcp_last_activity_at)"]
+  M -- "是" --> N["计算结果超时集合<br/>基准=max(事件结果进展时间 updated_at, 最新 mcp_last_activity_at)"]
 
   H --> I{"失败次数达到阈值"}
   I -- "否" --> J["暂不判死 等下一轮"]
@@ -133,8 +133,8 @@ flowchart TD
   H -- "否" --> Z
   H -- "是" --> I{"event.last_worker_id 匹配"}
   I -- "否" --> Z
-  I -- "是" --> J["刷新该事件活跃时间 updated_at"]
-  J --> K["后续超时判断使用最新活跃时间"]
+  I -- "是" --> J["刷新 composing 活跃时间 last_composing_at"]
+  J --> K["worker 健康检查和串行投递使用最新活跃时间"]
 ```
 
 ## 审批和追问
