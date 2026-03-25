@@ -184,6 +184,19 @@ export function getPlatformServiceAdapter(platform = process.platform) {
         ], {
           allowFailure: true,
         });
+        
+        // macOS `bootout` is asynchronous. We must wait until it is fully unloaded.
+        for (let i = 0; i < 20; i++) {
+          const printRes = await runCommand("launchctl", [
+            "print",
+            `${domain}/${serviceID}`,
+          ], { allowFailure: true });
+          if (printRes.exitCode !== 0) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+
         await runCommand("launchctl", [
           "bootstrap",
           domain,
