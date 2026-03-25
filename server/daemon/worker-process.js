@@ -167,6 +167,7 @@ export async function createVisibleClaudeLaunchScript({
   command,
   args,
   env,
+  captureOutputInExpectLog = true,
 }) {
   await mkdir(logsDir, { recursive: true });
   const normalizedWorkerID = normalizeString(workerID) || randomUUID();
@@ -180,7 +181,7 @@ export async function createVisibleClaudeLaunchScript({
   const expectLines = [
     "log_user 1",
     "set timeout -1",
-    `log_file -a {${tclEscape(stdoutLogPath)}}`,
+    ...(captureOutputInExpectLog ? [`log_file -a {${tclEscape(stdoutLogPath)}}`] : []),
     `set claude_command [list {${tclEscape(command)}}${args.map((item) => ` {${tclEscape(item)}}`).join("")}]`,
     "spawn -noecho {*}$claude_command",
     `set pid_file [open {${tclEscape(pidPath)}} w]`,
@@ -299,6 +300,7 @@ async function launchClaudeInHiddenPty({
     command,
     args,
     env,
+    captureOutputInExpectLog: false,
   });
   const child = spawnImpl("/usr/bin/expect", [expectPath], {
     cwd,

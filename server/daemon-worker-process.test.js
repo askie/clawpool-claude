@@ -228,7 +228,9 @@ test("spawnWorker hidden tty does not emit a fake spawn_id error when Claude exi
 
   await sleep(800);
 
+  const stdoutLog = await readFile(path.join(logsDir, "worker-fast-exit.out.log"), "utf8");
   const stderrLog = await readFile(path.join(logsDir, "worker-fast-exit.err.log"), "utf8");
+  assert.equal(stdoutLog.includes("spawn id"), false);
   assert.equal(stderrLog.includes("spawn id"), false);
 });
 
@@ -497,6 +499,23 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude
   assert.match(expectScript, /exp_continue/u);
   assert.match(expectScript, /set claude_command \[list \{\/usr\/local\/bin\/claude\} \{--name\} \{clawpool-chat-visible\} \{--plugin-dir\} \{\/tmp\/clawpool-claude-plugin\} \{--dangerously-skip-permissions\} \{--session-id\} \{session-1\} \{--dangerously-load-development-channels\} \{server:clawpool-claude\}\]/u);
   assert.equal(await readFile(result.pidPath, "utf8"), "");
+});
+
+test("createVisibleClaudeLaunchScript can skip expect log capture for hidden tty launches", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-hidden-launch-script-"));
+  const logsDir = path.join(tempDir, "logs");
+  const result = await createVisibleClaudeLaunchScript({
+    logsDir,
+    workerID: "worker-hidden",
+    cwd: "/tmp/demo path",
+    command: "/usr/local/bin/claude",
+    args: ["--session-id", "session-2"],
+    env: {},
+    captureOutputInExpectLog: false,
+  });
+
+  const expectScript = await readFile(result.expectPath, "utf8");
+  assert.doesNotMatch(expectScript, /log_file -a/u);
 });
 
 test("worker process manager detects missing Claude session resume failure from logs", async () => {
