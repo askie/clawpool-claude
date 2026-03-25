@@ -84,6 +84,54 @@ export class ServiceManager {
     };
   }
 
+  isDescriptorCurrent(descriptor) {
+    return (
+      normalizeString(descriptor?.node_path) === normalizeString(this.nodePath) &&
+      normalizeString(descriptor?.cli_path) === normalizeString(this.cliPath)
+    );
+  }
+
+  async refreshDescriptor(dataDir, descriptor) {
+    const normalizedDataDir = normalizeDataDir(dataDir);
+    const logsDir = resolveServiceLogsDir(normalizedDataDir);
+    await mkdir(logsDir, { recursive: true, mode: 0o700 });
+
+    const nextDescriptor = {
+      ...descriptor,
+      platform: this.platform,
+      service_id: normalizeString(descriptor?.service_id) || buildServiceID(normalizedDataDir, this.platform),
+      node_path: normalizeString(this.nodePath),
+      cli_path: normalizeString(this.cliPath),
+      definition_path: normalizeString(descriptor?.definition_path),
+      data_dir: normalizedDataDir,
+    };
+    const installResult = await this.adapter.install({
+      ...this.toAdapterPayload(nextDescriptor),
+      stdoutPath: resolveServiceStdoutPath(normalizedDataDir),
+      stderrPath: resolveServiceStderrPath(normalizedDataDir),
+      homeDir: this.homeDir,
+      uid: this.uid,
+      runCommand: this.runCommandImpl,
+    });
+    const refreshed = {
+      ...nextDescriptor,
+      installed_at: Number(descriptor?.installed_at ?? 0),
+      definition_path: normalizeString(installResult?.definitionPath || nextDescriptor.definition_path),
+      updated_at: this.now(),
+    };
+    await this.createStore(normalizedDataDir).save(refreshed);
+    return refreshed;
+  }
+
+  async resolveActiveDescriptor(dataDir) {
+    const normalizedDataDir = normalizeDataDir(dataDir);
+    const { descriptor } = await this.loadDescriptor(normalizedDataDir);
+    if (this.isDescriptorCurrent(descriptor)) {
+      return descriptor;
+    }
+    return this.refreshDescriptor(normalizedDataDir, descriptor);
+  }
+
   async install({ dataDir }) {
     const normalizedDataDir = normalizeDataDir(dataDir);
     const logsDir = resolveServiceLogsDir(normalizedDataDir);
@@ -114,7 +162,7 @@ export class ServiceManager {
   }
 
   async start({ dataDir }) {
-    const { descriptor } = await this.loadDescriptor(dataDir);
+    const descriptor = await this.resolveActiveDescriptor(dataDir);
     const state = await inspectDaemonProcessState({
       dataDir: descriptor.data_dir,
     });
@@ -159,7 +207,7 @@ export class ServiceManager {
   }
 
   async restart({ dataDir }) {
-    const { descriptor } = await this.loadDescriptor(dataDir);
+    const descriptor = await this.resolveActiveDescriptor(dataDir);
     await this.adapter.restart({
       ...this.toAdapterPayload(descriptor),
       homeDir: this.homeDir,
@@ -209,12 +257,7 @@ export class ServiceManager {
         pid: daemonState.pid,
       };
     }
-    const installState = (
-      normalizeString(descriptor.node_path) === normalizeString(this.nodePath) &&
-      normalizeString(descriptor.cli_path) === normalizeString(this.cliPath)
-    )
-      ? "current"
-      : "stale";
+    const installState = this.isDescriptorCurrent(descriptor) ? "current" : "stale";
     return {
       installed: true,
       install_state: installState,

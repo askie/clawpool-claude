@@ -120,6 +120,91 @@ test("service manager status reports stale install when launcher path changed", 
   assert.equal(status.installed, true);
 });
 
+test("service manager restart refreshes stale install descriptor before restart", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-restart-stale-"));
+  const dataDir = path.join(tempRoot, "data");
+  const store = new ServiceInstallStore(resolveServiceInstallRecordPath(dataDir));
+  await store.save({
+    platform: "darwin",
+    service_id: "com.example.clawpool",
+    node_path: "/old/node",
+    cli_path: "/old/bin/clawpool-claude.js",
+    definition_path: path.join(tempRoot, "Library", "LaunchAgents", "com.example.clawpool.plist"),
+    data_dir: path.resolve(dataDir),
+    installed_at: 1,
+    updated_at: 1,
+  });
+
+  const calls = [];
+  const manager = new ServiceManager({
+    platform: "darwin",
+    homeDir: tempRoot,
+    uid: 501,
+    nodePath: "/new/node",
+    cliPath: "/new/bin/clawpool-claude.js",
+    now: () => 99,
+    runCommandImpl: async (command, args, options = {}) => {
+      calls.push({ command, args, options });
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  });
+
+  const status = await manager.restart({ dataDir });
+  const refreshed = await store.load();
+
+  assert.equal(status.install_state, "current");
+  assert.equal(refreshed?.node_path, "/new/node");
+  assert.equal(refreshed?.cli_path, "/new/bin/clawpool-claude.js");
+  assert.equal(refreshed?.updated_at, 99);
+  assert.deepEqual(calls.map((entry) => `${entry.command} ${entry.args.join(" ")}`), [
+    `launchctl bootout gui/501/com.example.clawpool`,
+    `launchctl bootstrap gui/501 ${refreshed.definition_path}`,
+    `launchctl kickstart -k gui/501/com.example.clawpool`,
+  ]);
+});
+
+test("service manager start refreshes stale install descriptor before starting a stopped daemon", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-start-stale-"));
+  const dataDir = path.join(tempRoot, "data");
+  const store = new ServiceInstallStore(resolveServiceInstallRecordPath(dataDir));
+  await store.save({
+    platform: "darwin",
+    service_id: "com.example.clawpool",
+    node_path: "/old/node",
+    cli_path: "/old/bin/clawpool-claude.js",
+    definition_path: path.join(tempRoot, "Library", "LaunchAgents", "com.example.clawpool.plist"),
+    data_dir: path.resolve(dataDir),
+    installed_at: 1,
+    updated_at: 1,
+  });
+
+  const calls = [];
+  const manager = new ServiceManager({
+    platform: "darwin",
+    homeDir: tempRoot,
+    uid: 501,
+    nodePath: "/new/node",
+    cliPath: "/new/bin/clawpool-claude.js",
+    now: () => 123,
+    runCommandImpl: async (command, args, options = {}) => {
+      calls.push({ command, args, options });
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  });
+
+  const status = await manager.start({ dataDir });
+  const refreshed = await store.load();
+
+  assert.equal(status.install_state, "current");
+  assert.equal(refreshed?.node_path, "/new/node");
+  assert.equal(refreshed?.cli_path, "/new/bin/clawpool-claude.js");
+  assert.equal(refreshed?.updated_at, 123);
+  assert.deepEqual(calls.map((entry) => `${entry.command} ${entry.args.join(" ")}`), [
+    `launchctl bootstrap gui/501 ${refreshed.definition_path}`,
+    `launchctl kickstart -k gui/501/com.example.clawpool`,
+  ]);
+});
+
 test("daemon process state acquires lock and clears on release", async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-state-"));
   const dataDir = path.join(tempRoot, "data");
