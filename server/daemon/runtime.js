@@ -977,6 +977,96 @@ export class DaemonRuntime {
     };
   }
 
+  async requeuePendingEventsForWorker(sessionID, workerID) {
+    const normalizedSessionID = normalizeString(sessionID);
+    const normalizedWorkerID = normalizeString(workerID);
+    if (!normalizedSessionID || !normalizedWorkerID) {
+      return 0;
+    }
+
+    let requeuedCount = 0;
+    const requeuedEventIDs = [];
+    for (const record of this.listPendingEventsForSession(normalizedSessionID)) {
+      if (normalizeString(record.last_worker_id) !== normalizedWorkerID) {
+        continue;
+      }
+      const deliveryState = normalizeString(record.delivery_state);
+      if (!["dispatching", "delivered", "interrupted"].includes(deliveryState)) {
+        continue;
+      }
+      const nextRecord = await this.markPendingEventPending(record.eventID);
+      if (!nextRecord) {
+        continue;
+      }
+      requeuedCount += 1;
+      requeuedEventIDs.push(record.eventID);
+    }
+    if (requeuedCount > 0) {
+      this.trace({
+        stage: "pending_events_requeued",
+        session_id: normalizedSessionID,
+        worker_id: normalizedWorkerID,
+        count: requeuedCount,
+        event_ids: requeuedEventIDs.slice(0, 5),
+      }, "error");
+    }
+    return requeuedCount;
+  }
+
+  async tryRecoverResumeAuthFailure(previousBinding, nextBinding) {
+    const sessionID = normalizeString(nextBinding?.aibot_session_id || previousBinding?.aibot_session_id);
+    const workerID = normalizeString(previousBinding?.worker_id || nextBinding?.worker_id);
+    if (!sessionID || !workerID) {
+      return false;
+    }
+
+    const runtime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
+    if (!runtime || !runtime.resume_session) {
+      return false;
+    }
+    const hasAuthLoginRequiredError = await this.workerProcessManager?.hasAuthLoginRequiredError?.(workerID);
+    if (!hasAuthLoginRequiredError) {
+      return false;
+    }
+
+    this.trace({
+      stage: "worker_resume_auth_recovering",
+      session_id: sessionID,
+      worker_id: workerID,
+      claude_session_id: previousBinding?.claude_session_id || nextBinding?.claude_session_id,
+    }, "error");
+    await this.requeuePendingEventsForWorker(sessionID, workerID);
+
+    const latestBinding = this.bindingRegistry.getByAibotSessionID(sessionID) ?? nextBinding ?? previousBinding;
+    if (!latestBinding) {
+      return false;
+    }
+    const fallbackBinding = await this.rotateClaudeSession(latestBinding);
+    const nextWorkerID = normalizeString(nextBinding?.worker_id) || workerID || randomUUID();
+    await this.bindingRegistry.markWorkerStarting(sessionID, {
+      workerID: nextWorkerID,
+      updatedAt: Date.now(),
+      lastStartedAt: Date.now(),
+    });
+    await this.workerProcessManager.spawnWorker({
+      aibotSessionID: sessionID,
+      cwd: fallbackBinding.cwd,
+      pluginDataDir: fallbackBinding.plugin_data_dir,
+      claudeSessionID: fallbackBinding.claude_session_id,
+      workerID: nextWorkerID,
+      bridgeURL: this.bridgeServer.getURL(),
+      bridgeToken: this.bridgeServer.token,
+      resumeSession: false,
+    });
+    this.trace({
+      stage: "worker_resume_auth_spawned_fresh",
+      session_id: sessionID,
+      worker_id: nextWorkerID,
+      claude_session_id: fallbackBinding.claude_session_id,
+    }, "error");
+    return true;
+  }
+
   async reconcileWorkerProcesses() {
     const bindings = this.bindingRegistry?.listBindings?.() ?? [];
     for (const binding of bindings) {
@@ -998,11 +1088,16 @@ export class DaemonRuntime {
 
     const hasAuthError = await this.workerProcessManager?.hasAuthLoginRequiredError?.(workerID);
     if (hasAuthError) {
+      const authRuntime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
+      const authExitSignal = authRuntime?.resume_session
+        ? "auth_login_required_resume"
+        : "auth_login_required";
       this.trace({
         stage: "worker_auth_error_detected",
         session_id: sessionID,
         worker_id: workerID,
         worker_status: workerStatus,
+        resume_session: Boolean(authRuntime?.resume_session),
       }, "error");
       await this.workerProcessManager?.stopWorker?.(workerID);
 
@@ -1012,7 +1107,7 @@ export class DaemonRuntime {
       });
       this.workerProcessManager?.markWorkerRuntimeStopped?.(workerID, {
         exitCode: 0,
-        exitSignal: "auth_login_required",
+        exitSignal: authExitSignal,
       });
       await this.handleWorkerStatusUpdate(binding, nextBinding);
       return true;
@@ -1156,6 +1251,20 @@ export class DaemonRuntime {
     }
     if (previousWorkerID && previousWorkerID !== nextWorkerID) {
       this.clearWorkerControlProbeFailure(previousWorkerID);
+    }
+
+    try {
+      const recovered = await this.tryRecoverResumeAuthFailure(previousBinding, nextBinding);
+      if (recovered) {
+        return;
+      }
+    } catch (error) {
+      this.trace({
+        stage: "worker_resume_auth_recovery_failed",
+        session_id: sessionID,
+        worker_id: previousWorkerID || nextWorkerID,
+        error: error instanceof Error ? error.message : String(error),
+      }, "error");
     }
 
     const failureEventOptions = await this.resolveWorkerFailureEventOptions(

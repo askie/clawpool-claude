@@ -2821,6 +2821,141 @@ test("daemon runtime returns auth login required message when worker logs show 4
   );
 });
 
+test("daemon runtime retries with fresh Claude session after resume auth failure", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-resume-auth",
+    claude_session_id: "claude-resume-auth",
+    cwd: tempDir,
+    worker_id: "worker-resume-auth",
+    worker_pid: 50020,
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-resume-auth",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-resume-auth",
+    session_id: "chat-resume-auth",
+    msg_id: "msg-resume-auth",
+    sender_id: "sender-resume-auth",
+    content: "resume auth",
+  });
+  await deliveryStore.markPendingEventDelivered("evt-resume-auth", "worker-resume-auth");
+
+  const runtimes = new Map([
+    ["worker-resume-auth", {
+      worker_id: "worker-resume-auth",
+      aibot_session_id: "chat-resume-auth",
+      pid: 50020,
+      status: "ready",
+      resume_session: true,
+      stdout_log_path: path.join(tempDir, "worker-resume-auth.out.log"),
+      stderr_log_path: path.join(tempDir, "worker-resume-auth.err.log"),
+    }],
+  ]);
+
+  const workerProcessManager = {
+    getWorkerRuntime(workerID) {
+      const runtime = runtimes.get(workerID);
+      return runtime ? { ...runtime } : null;
+    },
+    markWorkerRuntimeStopped(workerID, { exitSignal = "" } = {}) {
+      const runtime = runtimes.get(workerID);
+      if (!runtime) {
+        return null;
+      }
+      runtime.status = "stopped";
+      runtime.exit_signal = exitSignal;
+      runtime.stopped_at = Date.now();
+      workerCalls.push({ kind: "mark_stopped", workerID, exitSignal });
+      return { ...runtime };
+    },
+    async hasAuthLoginRequiredError(workerID) {
+      return workerID === "worker-resume-auth";
+    },
+    async stopWorker(workerID) {
+      workerCalls.push({ kind: "stop", workerID });
+      const runtime = runtimes.get(workerID);
+      if (runtime) {
+        runtime.status = "stopped";
+      }
+      return true;
+    },
+    async spawnWorker(input) {
+      workerCalls.push({ kind: "spawn", input });
+      runtimes.set(input.workerID, {
+        worker_id: input.workerID,
+        aibot_session_id: input.aibotSessionID,
+        pid: 50021,
+        status: "starting",
+        resume_session: input.resumeSession,
+      });
+      return {
+        worker_id: input.workerID,
+        pid: 50021,
+        status: "starting",
+        claude_session_id: input.claudeSessionID,
+        resume_session: input.resumeSession,
+      };
+    },
+  };
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    isProcessRunning() {
+      return true;
+    },
+  });
+
+  const changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-resume-auth"),
+  );
+  assert.equal(changed, true);
+  assert.equal(
+    workerCalls.some(
+      (call) => call.kind === "spawn" && call.input.resumeSession === false,
+    ),
+    true,
+  );
+  assert.equal(
+    workerCalls.some(
+      (call) => call.kind === "mark_stopped" && call.exitSignal === "auth_login_required_resume",
+    ),
+    true,
+  );
+  const pending = deliveryStore.getPendingEvent("evt-resume-auth");
+  assert.equal(pending?.delivery_state, "pending");
+  assert.equal(
+    sent.some((item) => item.kind === "event_result" && item.payload.event_id === "evt-resume-auth"),
+    false,
+  );
+  const refreshed = registry.getByAibotSessionID("chat-resume-auth");
+  assert.ok(refreshed);
+  assert.equal(refreshed.worker_status, "starting");
+  assert.notEqual(refreshed.claude_session_id, "claude-resume-auth");
+});
+
 test("daemon runtime prefers persisted worker pid over stale runtime pid during control probe", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const workerCalls = [];
