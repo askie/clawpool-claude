@@ -4082,3 +4082,201 @@ test("daemon runtime stops worker immediately and fails with auth message on aut
     },
   );
 });
+
+test("daemon runtime blocks immediate respawn after auth stop and fails fast", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  const now = Date.now();
+  await registry.createBinding({
+    aibot_session_id: "chat-auth-cooldown",
+    claude_session_id: "claude-auth-cooldown",
+    cwd: tempDir,
+    worker_id: "worker-auth-cooldown",
+    worker_status: "stopped",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+    last_stopped_at: now - 5_000,
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: {
+      getWorkerRuntime(workerID) {
+        if (workerID !== "worker-auth-cooldown") {
+          return null;
+        }
+        return {
+          worker_id: workerID,
+          status: "stopped",
+          exit_signal: "auth_login_required",
+          stopped_at: now - 5_000,
+        };
+      },
+      async spawnWorker(input) {
+        workerCalls.push({ kind: "spawn", input });
+        return {
+          worker_id: input.workerID,
+          status: "starting",
+        };
+      },
+    },
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    authFailureCooldownMs: 60_000,
+  });
+
+  await runtime.handleEvent({
+    event_id: "evt-auth-cooldown",
+    session_id: "chat-auth-cooldown",
+    msg_id: "msg-auth-cooldown",
+    sender_id: "sender-auth-cooldown",
+    content: "hello",
+  });
+
+  assert.equal(workerCalls.length, 0);
+  assert.equal(
+    sent.some(
+      (item) =>
+        item.kind === "text"
+        && item.payload.eventID === "evt-auth-cooldown"
+        && /claude auth login/iu.test(item.payload.text),
+    ),
+    true,
+  );
+  assert.deepEqual(
+    sent.find(
+      (item) => item.kind === "event_result" && item.payload.event_id === "evt-auth-cooldown",
+    )?.payload,
+    {
+      event_id: "evt-auth-cooldown",
+      status: "failed",
+      code: "claude_auth_login_required",
+      msg: "claude authentication expired; run claude auth login",
+    },
+  );
+  assert.equal(deliveryStore.getPendingEvent("evt-auth-cooldown"), null);
+});
+
+test("daemon runtime retries worker spawn after auth cooldown expires", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const delivered = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  const now = Date.now();
+  await registry.createBinding({
+    aibot_session_id: "chat-auth-cooldown-expired",
+    claude_session_id: "claude-auth-cooldown-expired",
+    cwd: tempDir,
+    worker_id: "worker-auth-cooldown-expired",
+    worker_status: "stopped",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+    last_stopped_at: now - 120_000,
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: {
+      getWorkerRuntime(workerID) {
+        if (workerID !== "worker-auth-cooldown-expired") {
+          return null;
+        }
+        return {
+          worker_id: workerID,
+          status: "stopped",
+          exit_signal: "auth_login_required",
+          stopped_at: now - 120_000,
+        };
+      },
+      async spawnWorker(input) {
+        workerCalls.push({ kind: "spawn", input });
+        await registry.markWorkerReady(input.aibotSessionID, {
+          workerID: input.workerID,
+          workerPid: 65432,
+          workerControlURL: "http://127.0.0.1:9012",
+          workerControlToken: "token-auth-cooldown-expired",
+          updatedAt: Date.now(),
+          lastStartedAt: Date.now(),
+        });
+        return {
+          worker_id: input.workerID,
+          pid: 65432,
+          claude_session_id: "claude-auth-cooldown-expired",
+          resume_session: true,
+          visible_terminal: false,
+          status: "starting",
+        };
+      },
+      async stopWorker() {
+        return true;
+      },
+    },
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    authFailureCooldownMs: 60_000,
+    async claudeSessionExists() {
+      return true;
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          delivered.push(payload);
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await runtime.handleEvent({
+    event_id: "evt-auth-cooldown-expired",
+    session_id: "chat-auth-cooldown-expired",
+    msg_id: "msg-auth-cooldown-expired",
+    sender_id: "sender-auth-cooldown-expired",
+    content: "hello",
+  });
+
+  assert.equal(workerCalls.length, 1);
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0]?.event_id, "evt-auth-cooldown-expired");
+  assert.equal(
+    sent.some(
+      (item) =>
+        item.kind === "text"
+        && item.payload.eventID === "evt-auth-cooldown-expired"
+        && /claude auth login/iu.test(item.payload.text),
+    ),
+    false,
+  );
+});

@@ -71,7 +71,7 @@ export class PendingEventOrchestrator {
   }
 
   async clearPendingEvent(eventID) {
-    await this.messageDeliveryStore.clearEventState(eventID);
+    return this.messageDeliveryStore.clearEventState(eventID);
   }
 
   listPendingEventsForSession(sessionID) {

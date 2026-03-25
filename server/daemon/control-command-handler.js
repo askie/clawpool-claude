@@ -71,7 +71,7 @@ export class DaemonControlCommandHandler {
         return;
       }
 
-      await this.ensureWorker(existing);
+      await this.ensureWorker(existing, { ignoreAuthCooldown: true });
       await this.respond(
         event,
         `当前会话已经绑定，已按原目录恢复或保持原会话。\n\n${this.formatBindingSummary(existing)}`,

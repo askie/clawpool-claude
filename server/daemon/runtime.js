@@ -91,6 +91,7 @@ const defaultWorkerControlProbeFailureThreshold = 3;
 const defaultMcpInteractionIdleMs = 5 * 60 * 1000;
 const defaultMcpResultTimeoutMs = 12 * 60 * 1000;
 const defaultRecentRevokeRetentionMs = 24 * 60 * 60 * 1000;
+const defaultAuthFailureCooldownMs = 60 * 1000;
 
 function normalizeNonNegativeInt(value, fallbackValue) {
   const numeric = Number(value);
@@ -147,6 +148,7 @@ export class DaemonRuntime {
     mcpInteractionIdleMs = defaultMcpInteractionIdleMs,
     mcpResultTimeoutMs = defaultMcpResultTimeoutMs,
     recentRevokeRetentionMs = defaultRecentRevokeRetentionMs,
+    authFailureCooldownMs = defaultAuthFailureCooldownMs,
   }) {
     this.env = env;
     this.bindingRegistry = bindingRegistry;
@@ -189,6 +191,10 @@ export class DaemonRuntime {
       recentRevokeRetentionMs ?? env.CLAWPOOL_CLAUDE_RECENT_REVOKE_RETENTION_MS,
       defaultRecentRevokeRetentionMs,
     );
+    this.authFailureCooldownMs = normalizeNonNegativeInt(
+      authFailureCooldownMs ?? env.CLAWPOOL_CLAUDE_AUTH_FAILURE_COOLDOWN_MS,
+      defaultAuthFailureCooldownMs,
+    );
     this.workerHealthInspector = new WorkerHealthInspector({
       getPendingEventsForSession: (sessionID) => this.messageDeliveryStore.listPendingEventsForSession(sessionID),
       mcpInteractionIdleMs: this.mcpInteractionIdleMs,
@@ -203,7 +209,7 @@ export class DaemonRuntime {
       bindingRegistry: this.bindingRegistry,
       workerProcessManager: this.workerProcessManager,
       bridgeServer: this.bridgeServer,
-      ensureWorker: async (binding) => this.ensureWorker(binding),
+      ensureWorker: async (...args) => this.ensureWorker(...args),
       respond: async (event, text, extra = {}, result = {}) => this.respond(event, text, extra, result),
       respondWithOpenWorkspaceCard: async (event, options = {}, result = {}) => (
         this.respondWithOpenWorkspaceCard(event, options, result)
@@ -360,7 +366,52 @@ export class DaemonRuntime {
     });
   }
 
-  async ensureWorker(binding) {
+  resolveAuthFailureRetryBlock(binding, { now = Date.now() } = {}) {
+    if (this.authFailureCooldownMs <= 0) {
+      return null;
+    }
+
+    const normalizedStatus = normalizeString(binding?.worker_status);
+    if (normalizedStatus !== "stopped" && normalizedStatus !== "failed") {
+      return null;
+    }
+
+    const workerID = normalizeString(binding?.worker_id);
+    if (!workerID) {
+      return null;
+    }
+
+    const runtime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
+    if (normalizeString(runtime?.status) !== "stopped") {
+      return null;
+    }
+    if (normalizeString(runtime?.exit_signal) !== "auth_login_required") {
+      return null;
+    }
+
+    const runtimeStoppedAt = Number(runtime?.stopped_at ?? 0);
+    const bindingStoppedAt = Number(binding?.last_stopped_at ?? 0);
+    const lastStoppedAt = Math.max(
+      Number.isFinite(runtimeStoppedAt) ? runtimeStoppedAt : 0,
+      Number.isFinite(bindingStoppedAt) ? bindingStoppedAt : 0,
+    );
+    if (lastStoppedAt <= 0) {
+      return null;
+    }
+
+    const remainingMs = (lastStoppedAt + this.authFailureCooldownMs) - now;
+    if (remainingMs <= 0) {
+      return null;
+    }
+
+    return {
+      workerID,
+      remainingMs,
+      lastStoppedAt,
+    };
+  }
+
+  async ensureWorker(binding, { ignoreAuthCooldown = false } = {}) {
     if (canDeliverToWorker(binding)) {
       this.trace({
         stage: "worker_reused_ready",
@@ -405,6 +456,24 @@ export class DaemonRuntime {
           return { worker_id: workerID, status: "starting" };
         }
       }
+    }
+
+    const authRetryBlock = ignoreAuthCooldown
+      ? null
+      : this.resolveAuthFailureRetryBlock(binding);
+    if (authRetryBlock) {
+      this.trace({
+        stage: "worker_spawn_blocked_auth_cooldown",
+        session_id: binding.aibot_session_id,
+        worker_id: authRetryBlock.workerID,
+        remaining_ms: authRetryBlock.remainingMs,
+        cooldown_ms: this.authFailureCooldownMs,
+        last_stopped_at: authRetryBlock.lastStoppedAt,
+      }, "error");
+      return {
+        worker_id: authRetryBlock.workerID,
+        status: "stopped",
+      };
     }
 
     const workerID = binding.worker_id || randomUUID();
@@ -684,7 +753,7 @@ export class DaemonRuntime {
   }
 
   async clearPendingEvent(eventID) {
-    await this.pendingEventOrchestrator.clearPendingEvent(eventID);
+    return this.pendingEventOrchestrator.clearPendingEvent(eventID);
   }
 
   listPendingEventsForSession(sessionID) {
@@ -1340,6 +1409,32 @@ export class DaemonRuntime {
           ...buildMissingBindingCardOptions(),
           replySource: "daemon_route_missing",
         });
+        return;
+      }
+
+      const authRetryBlock = this.resolveAuthFailureRetryBlock(binding);
+      if (authRetryBlock) {
+        this.trace({
+          stage: "event_worker_auth_blocked",
+          event_id: event.event_id,
+          session_id: event.session_id,
+          worker_id: authRetryBlock.workerID,
+          remaining_ms: authRetryBlock.remainingMs,
+          cooldown_ms: this.authFailureCooldownMs,
+          last_stopped_at: authRetryBlock.lastStoppedAt,
+        }, "error");
+        await this.respond(
+          event,
+          buildAuthLoginRequiredEventNotice(),
+          {
+            reply_source: "daemon_worker_auth_login_required",
+          },
+          {
+            status: "failed",
+            code: "claude_auth_login_required",
+            msg: "claude authentication expired; run claude auth login",
+          },
+        );
         return;
       }
 
