@@ -1673,6 +1673,75 @@ test("daemon runtime acknowledges revoke immediately and skips duplicate forward
   ]);
 });
 
+test("daemon runtime skips duplicate revoke forwards for the same message with a new event id", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const deliveredRevokes = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-revoke-2",
+    claude_session_id: "claude-revoke-2",
+    cwd: tempDir,
+    worker_id: "worker-revoke-2",
+    worker_status: "ready",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+    worker_control_url: "http://127.0.0.1:9993",
+    worker_control_token: "token-revoke-2",
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent() {
+          return { ok: true };
+        },
+        async deliverStop() {
+          return { ok: true };
+        },
+        async deliverRevoke(payload) {
+          deliveredRevokes.push(payload);
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await runtime.handleRevokeEvent({
+    event_id: "evt-revoke-dup-1",
+    session_id: "chat-revoke-2",
+    msg_id: "msg-revoke-2",
+  });
+  await runtime.handleRevokeEvent({
+    event_id: "evt-revoke-dup-2",
+    session_id: "chat-revoke-2",
+    msg_id: "msg-revoke-2",
+  });
+
+  assert.equal(sent.filter((item) => item.kind === "ack").length, 2);
+  assert.deepEqual(deliveredRevokes, [
+    {
+      event_id: "evt-revoke-dup-1",
+      session_id: "chat-revoke-2",
+      msg_id: "msg-revoke-2",
+    },
+  ]);
+});
+
 test("daemon runtime recovers stale worker control before forwarding stop", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];

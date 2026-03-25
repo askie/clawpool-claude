@@ -112,6 +112,15 @@ function resolveExpectedWorkerPid(binding, runtime) {
   return 0;
 }
 
+function buildRevokeDedupKey({ eventID = "", sessionID = "", msgID = "" } = {}) {
+  const normalizedSessionID = normalizeString(sessionID);
+  const normalizedMsgID = normalizeString(msgID);
+  if (normalizedSessionID && normalizedMsgID) {
+    return `${normalizedSessionID}:${normalizedMsgID}`;
+  }
+  return normalizeString(eventID);
+}
+
 export class DaemonRuntime {
   constructor({
     env = process.env,
@@ -241,18 +250,18 @@ export class DaemonRuntime {
     }
   }
 
-  hasRecentRevoke(eventID, now = Date.now()) {
+  hasRecentRevoke(revokeKey, now = Date.now()) {
     this.purgeExpiredRecentRevokes(now);
-    return this.recentRevokes.has(normalizeString(eventID));
+    return this.recentRevokes.has(normalizeString(revokeKey));
   }
 
-  rememberRecentRevoke(eventID, now = Date.now()) {
-    const normalizedEventID = normalizeString(eventID);
-    if (!normalizedEventID) {
+  rememberRecentRevoke(revokeKey, now = Date.now()) {
+    const normalizedRevokeKey = normalizeString(revokeKey);
+    if (!normalizedRevokeKey) {
       return;
     }
     this.purgeExpiredRecentRevokes(now);
-    this.recentRevokes.set(normalizedEventID, now);
+    this.recentRevokes.set(normalizedRevokeKey, now);
   }
 
   async reply(event, text, extra = {}) {
@@ -1437,7 +1446,12 @@ export class DaemonRuntime {
       return;
     }
 
-    if (this.hasRecentRevoke(eventID, receivedAt)) {
+    const revokeKey = buildRevokeDedupKey({
+      eventID,
+      sessionID,
+      msgID: rawPayload?.msg_id,
+    });
+    if (this.hasRecentRevoke(eventID, receivedAt) || this.hasRecentRevoke(revokeKey, receivedAt)) {
       this.trace({
         stage: "revoke_duplicate_skipped",
         event_id: eventID,
@@ -1446,6 +1460,7 @@ export class DaemonRuntime {
       });
       return;
     }
+    this.rememberRecentRevoke(revokeKey, receivedAt);
     this.rememberRecentRevoke(eventID, receivedAt);
 
     await this.deliverWithRecovery(sessionID, rawPayload, this.deliverRevokeToWorker);
