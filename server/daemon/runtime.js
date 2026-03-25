@@ -99,6 +99,18 @@ function normalizeNonNegativeInt(value, fallbackValue) {
   return Math.max(0, Math.floor(numeric));
 }
 
+function resolveExpectedWorkerPid(binding, runtime) {
+  const bindingPid = Number(binding?.worker_pid ?? 0);
+  if (Number.isFinite(bindingPid) && bindingPid > 0) {
+    return Math.floor(bindingPid);
+  }
+  const runtimePid = Number(runtime?.pid ?? 0);
+  if (Number.isFinite(runtimePid) && runtimePid > 0) {
+    return Math.floor(runtimePid);
+  }
+  return 0;
+}
+
 export class DaemonRuntime {
   constructor({
     env = process.env,
@@ -712,7 +724,7 @@ export class DaemonRuntime {
     }
 
     const runtime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
-    const expectedPid = Number(runtime?.pid ?? binding.worker_pid ?? 0);
+    const expectedPid = resolveExpectedWorkerPid(binding, runtime);
     if (Number.isFinite(expectedPid) && expectedPid > 0) {
       if (!Number.isFinite(reportedPid) || reportedPid <= 0 || reportedPid !== expectedPid) {
         this.trace({
@@ -876,7 +888,7 @@ export class DaemonRuntime {
       return false;
     }
 
-    const pid = Number(runtime.pid ?? 0);
+    const pid = resolveExpectedWorkerPid(previousBinding, runtime);
     if (Number.isFinite(pid) && pid > 0 && !this.isProcessRunning(pid)) {
       this.workerProcessManager?.markWorkerRuntimeStopped?.(workerID, {
         exitCode: Number(runtime.exit_code ?? 0),

@@ -105,6 +105,28 @@ test("worker health inspector can use persisted pid when runtime pid is missing"
   assert.equal(result.reportedPid, 20002);
 });
 
+test("worker health inspector prefers persisted worker pid over stale runtime pid", () => {
+  const inspector = new WorkerHealthInspector({
+    getPendingEventsForSession() {
+      return [];
+    },
+  });
+
+  const result = inspector.inspectWorkerIdentityHealth(
+    {
+      worker_id: "worker-3",
+      worker_pid: 30001,
+    },
+    { pid: 12345 },
+    {
+      worker_id: "worker-3",
+      pid: 30001,
+    },
+  );
+
+  assert.equal(result.ok, true);
+});
+
 test("worker health inspector timeout check accepts fresh ping activity", () => {
   const baseTime = Date.now();
   const inspector = new WorkerHealthInspector({

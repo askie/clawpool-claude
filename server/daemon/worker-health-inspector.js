@@ -2,6 +2,22 @@ function normalizeString(value) {
   return String(value ?? "").trim();
 }
 
+function normalizePid(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 0;
+  }
+  return Math.floor(numeric);
+}
+
+function resolveExpectedWorkerPid(binding, runtime) {
+  const bindingPid = normalizePid(binding?.worker_pid);
+  if (bindingPid > 0) {
+    return bindingPid;
+  }
+  return normalizePid(runtime?.pid);
+}
+
 export class WorkerHealthInspector {
   constructor({
     getPendingEventsForSession,
@@ -68,10 +84,10 @@ export class WorkerHealthInspector {
       };
     }
 
-    const expectedPid = Number(runtime?.pid ?? binding?.worker_pid ?? 0);
-    if (Number.isFinite(expectedPid) && expectedPid > 0) {
-      const reportedPid = Number(pingPayload?.pid ?? pingPayload?.worker_pid ?? 0);
-      if (!Number.isFinite(reportedPid) || reportedPid <= 0) {
+    const expectedPid = resolveExpectedWorkerPid(binding, runtime);
+    if (expectedPid > 0) {
+      const reportedPid = normalizePid(pingPayload?.pid ?? pingPayload?.worker_pid);
+      if (reportedPid <= 0) {
         return {
           ok: false,
           reason: "worker_pid_missing",

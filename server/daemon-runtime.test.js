@@ -2507,6 +2507,93 @@ test("daemon runtime returns auth login required message when worker logs show 4
   );
 });
 
+test("daemon runtime prefers persisted worker pid over stale runtime pid during control probe", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-pid-persisted",
+    claude_session_id: "claude-pid-persisted",
+    cwd: tempDir,
+    worker_id: "worker-pid-persisted",
+    worker_pid: 50022,
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-pid-persisted",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+
+  const workerProcessManager = {
+    getWorkerRuntime() {
+      return {
+        worker_id: "worker-pid-persisted",
+        aibot_session_id: "chat-pid-persisted",
+        pid: 40001,
+        status: "ready",
+      };
+    },
+    markWorkerRuntimeStopped(workerID, { exitSignal = "" } = {}) {
+      workerCalls.push({ kind: "mark_stopped", workerID, exitSignal });
+      return {
+        worker_id: workerID,
+        status: "stopped",
+        exit_signal: exitSignal,
+      };
+    },
+  };
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient([]),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    workerControlProbeFailureThreshold: 1,
+    isProcessRunning(pid) {
+      return Number(pid) === 50022;
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async ping() {
+          return {
+            ok: true,
+            worker_id: "worker-pid-persisted",
+            aibot_session_id: "chat-pid-persisted",
+            claude_session_id: "claude-pid-persisted",
+            pid: 50022,
+            mcp_ready: true,
+            mcp_last_activity_at: Date.now(),
+          };
+        },
+      };
+    },
+  });
+
+  const changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-pid-persisted"),
+  );
+
+  assert.equal(changed, false);
+  assert.equal(registry.getByAibotSessionID("chat-pid-persisted")?.worker_status, "ready");
+  assert.equal(workerCalls.length, 0);
+});
+
 test("daemon runtime marks worker stopped when worker control ping pid mismatches runtime pid", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const workerCalls = [];
