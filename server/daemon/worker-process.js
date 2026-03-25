@@ -196,7 +196,11 @@ export async function createVisibleClaudeLaunchScript({
     "  }",
     "  eof {}",
     "}",
-    "interact",
+    "if {[catch {interact} interact_error]} {",
+    "  if {![string match {*spawn id*not open*} $interact_error]} {",
+    "    error $interact_error",
+    "  }",
+    "}",
     "",
   ];
   const lines = [

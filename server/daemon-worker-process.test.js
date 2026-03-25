@@ -189,6 +189,49 @@ await writeFile(process.env.TEST_OUTPUT_PATH, process.stdout.isTTY ? "tty" : "no
   assert.equal(actual, "tty");
 });
 
+test("spawnWorker hidden tty does not emit a fake spawn_id error when Claude exits immediately", async () => {
+  if (process.platform !== "darwin") {
+    return;
+  }
+
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-fast-exit-"));
+  const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
+  const serverDir = path.join(tempDir, "server");
+  const logsDir = resolveWorkerLogsDir("chat-fast-exit", {
+    ...process.env,
+    CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+  });
+
+  await mkdir(serverDir, { recursive: true });
+  await writeFile(path.join(serverDir, "main.js"), "process.exit(0);\n", "utf8");
+  await writeFile(fakeClaudePath, "#!/usr/bin/env node\nprocess.exit(0);\n", "utf8");
+  await chmod(fakeClaudePath, 0o755);
+
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAUDE_BIN: fakeClaudePath,
+      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+    },
+    packageRoot: tempDir,
+    async ensureUserMcpServer() {},
+  });
+
+  await manager.spawnWorker({
+    aibotSessionID: "chat-fast-exit",
+    cwd: tempDir,
+    pluginDataDir: path.join(tempDir, "plugin-data"),
+    claudeSessionID: "claude-fast-exit",
+    workerID: "worker-fast-exit",
+  });
+
+  await sleep(800);
+
+  const stderrLog = await readFile(path.join(logsDir, "worker-fast-exit.err.log"), "utf8");
+  assert.equal(stderrLog.includes("spawn id"), false);
+});
+
 test("spawnWorker ensures the user-scoped MCP server before launching Claude", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-mcp-server-"));
   const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
