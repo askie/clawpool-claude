@@ -1388,8 +1388,20 @@ export class DaemonRuntime {
       }
 
       if (record.delivery_state === "pending") {
-        if (canDeliverToWorker(binding)) {
-          await this.flushPendingSessionEvents(record.sessionID, binding);
+        let recoveredBinding = binding;
+        if (!canDeliverToWorker(recoveredBinding)) {
+          recoveredBinding = await this.ensureReadyBinding(record.sessionID);
+        }
+        if (canDeliverToWorker(recoveredBinding)) {
+          await this.flushPendingSessionEvents(record.sessionID, recoveredBinding);
+        } else {
+          this.trace({
+            stage: "delivery_state_pending_worker_unavailable",
+            event_id: record.eventID,
+            session_id: record.sessionID,
+            worker_id: recoveredBinding?.worker_id,
+            status: recoveredBinding?.worker_status,
+          }, "error");
         }
         continue;
       }

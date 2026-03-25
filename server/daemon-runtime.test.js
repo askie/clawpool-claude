@@ -2533,6 +2533,97 @@ test("daemon runtime keeps pending events across runtime restart and flushes aft
   assert.equal(delivered[0].via, "http://127.0.0.1:99951");
 });
 
+test("daemon runtime recoverPersistedDeliveryState respawns and flushes pending events", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const delivered = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const messageDeliveryStateFile = path.join(tempDir, "message-delivery-state.json");
+
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-7d",
+    claude_session_id: "claude-7d",
+    cwd: tempDir,
+    worker_id: "worker-7d",
+    worker_status: "stopped",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(messageDeliveryStateFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-7d",
+    session_id: "chat-7d",
+    msg_id: "msg-7d",
+    sender_id: "sender-7d",
+    content: "pending after restart",
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: {
+      getWorkerRuntime() {
+        return null;
+      },
+      async spawnWorker(input) {
+        workerCalls.push({ kind: "spawn", input });
+        await registry.markWorkerReady(input.aibotSessionID, {
+          workerID: input.workerID,
+          workerControlURL: "http://127.0.0.1:99961",
+          workerControlToken: "token-7d",
+          updatedAt: Date.now(),
+          lastStartedAt: Date.now(),
+        });
+        return {
+          worker_id: input.workerID,
+          status: "starting",
+        };
+      },
+      async stopWorker() {
+        return true;
+      },
+    },
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    async claudeSessionExists() {
+      return true;
+    },
+    workerControlClientFactory(binding) {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          delivered.push({
+            via: binding.worker_control_url,
+            payload,
+          });
+          return { ok: true };
+        },
+      };
+    },
+  });
+  runtime.waitForWorkerBridgeState = async () => registry.getByAibotSessionID("chat-7d");
+
+  await runtime.recoverPersistedDeliveryState();
+
+  assert.equal(workerCalls.length, 1);
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].payload.event_id, "evt-7d");
+  assert.equal(delivered[0].via, "http://127.0.0.1:99961");
+  assert.equal(deliveryStore.getPendingEvent("evt-7d")?.delivery_state, "delivered");
+});
+
 test("daemon runtime fails an unfinished event when worker stops mid-processing", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
