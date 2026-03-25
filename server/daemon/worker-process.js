@@ -12,6 +12,12 @@ import {
 } from "../process-control.js";
 
 const missingResumeSessionPattern = /No conversation found with session ID:/u;
+const authLoginRequiredPatterns = [
+  /Please run \/login/u,
+  /API Error:\s*401/u,
+  /authentication_error/u,
+  /OAuth token has expired/u,
+];
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -631,9 +637,12 @@ export class WorkerProcessManager {
     return true;
   }
 
-  async hasMissingResumeSessionError(workerID) {
+  async hasLogPatternMatch(workerID, patterns = []) {
     const runtime = this.runtimes.get(normalizeString(workerID));
     if (!runtime) {
+      return false;
+    }
+    if (!Array.isArray(patterns) || patterns.length === 0) {
       return false;
     }
 
@@ -643,7 +652,7 @@ export class WorkerProcessManager {
       }
       try {
         const content = await readFile(filePath, "utf8");
-        if (missingResumeSessionPattern.test(content)) {
+        if (patterns.some((pattern) => pattern.test(content))) {
           return true;
         }
       } catch {
@@ -651,5 +660,13 @@ export class WorkerProcessManager {
       }
     }
     return false;
+  }
+
+  async hasMissingResumeSessionError(workerID) {
+    return this.hasLogPatternMatch(workerID, [missingResumeSessionPattern]);
+  }
+
+  async hasAuthLoginRequiredError(workerID) {
+    return this.hasLogPatternMatch(workerID, authLoginRequiredPatterns);
   }
 }

@@ -54,6 +54,10 @@ function buildInterruptedEventNotice() {
   return "Claude 刚刚中断了，这条消息没有处理完成。请再发一次。";
 }
 
+function buildAuthLoginRequiredEventNotice() {
+  return "Claude 登录已失效，请在电脑上执行 claude auth login 后重试。";
+}
+
 function buildMissingBindingCardOptions() {
   return {
     summaryText: "当前会话还没有绑定目录。",
@@ -776,7 +780,13 @@ export class DaemonRuntime {
     return this.pendingEventOrchestrator.flushPendingSessionEvents(sessionID, binding);
   }
 
-  async failPendingEvent(record, { notifyText = true } = {}) {
+  async failPendingEvent(record, {
+    notifyText = true,
+    noticeText = buildInterruptedEventNotice(),
+    replySource = "daemon_worker_interrupted",
+    resultCode = "worker_interrupted",
+    resultMessage = "worker interrupted while processing event",
+  } = {}) {
     if (!record?.eventID || !record?.sessionID) {
       return;
     }
@@ -785,10 +795,10 @@ export class DaemonRuntime {
         await this.aibotClient.sendText({
           eventID: record.eventID,
           sessionID: record.sessionID,
-          text: buildInterruptedEventNotice(),
+          text: noticeText,
           quotedMessageID: record.msgID,
           extra: {
-            reply_source: "daemon_worker_interrupted",
+            reply_source: replySource,
           },
         });
       } catch {
@@ -799,8 +809,8 @@ export class DaemonRuntime {
       this.aibotClient.sendEventResult({
         event_id: record.eventID,
         status: "failed",
-        code: "worker_interrupted",
-        msg: "worker interrupted while processing event",
+        code: resultCode,
+        msg: resultMessage,
       });
     } catch {
       // best effort only
@@ -811,8 +821,27 @@ export class DaemonRuntime {
       event_id: record.eventID,
       session_id: record.sessionID,
       status: "failed",
-      code: "worker_interrupted",
+      code: resultCode,
     }, "error");
+  }
+
+  async resolveWorkerFailureEventOptions(workerID) {
+    const normalizedWorkerID = normalizeString(workerID);
+    if (!normalizedWorkerID) {
+      return null;
+    }
+    const hasAuthLoginRequiredError = await this.workerProcessManager?.hasAuthLoginRequiredError?.(
+      normalizedWorkerID,
+    );
+    if (!hasAuthLoginRequiredError) {
+      return null;
+    }
+    return {
+      noticeText: buildAuthLoginRequiredEventNotice(),
+      replySource: "daemon_worker_auth_login_required",
+      resultCode: "claude_auth_login_required",
+      resultMessage: "claude authentication expired; run claude auth login",
+    };
   }
 
   async reconcileWorkerProcesses() {
@@ -974,6 +1003,9 @@ export class DaemonRuntime {
       this.clearWorkerControlProbeFailure(previousWorkerID);
     }
 
+    const failureEventOptions = await this.resolveWorkerFailureEventOptions(
+      previousWorkerID || nextWorkerID,
+    );
     for (const record of this.listPendingEventsForSession(sessionID)) {
       if (previousWorkerID && normalizeString(record.last_worker_id) !== previousWorkerID) {
         if (normalizeString(record.last_worker_id)) {
@@ -984,7 +1016,7 @@ export class DaemonRuntime {
         }
       }
       await this.markPendingEventInterrupted(record.eventID);
-      await this.failPendingEvent(record);
+      await this.failPendingEvent(record, failureEventOptions ?? undefined);
     }
   }
 

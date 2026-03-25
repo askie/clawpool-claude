@@ -2386,6 +2386,127 @@ test("daemon runtime marks worker stopped after repeated worker control probe fa
   );
 });
 
+test("daemon runtime returns auth login required message when worker logs show 401", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-probe-auth",
+    claude_session_id: "claude-probe-auth",
+    cwd: tempDir,
+    worker_id: "worker-probe-auth",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-probe-auth",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-probe-auth",
+    session_id: "chat-probe-auth",
+    msg_id: "msg-probe-auth",
+    sender_id: "sender-probe-auth",
+    content: "probe auth",
+  });
+  await deliveryStore.markPendingEventDelivered("evt-probe-auth", "worker-probe-auth");
+
+  let pingCount = 0;
+  const workerProcessManager = {
+    getWorkerRuntime() {
+      return {
+        worker_id: "worker-probe-auth",
+        aibot_session_id: "chat-probe-auth",
+        pid: 50010,
+        status: "ready",
+      };
+    },
+    markWorkerRuntimeStopped(workerID, { exitSignal = "" } = {}) {
+      workerCalls.push({ kind: "mark_stopped", workerID, exitSignal });
+      return {
+        worker_id: workerID,
+        status: "stopped",
+        exit_signal: exitSignal,
+      };
+    },
+    async hasAuthLoginRequiredError(workerID) {
+      assert.equal(workerID, "worker-probe-auth");
+      return true;
+    },
+  };
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    workerControlProbeFailureThreshold: 2,
+    isProcessRunning() {
+      return true;
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async ping() {
+          pingCount += 1;
+          throw new Error("connection refused");
+        },
+      };
+    },
+  });
+
+  const unchanged = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-probe-auth"),
+  );
+  assert.equal(unchanged, false);
+  assert.equal(registry.getByAibotSessionID("chat-probe-auth")?.worker_status, "ready");
+
+  const changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-probe-auth"),
+  );
+  assert.equal(changed, true);
+  assert.equal(registry.getByAibotSessionID("chat-probe-auth")?.worker_status, "stopped");
+  assert.equal(pingCount, 2);
+  assert.equal(workerCalls.length, 1);
+  assert.equal(workerCalls[0].exitSignal, "worker_control_unreachable");
+  assert.equal(deliveryStore.getPendingEvent("evt-probe-auth"), null);
+  assert.equal(
+    sent.some(
+      (item) =>
+        item.kind === "text"
+        && item.payload.eventID === "evt-probe-auth"
+        && /claude auth login/iu.test(item.payload.text),
+    ),
+    true,
+  );
+  assert.deepEqual(
+    sent.find(
+      (item) => item.kind === "event_result" && item.payload.event_id === "evt-probe-auth",
+    )?.payload,
+    {
+      event_id: "evt-probe-auth",
+      status: "failed",
+      code: "claude_auth_login_required",
+      msg: "claude authentication expired; run claude auth login",
+    },
+  );
+});
+
 test("daemon runtime marks worker stopped when worker control ping pid mismatches runtime pid", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const workerCalls = [];

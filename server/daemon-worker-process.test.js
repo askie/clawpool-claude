@@ -480,3 +480,28 @@ test("worker process manager detects missing Claude session resume failure from 
 
   assert.equal(await manager.hasMissingResumeSessionError("worker-missing-session"), true);
 });
+
+test("worker process manager detects Claude auth login required failure from logs", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-auth-error-"));
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+    },
+    packageRoot: tempDir,
+  });
+
+  manager.runtimes.set("worker-auth-expired", {
+    worker_id: "worker-auth-expired",
+    stdout_log_path: path.join(tempDir, "worker-auth-expired.out.log"),
+    stderr_log_path: path.join(tempDir, "worker-auth-expired.err.log"),
+  });
+  await writeFile(
+    path.join(tempDir, "worker-auth-expired.err.log"),
+    "Please run /login · API Error: 401\n",
+    "utf8",
+  );
+
+  assert.equal(await manager.hasAuthLoginRequiredError("worker-auth-expired"), true);
+});
