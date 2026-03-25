@@ -198,7 +198,6 @@ export class DaemonRuntime {
       ? isProcessRunning
       : defaultIsProcessRunning;
     this.workerControlProbeFailures = new Map();
-    this.authRetryCounts = new Map();
     this.controlCommandHandler = new DaemonControlCommandHandler({
       env: this.env,
       bindingRegistry: this.bindingRegistry,
@@ -243,7 +242,6 @@ export class DaemonRuntime {
       this.workerRuntimeHealthCheckTimer = null;
     }
     this.workerControlProbeFailures.clear();
-    this.authRetryCounts.clear();
   }
 
   purgeExpiredRecentRevokes(now = Date.now()) {
@@ -934,30 +932,7 @@ export class DaemonRuntime {
         worker_status: workerStatus,
       }, "error");
       await this.workerProcessManager?.stopWorker?.(workerID);
-      const retryCount = (this.authRetryCounts.get(sessionID) ?? 0) + 1;
-      this.authRetryCounts.set(sessionID, retryCount);
-      this.trace({
-        stage: "worker_auth_retry_evaluation",
-        session_id: sessionID,
-        worker_id: workerID,
-        retry_count: retryCount,
-      }, "error");
-      if (retryCount < 3) {
-        const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
-          updatedAt: Date.now(),
-          lastStoppedAt: Date.now(),
-        });
-        for (const record of this.listPendingEventsForSession(sessionID)) {
-          const state = normalizeString(record.delivery_state);
-          if (["dispatching", "delivered", "interrupted"].includes(state)) {
-            await this.markPendingEventPending(record.eventID);
-          }
-        }
-        const refreshedBinding = this.bindingRegistry.getByAibotSessionID(sessionID) ?? nextBinding;
-        await this.ensureWorker(refreshedBinding);
-        return true;
-      }
-      this.authRetryCounts.delete(sessionID);
+
       const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
         updatedAt: Date.now(),
         lastStoppedAt: Date.now(),
@@ -1131,9 +1106,6 @@ export class DaemonRuntime {
     const record = this.getPendingEvent(eventID);
     const sessionID = normalizeString(record?.sessionID || this.messageDeliveryStore.getRememberedSessionID(eventID));
     await this.clearPendingEvent(eventID);
-    if (sessionID) {
-      this.authRetryCounts.delete(sessionID);
-    }
     this.trace({
       stage: "event_completed",
       event_id: eventID,
