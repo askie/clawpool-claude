@@ -3363,7 +3363,7 @@ test("daemon runtime does not force MCP timeout on transient worker control prob
   assert.notEqual(deliveryStore.getPendingEvent("evt-mcp-probe-transient"), null);
 });
 
-test("daemon runtime uses composing heartbeat to refresh MCP result timeout tracking", async () => {
+test("daemon runtime does not treat composing heartbeat as MCP result progress", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
@@ -3445,7 +3445,7 @@ test("daemon runtime uses composing heartbeat to refresh MCP result timeout trac
             claude_session_id: "claude-mcp-heartbeat",
             pid: 50004,
             mcp_ready: true,
-            mcp_last_activity_at: Date.now(),
+            mcp_last_activity_at: 0,
           };
         },
       };
@@ -3453,6 +3453,7 @@ test("daemon runtime uses composing heartbeat to refresh MCP result timeout trac
   });
 
   assert.equal(runtime.listTimedOutMcpResultRecords("chat-mcp-heartbeat").length, 1);
+  const before = deliveryStore.getPendingEvent("evt-mcp-heartbeat");
 
   await runtime.handleWorkerSessionComposing({
     worker_id: "worker-mcp-heartbeat",
@@ -3464,15 +3465,18 @@ test("daemon runtime uses composing heartbeat to refresh MCP result timeout trac
     active: true,
   });
 
-  assert.equal(runtime.listTimedOutMcpResultRecords("chat-mcp-heartbeat").length, 0);
+  const after = deliveryStore.getPendingEvent("evt-mcp-heartbeat");
+  assert.equal(runtime.listTimedOutMcpResultRecords("chat-mcp-heartbeat").length, 1);
+  assert.equal(after?.updated_at, before?.updated_at);
 
   const changed = await runtime.reconcileWorkerProcess(
     registry.getByAibotSessionID("chat-mcp-heartbeat"),
   );
-  assert.equal(changed, false);
-  assert.equal(registry.getByAibotSessionID("chat-mcp-heartbeat")?.worker_status, "ready");
-  assert.equal(workerCalls.length, 0);
-  assert.notEqual(deliveryStore.getPendingEvent("evt-mcp-heartbeat"), null);
+  assert.equal(changed, true);
+  assert.equal(registry.getByAibotSessionID("chat-mcp-heartbeat")?.worker_status, "stopped");
+  assert.equal(workerCalls.length, 1);
+  assert.equal(workerCalls[0].exitSignal, "mcp_result_timeout");
+  assert.equal(deliveryStore.getPendingEvent("evt-mcp-heartbeat"), null);
 });
 
 test("daemon runtime rejects composing heartbeat with mismatched worker identity", async () => {
@@ -3798,7 +3802,7 @@ test("daemon runtime accepts composing heartbeat when only launch wrapper pid di
   });
 
   const after = deliveryStore.getPendingEvent("evt-mcp-heartbeat-wrapper-pid");
-  assert.ok(after.updated_at > before.updated_at);
+  assert.equal(after.updated_at, before.updated_at);
 });
 
 test("daemon runtime fails pending events when worker stops before becoming ready", async () => {

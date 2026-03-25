@@ -40,7 +40,7 @@ test("daemon bridge runtime ping includes worker identity and pid", async () => 
   }
 });
 
-test("daemon bridge runtime updates MCP activity timestamp from composing heartbeat calls", async () => {
+test("daemon bridge runtime does not treat composing heartbeat as MCP activity", async () => {
   const calls = [];
   const server = new WorkerBridgeServer({
     token: "bridge-token",
@@ -64,7 +64,6 @@ test("daemon bridge runtime updates MCP activity timestamp from composing heartb
   await bridge.startControlServer();
 
   try {
-    const before = Date.now();
     await bridge.setSessionComposing({
       sessionID: "chat-ping",
       active: true,
@@ -90,7 +89,7 @@ test("daemon bridge runtime updates MCP activity timestamp from composing heartb
     assert.equal(calls[0].pid, process.pid);
     assert.equal(calls[0].session_id, "chat-ping");
     assert.equal(calls[0].active, true);
-    assert.equal(payload.mcp_last_activity_at >= before, true);
+    assert.equal(payload.mcp_last_activity_at, 0);
   } finally {
     await bridge.stopControlServer();
     await server.stop();

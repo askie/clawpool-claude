@@ -122,7 +122,6 @@ export class DaemonBridgeRuntime {
         ref_msg_id: refMsgID,
         ref_event_id: refEventID,
       });
-      this.markMcpActivity();
       return response;
     });
   }

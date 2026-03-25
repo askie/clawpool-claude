@@ -808,21 +808,17 @@ export class DaemonRuntime {
       return null;
     }
 
-    const touched = await this.touchPendingEventActivity(eventID);
-    if (!touched) {
-      return null;
-    }
     this.trace({
-      stage: "pending_event_activity_touched",
-      event_id: touched.eventID,
-      session_id: touched.sessionID,
+      stage: "pending_event_activity_observed",
+      event_id: record.eventID,
+      session_id: record.sessionID,
       worker_id: workerID,
       worker_pid: reportedPid,
       worker_session_id: workerSessionID,
       claude_session_id: claudeSessionID,
       active: Boolean(payload.active),
     }, "debug");
-    return touched;
+    return record;
   }
 
   hasInFlightSessionEvent(sessionID, { excludeEventID = "" } = {}) {
