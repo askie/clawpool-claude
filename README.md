@@ -1,43 +1,45 @@
 # @dhf-claude/clawpool
 
-把 ClawPool.dhf.pub 私聊接到 Claude Code 里。
+Connect [ClawPool.dhf.pub](https://clawpool.dhf.pub) private chats directly into Claude Code.
 
-## 最简单的用法
+## Quick Start
 
-### 1. 全局安装
+### 1. Global Installation
 
 ```bash
 npm install -g @dhf-claude/clawpool
 ```
 
-### 2. 第一次安装后台服务
+### 2. Initial Daemon Setup
 
-先在 ClawPool 控制台拿到这 3 个值：
+First, obtain these 3 values from the ClawPool console:
 
 - `wsUrl`
 - `agentId`
 - `apiKey`
 
-然后执行：
+Then run:
 
 ```bash
 clawpool-claude install --ws-url <ws_url> --agent-id <agent_id> --api-key <api_key>
 ```
 
-这条命令会自动完成下面几件事：
+This command automatically performs the following:
 
-- 保存连接信息
-- 安装当前用户自己的后台服务
-- 立即启动本机 `daemon`
-- 由 `daemon` 负责后续会话的启动、恢复和消息转发
+- Saves the connection configuration
+- Installs the background service for the current user
+- Immediately starts the local `daemon`
+- Delegates session startup, recovery, and message forwarding to the `daemon`
 
-支持的后台方式：
+Supported background service managers:
 
 - macOS: `launchd`
 - Linux: `systemd --user`
-- Windows: 任务计划
+- Windows: Task Scheduler
 
-## 之后你通常只会用这几个命令
+## Common Commands
+
+You will typically only need these commands moving forward:
 
 ```bash
 clawpool-claude status
@@ -47,98 +49,98 @@ clawpool-claude start
 clawpool-claude uninstall
 ```
 
-- `status` 看服务和连接状态
-- `restart` 改完配置后重启
-- `stop` 临时停掉后台服务
-- `start` 重新拉起后台服务
-- `uninstall` 删除后台启动项
+- `status`: Check service and connection status
+- `restart`: Restart the service (e.g., after a config change)
+- `stop`: Temporarily stop the background service
+- `start`: Start the background service
+- `uninstall`: Remove the background startup item
 
-## 如果你只想临时前台运行
+## Running in the Foreground (Optional)
 
-不装后台服务也可以，直接执行：
+You don't have to install the background service. To run it directly, execute:
 
 ```bash
 clawpool-claude --ws-url <ws_url> --agent-id <agent_id> --api-key <api_key>
 ```
 
-后续本地已经有配置时，也可以直接运行：
+Once the configuration is saved locally, you can simply run:
 
 ```bash
 clawpool-claude
 ```
 
-## 怎么开始一个 Claude 会话
+## How to Start a Claude Session
 
-先在 ClawPool 对应私聊里发送：
+First, send the following in the corresponding ClawPool private chat:
 
 ```text
-open <你的工作目录>
+open <your_working_directory>
 ```
 
-`daemon` 会按这个目录启动或恢复对应的 Claude 会话。
+The `daemon` will start or resume the Claude session for this directory.
 
-如果你已经在 Claude 里，可以执行：
+If you are already inside Claude, you can run:
 
 ```text
 /clawpool:status
 ```
 
-看到 worker 已经挂到 daemon 上，就说明链路正常。
+If you see that the worker is successfully attached to the daemon, the connection is functioning correctly.
 
-## Claude 里的常用命令
+## Common Claude Commands
 
-| 命令 | 用途 |
+| Command | Purpose |
 | --- | --- |
-| `/clawpool:status` | 看当前连接状态 |
-| `/clawpool:access` | 看当前访问控制 |
-| `/clawpool:access pair <code>` | 放行新的私聊发送者 |
-| `/clawpool:access policy <allowlist\|open\|disabled>` | 切换访问策略 |
+| `/clawpool:status` | Check the current connection status |
+| `/clawpool:access` | Check current access controls |
+| `/clawpool:access pair <code>` | Allow a new private chat sender |
+| `/clawpool:access policy <allowlist\|open\|disabled>` | Switch the access policy |
 
-连接参数现在只通过本机 CLI 修改，不再在 Claude 会话里修改。
+Connection parameters are now modified exclusively via the local CLI and can no longer be changed from within the Claude session.
 
-## 审批和提问
+## Approvals and Questions
 
-当 Claude 需要你确认或补充信息时，消息会回到 ClawPool。
+When Claude needs you to confirm an action or provide additional information, the message is routed back to ClawPool.
 
-默认优先走交互卡片：
+Interactive cards are prioritized by default:
 
-- 审批卡直接点通过/拒绝
-- 提问卡直接在卡片里填完提交
+- **Approval Cards**: Click 'Approve' or 'Reject' directly.
+- **Question Cards**: Fill out the form in the card and submit.
 
-文本命令仍保留为兜底：
+Text commands remain available as a fallback:
 
 ```text
 yes <request_id>
 no <request_id>
-/clawpool-question <request_id> 你的回答
+/clawpool-question <request_id> your answer
 ```
 
-- 只有调试、排障或卡片不可用时，才需要手工输入这些命令
+- You only need to type these commands manually for debugging, troubleshooting, or if the interactive cards are unavailable.
 
-## 文件发送
+## File Sending
 
-Claude 可以把本地文件回发到 ClawPool。单个文件最大 50MB，只支持常见图片、视频、文档类型。
+Claude can send local files back to ClawPool. The maximum file size is 50MB. Only common image, video, and document formats are supported.
 
-## 日志排查
+## Troubleshooting Logs
 
-每个 AIBot 会话 ID 都会有独立日志文件：
+Each AIBot session ID gets its own dedicated log file:
 
 ```text
 ~/.claude/clawpool-claude-daemon/sessions/<aibot_session_id>/logs/daemon-session.log
 ```
 
-这份日志会记录该会话里 Claude 调度全过程，包括：
+This log tracks the complete lifecycle of Claude orchestration in that session, including:
 
-- worker 进程状态变化和 pid
-- 进程退出后的重拉起
-- 消息投递和结果回传
-- 通信探测与超时判定
+- Worker process state changes and PIDs
+- Restarts after process exits
+- Message delivery and result reporting
+- Communication probes and timeout determinations
 
-完整排查步骤见：
+For full troubleshooting steps, see:
 
 - `docs/session-log-troubleshooting.md`
 
-## CLI 命令
+## CLI Reference
 
 ```text
 clawpool-claude install [options]
@@ -150,50 +152,50 @@ clawpool-claude uninstall [options]
 clawpool-claude [options]
 ```
 
-推荐优先用 `install`。默认命令 `clawpool-claude [options]` 更适合临时前台运行或者调试。
+It is recommended to use `install` as the primary method. The default command `clawpool-claude [options]` is better suited for temporary foreground execution or debugging.
 
-## 常用选项
+## Common Options
 
 ```text
---ws-url <value>      ClawPool Agent API WebSocket 地址
+--ws-url <value>      ClawPool Agent API WebSocket URL
 --agent-id <value>    Agent ID
 --api-key <value>     API Key
---data-dir <path>     daemon 数据目录
---chunk-limit <n>     单段文本长度上限
---show-claude         开发调试时把 Claude 拉到可见的 Terminal 窗口
---no-launch           只检查并写好配置，不启动 daemon
---help, -h            显示帮助
+--data-dir <path>     daemon data directory
+--chunk-limit <n>     Maximum length for a single text chunk
+--show-claude         Bring Claude into a visible Terminal window for debugging
+--no-launch           Only verify and write the configuration, do not start the daemon
+--help, -h            Show help
 ```
 
-- 第一次执行 `install` 或前台启动时，需要传完整连接参数
-- 后续如果本地已经保存过配置，可以省略连接参数
-- `--data-dir` 用来指定单独的数据目录，适合多套环境分开跑
-- `--show-claude` 当前仅支持 macOS Terminal
+- Complete connection parameters must be provided during the first `install` or foreground launch.
+- If the configuration is already saved locally, connection parameters can be omitted.
+- `--data-dir` can be used to specify an isolated data directory, which is useful when running multiple environments separately.
+- `--show-claude` is currently only supported on macOS Terminal.
 
-开发时如果你怀疑 Claude 卡在启动确认页，可以加 `--show-claude`，这样 daemon 会把对应 Claude 会话直接拉到一个可见的 Terminal 窗口里。
+During development, if you suspect Claude is stuck on the startup confirmation prompt, add `--show-claude`. This allows the daemon to pull the Claude session into a visible Terminal window.
 
-## 开发时自动编译
+## Auto-Compilation During Development
 
-如果你在改当前仓库代码，直接运行：
+If you are modifying the code in this repository, run:
 
 ```bash
 npm run dev
 ```
 
-它会持续监听源码变化，并把最新产物自动编译到当前项目的：
+This will continuously watch for source changes and automatically compile the latest outputs into your project at:
 
 - `dist/index.js`
 - `dist/daemon.js`
 
-本地联调时，再开一个窗口运行：
+While debugging locally, open another terminal window and run:
 
 ```bash
 npm run daemon
 ```
 
-这样 daemon 进程和 Claude 会话里加载的 worker，都会使用当前刚编译出来的开发产物。
+This ensures that both the daemon process and the worker loaded in the Claude session use the freshly compiled development output.
 
-如果你想让 `npm run daemon` 直接从环境变量取连接参数，可以这样跑：
+If you want `npm run daemon` to pull connection parameters directly from environment variables, run it like this:
 
 ```bash
 CLAWPOOL_CLAUDE_ENDPOINT='ws://127.0.0.1:27189/v1/agent-api/ws?agent_id=<agent_id>' \
@@ -202,4 +204,4 @@ CLAWPOOL_CLAUDE_API_KEY='<api_key>' \
 npm run daemon -- --no-launch
 ```
 
-`CLAWPOOL_CLAUDE_WS_URL` 也仍然可用；如果两边都传了，daemon 会优先用环境变量。
+`CLAWPOOL_CLAUDE_WS_URL` is also still supported. If both are provided, the daemon will prioritize environment variables.
