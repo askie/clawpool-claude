@@ -553,6 +553,8 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude
   assert.match(expectScript, /proc emit_marker \{marker\}/u);
   assert.match(expectScript, /expect \{/u);
   assert.match(expectScript, /emit_marker startup_prompt_auto_confirm/u);
+  assert.match(expectScript, /emit_marker startup_workspace_trust_auto_confirm/u);
+  assert.match(expectScript, /emit_marker startup_development_channels_auto_confirm/u);
   assert.match(expectScript, /emit_marker startup_channel_listening/u);
   assert.match(expectScript, /emit_marker startup_mcp_server_failed/u);
   assert.match(expectScript, /log_file -a \{.*worker-visible\.out\.log\}/u);
@@ -560,6 +562,8 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude
   assert.match(expectScript, /set pid_file \[open \{.*worker-visible\.pid\} w\]/u);
   assert.match(expectScript, /puts \$pid_file \[exp_pid -i \$spawn_id\]/u);
   assert.match(expectScript, /after 500/u);
+  assert.match(expectScript, /-re \{\(\?i\)\(Quick\.\*safety\.\*check\|trust\.\*folder\)\}/u);
+  assert.match(expectScript, /-re \{\(\?i\)I am using this for local development\}/u);
   assert.match(expectScript, /-re \{\(\?i\)\(Enter\.\*confirm\|Press\.\*Enter\|Hit\.\*Enter\|Continue\.\*Enter\)\}/u);
   assert.match(expectScript, /-re \{\(\?i\)Listening\.\*channel messages\.\*server:clawpool-claude\}/u);
   assert.match(expectScript, /-re \{\(\?i\)MCP\.\*server failed\}/u);
@@ -666,7 +670,36 @@ test("worker process manager detects startup observability markers from logs", a
   assert.equal(await manager.hasStartupPromptAutoConfirm("worker-startup-marker"), true);
   assert.equal(await manager.hasStartupChannelListening("worker-startup-marker"), true);
   assert.equal(await manager.hasStartupMcpServerFailed("worker-startup-marker"), true);
-  assert.equal(await manager.hasStartupBlockingMcpServerFailure("worker-startup-marker"), false);
+  assert.equal(await manager.hasStartupBlockingMcpServerFailure("worker-startup-marker"), true);
+});
+
+test("worker process manager treats generic MCP failure text as non-blocking when channel is listening", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-startup-generic-mcp-"));
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+    },
+    packageRoot: tempDir,
+  });
+
+  manager.runtimes.set("worker-startup-generic-mcp", {
+    worker_id: "worker-startup-generic-mcp",
+    stdout_log_path: path.join(tempDir, "worker-startup-generic-mcp.out.log"),
+    stderr_log_path: path.join(tempDir, "worker-startup-generic-mcp.err.log"),
+  });
+  await writeFile(
+    path.join(tempDir, "worker-startup-generic-mcp.out.log"),
+    [
+      "Listening for channel messages from: server:clawpool-claude",
+      "1 MCP server failed · /mcp",
+    ].join("\n"),
+    "utf8",
+  );
+
+  assert.equal(await manager.hasStartupMcpServerFailed("worker-startup-generic-mcp"), true);
+  assert.equal(await manager.hasStartupBlockingMcpServerFailure("worker-startup-generic-mcp"), false);
 });
 
 test("worker process manager detects ANSI-styled MCP startup failure logs", async () => {

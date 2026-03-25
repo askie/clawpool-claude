@@ -34,13 +34,13 @@ export function resolvePackageBinPath() {
 }
 
 export function resolveServerEntryPath(packageRoot = resolvePackageRoot()) {
-  const distEntryPath = path.join(packageRoot, "dist", "index.js");
-  if (existsSync(distEntryPath)) {
-    return distEntryPath;
-  }
   const sourceEntryPath = path.join(packageRoot, "server", "main.js");
   if (existsSync(sourceEntryPath)) {
     return sourceEntryPath;
+  }
+  const distEntryPath = path.join(packageRoot, "dist", "index.js");
+  if (existsSync(distEntryPath)) {
+    return distEntryPath;
   }
   throw new Error(`没有找到 clawpool-claude server 入口: ${packageRoot}`);
 }

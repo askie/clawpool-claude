@@ -27,6 +27,7 @@ const startupMcpServerFailedPatterns = [
   /\[clawpool\]\s+startup_mcp_server_failed/u,
   /MCP\s+server\s+failed/u,
 ];
+const startupMcpServerFailedMarkerPattern = /\[clawpool\]\s+startup_mcp_server_failed/u;
 
 function stripTerminalControlSequences(content) {
   return String(content ?? "")
@@ -218,6 +219,20 @@ export async function createVisibleClaudeLaunchScript({
     "after 500",
     "send -- \"\\r\"",
     "expect {",
+    "  -re {(?i)(Quick.*safety.*check|trust.*folder)} {",
+    "    emit_marker startup_prompt_auto_confirm",
+    "    emit_marker startup_workspace_trust_auto_confirm",
+    "    send -- \"1\\r\"",
+    "    after 300",
+    "    exp_continue",
+    "  }",
+    "  -re {(?i)I am using this for local development} {",
+    "    emit_marker startup_prompt_auto_confirm",
+    "    emit_marker startup_development_channels_auto_confirm",
+    "    send -- \"1\\r\"",
+    "    after 300",
+    "    exp_continue",
+    "  }",
     "  -re {(?i)(Enter.*confirm|Press.*Enter|Hit.*Enter|Continue.*Enter)} {",
     "    emit_marker startup_prompt_auto_confirm",
     "    send -- \"\\r\"",
@@ -747,6 +762,9 @@ export class WorkerProcessManager {
   }
 
   async hasStartupBlockingMcpServerFailure(workerID) {
+    if (await this.hasLogPatternMatch(workerID, [startupMcpServerFailedMarkerPattern])) {
+      return true;
+    }
     if (!await this.hasStartupMcpServerFailed(workerID)) {
       return false;
     }
