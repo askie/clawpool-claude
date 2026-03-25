@@ -376,6 +376,7 @@ export class WorkerProcessManager {
       ? waitForProcessExit
       : defaultWaitForProcessExit;
     this.runtimes = new Map();
+    this.spawnQueues = new Map();
   }
 
   getWorkerRuntime(workerID) {
@@ -464,6 +465,25 @@ export class WorkerProcessManager {
     return terminatedPIDs;
   }
 
+  enqueueSpawnForSession(aibotSessionID, task) {
+    const normalizedSessionID = normalizeString(aibotSessionID);
+    if (!normalizedSessionID || typeof task !== "function") {
+      return Promise.resolve().then(task);
+    }
+
+    const previous = this.spawnQueues.get(normalizedSessionID) ?? Promise.resolve();
+    const queued = previous
+      .catch(() => {})
+      .then(task);
+    const tracked = queued.finally(() => {
+      if (this.spawnQueues.get(normalizedSessionID) === tracked) {
+        this.spawnQueues.delete(normalizedSessionID);
+      }
+    });
+    this.spawnQueues.set(normalizedSessionID, tracked);
+    return queued;
+  }
+
   async spawnWorker({
     aibotSessionID,
     cwd,
@@ -483,122 +503,124 @@ export class WorkerProcessManager {
       throw new Error("aibotSessionID, cwd, and pluginDataDir are required");
     }
 
-    const logsDir = resolveWorkerLogsDir(normalizedSessionID, this.env);
-    await mkdir(logsDir, { recursive: true });
-    const workerEnv = buildWorkerEnvironment({
-      baseEnv: this.env,
-      pluginDataDir: normalizedPluginDataDir,
-      aibotSessionID: normalizedSessionID,
-      claudeSessionID: normalizedClaudeSessionID,
-      workerID: normalizedWorkerID,
-      bridgeURL,
-      bridgeToken,
-      connectionConfig: this.connectionConfig,
-    });
-    const { claudeCommand } = await this.ensureUserMcpServerConfigured({
-      env: workerEnv,
-    });
-    const claudeArgs = buildWorkerClaudeArgs({
-      packageRoot: this.packageRoot,
-      aibotSessionID: normalizedSessionID,
-      claudeSessionID: normalizedClaudeSessionID,
-      resumeSession,
-    });
-    const {
-      stdoutLogPath,
-      stderrLogPath,
-    } = resolveWorkerLogPaths({
-      logsDir,
-      workerID: normalizedWorkerID,
-    });
-    const stdoutHandle = await open(stdoutLogPath, "w");
-    const stderrHandle = await open(stderrLogPath, "w");
-    try {
-      await this.cleanupStaleManagedProcesses([normalizedSessionID]);
+    return this.enqueueSpawnForSession(normalizedSessionID, async () => {
+      const logsDir = resolveWorkerLogsDir(normalizedSessionID, this.env);
+      await mkdir(logsDir, { recursive: true });
+      const workerEnv = buildWorkerEnvironment({
+        baseEnv: this.env,
+        pluginDataDir: normalizedPluginDataDir,
+        aibotSessionID: normalizedSessionID,
+        claudeSessionID: normalizedClaudeSessionID,
+        workerID: normalizedWorkerID,
+        bridgeURL,
+        bridgeToken,
+        connectionConfig: this.connectionConfig,
+      });
+      const { claudeCommand } = await this.ensureUserMcpServerConfigured({
+        env: workerEnv,
+      });
+      const claudeArgs = buildWorkerClaudeArgs({
+        packageRoot: this.packageRoot,
+        aibotSessionID: normalizedSessionID,
+        claudeSessionID: normalizedClaudeSessionID,
+        resumeSession,
+      });
+      const {
+        stdoutLogPath,
+        stderrLogPath,
+      } = resolveWorkerLogPaths({
+        logsDir,
+        workerID: normalizedWorkerID,
+      });
+      const stdoutHandle = await open(stdoutLogPath, "w");
+      const stderrHandle = await open(stderrLogPath, "w");
+      try {
+        await this.cleanupStaleManagedProcesses([normalizedSessionID]);
 
-      let child = null;
-      let pid = 0;
-      let pidPath = "";
-      let visibleTerminal = null;
-      if (shouldShowClaudeWindow(this.env)) {
-        visibleTerminal = await launchClaudeInVisibleTerminal({
-          logsDir,
-          workerID: normalizedWorkerID,
-          cwd: normalizedCwd,
-          command: claudeCommand,
-          args: claudeArgs,
-          env: workerEnv,
-          spawnImpl: this.spawnImpl,
-        });
-        pid = Number(visibleTerminal.pid ?? 0);
-        pidPath = normalizeString(visibleTerminal.pidPath);
-      } else if (process.platform === "darwin") {
-        const hiddenPty = await launchClaudeInHiddenPty({
-          logsDir,
-          workerID: normalizedWorkerID,
-          cwd: normalizedCwd,
-          command: claudeCommand,
-          args: claudeArgs,
-          env: workerEnv,
-          spawnImpl: this.spawnImpl,
-          stdoutFD: stdoutHandle.fd,
-          stderrFD: stderrHandle.fd,
-        });
-        pid = hiddenPty.pid;
-        pidPath = normalizeString(hiddenPty.pidPath);
-      } else {
-        child = this.spawnImpl(
-          claudeCommand,
-          claudeArgs,
-          {
+        let child = null;
+        let pid = 0;
+        let pidPath = "";
+        let visibleTerminal = null;
+        if (shouldShowClaudeWindow(this.env)) {
+          visibleTerminal = await launchClaudeInVisibleTerminal({
+            logsDir,
+            workerID: normalizedWorkerID,
             cwd: normalizedCwd,
+            command: claudeCommand,
+            args: claudeArgs,
             env: workerEnv,
-            stdio: ["pipe", stdoutHandle.fd, stderrHandle.fd],
-            detached: true,
-            windowsHide: true,
-          },
-        );
+            spawnImpl: this.spawnImpl,
+          });
+          pid = Number(visibleTerminal.pid ?? 0);
+          pidPath = normalizeString(visibleTerminal.pidPath);
+        } else if (process.platform === "darwin") {
+          const hiddenPty = await launchClaudeInHiddenPty({
+            logsDir,
+            workerID: normalizedWorkerID,
+            cwd: normalizedCwd,
+            command: claudeCommand,
+            args: claudeArgs,
+            env: workerEnv,
+            spawnImpl: this.spawnImpl,
+            stdoutFD: stdoutHandle.fd,
+            stderrFD: stderrHandle.fd,
+          });
+          pid = hiddenPty.pid;
+          pidPath = normalizeString(hiddenPty.pidPath);
+        } else {
+          child = this.spawnImpl(
+            claudeCommand,
+            claudeArgs,
+            {
+              cwd: normalizedCwd,
+              env: workerEnv,
+              stdio: ["pipe", stdoutHandle.fd, stderrHandle.fd],
+              detached: true,
+              windowsHide: true,
+            },
+          );
 
-        child.stdin?.write("\n");
-        child.stdin?.end();
-        child.unref();
-        pid = Number(child.pid ?? 0);
+          child.stdin?.write("\n");
+          child.stdin?.end();
+          child.unref();
+          pid = Number(child.pid ?? 0);
+          if (!Number.isFinite(pid) || pid <= 0) {
+            throw new Error("failed to determine spawned Claude pid");
+          }
+          pidPath = resolveWorkerPIDPath(logsDir, normalizedWorkerID);
+          await writeFile(pidPath, `${pid}\n`, "utf8");
+        }
+
         if (!Number.isFinite(pid) || pid <= 0) {
           throw new Error("failed to determine spawned Claude pid");
         }
-        pidPath = resolveWorkerPIDPath(logsDir, normalizedWorkerID);
-        await writeFile(pidPath, `${pid}\n`, "utf8");
+
+        const runtime = {
+          worker_id: normalizedWorkerID,
+          aibot_session_id: normalizedSessionID,
+          claude_session_id: normalizedClaudeSessionID,
+          cwd: normalizedCwd,
+          plugin_data_dir: normalizedPluginDataDir,
+          logs_dir: logsDir,
+          stdout_log_path: stdoutLogPath,
+          stderr_log_path: stderrLogPath,
+          pid_path: pidPath,
+          pid,
+          started_at: Date.now(),
+          status: "starting",
+          resume_session: resumeSession,
+          visible_terminal: Boolean(visibleTerminal),
+        };
+        this.runtimes.set(normalizedWorkerID, runtime);
+
+        return { ...runtime };
+      } finally {
+        await Promise.allSettled([
+          stdoutHandle.close(),
+          stderrHandle.close(),
+        ]);
       }
-
-      if (!Number.isFinite(pid) || pid <= 0) {
-        throw new Error("failed to determine spawned Claude pid");
-      }
-
-      const runtime = {
-        worker_id: normalizedWorkerID,
-        aibot_session_id: normalizedSessionID,
-        claude_session_id: normalizedClaudeSessionID,
-        cwd: normalizedCwd,
-        plugin_data_dir: normalizedPluginDataDir,
-        logs_dir: logsDir,
-        stdout_log_path: stdoutLogPath,
-        stderr_log_path: stderrLogPath,
-        pid_path: pidPath,
-        pid,
-        started_at: Date.now(),
-        status: "starting",
-        resume_session: resumeSession,
-        visible_terminal: Boolean(visibleTerminal),
-      };
-      this.runtimes.set(normalizedWorkerID, runtime);
-
-      return { ...runtime };
-    } finally {
-      await Promise.allSettled([
-        stdoutHandle.close(),
-        stderrHandle.close(),
-      ]);
-    }
+    });
   }
 
   async stopWorker(workerID) {

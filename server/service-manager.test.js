@@ -22,6 +22,7 @@ test("service manager installs linux user service with absolute paths", async ()
       return { exitCode: 0, stdout: "", stderr: "" };
     },
   });
+  manager.waitForDaemonStarted = async () => {};
 
   const status = await manager.install({ dataDir });
   const unitPath = status.definition_path;
@@ -52,6 +53,7 @@ test("service manager install uses launchd bootstrap on macOS", async () => {
       return { exitCode: 0, stdout: "", stderr: "" };
     },
   });
+  manager.waitForDaemonStarted = async () => {};
 
   const status = await manager.install({ dataDir });
   const plist = await readFile(status.definition_path, "utf8");
@@ -82,6 +84,7 @@ test("service manager install uses task scheduler on windows", async () => {
       return { exitCode: 0, stdout: "", stderr: "" };
     },
   });
+  manager.waitForDaemonStarted = async () => {};
 
   const status = await manager.install({ dataDir });
 
@@ -120,6 +123,21 @@ test("service manager status reports stale install when launcher path changed", 
   assert.equal(status.installed, true);
 });
 
+test("service manager waitForDaemonStarted throws on timeout", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-wait-timeout-"));
+  const dataDir = path.join(tempRoot, "data");
+  const manager = new ServiceManager({
+    platform: "linux",
+    homeDir: tempRoot,
+    runCommandImpl: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+  });
+
+  await assert.rejects(
+    manager.waitForDaemonStarted(dataDir, { timeoutMs: 0 }),
+    /daemon start timeout/u,
+  );
+});
+
 test("service manager restart refreshes stale install descriptor before restart", async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-restart-stale-"));
   const dataDir = path.join(tempRoot, "data");
@@ -148,6 +166,7 @@ test("service manager restart refreshes stale install descriptor before restart"
       return { exitCode: 0, stdout: "", stderr: "" };
     },
   });
+  manager.waitForDaemonStarted = async () => {};
 
   const status = await manager.restart({ dataDir });
   const refreshed = await store.load();
@@ -156,11 +175,14 @@ test("service manager restart refreshes stale install descriptor before restart"
   assert.equal(refreshed?.node_path, "/new/node");
   assert.equal(refreshed?.cli_path, "/new/bin/clawpool-claude.js");
   assert.equal(refreshed?.updated_at, 99);
-  assert.deepEqual(calls.map((entry) => `${entry.command} ${entry.args.join(" ")}`), [
-    `launchctl bootout gui/501/com.example.clawpool`,
-    `launchctl bootstrap gui/501 ${refreshed.definition_path}`,
-    `launchctl kickstart -k gui/501/com.example.clawpool`,
-  ]);
+  const commands = calls.map((entry) => `${entry.command} ${entry.args.join(" ")}`);
+  assert.equal(commands[0], `launchctl bootout gui/501/com.example.clawpool`);
+  assert.equal(
+    commands.some((entry) => entry === `launchctl print gui/501/com.example.clawpool`),
+    true,
+  );
+  assert.equal(commands.at(-2), `launchctl bootstrap gui/501 ${refreshed.definition_path}`);
+  assert.equal(commands.at(-1), `launchctl kickstart -k gui/501/com.example.clawpool`);
 });
 
 test("service manager start refreshes stale install descriptor before starting a stopped daemon", async () => {
@@ -191,6 +213,7 @@ test("service manager start refreshes stale install descriptor before starting a
       return { exitCode: 0, stdout: "", stderr: "" };
     },
   });
+  manager.waitForDaemonStarted = async () => {};
 
   const status = await manager.start({ dataDir });
   const refreshed = await store.load();
@@ -201,6 +224,47 @@ test("service manager start refreshes stale install descriptor before starting a
   assert.equal(refreshed?.updated_at, 123);
   assert.deepEqual(calls.map((entry) => `${entry.command} ${entry.args.join(" ")}`), [
     `launchctl bootstrap gui/501 ${refreshed.definition_path}`,
+    `launchctl kickstart -k gui/501/com.example.clawpool`,
+  ]);
+});
+
+test("service manager start surfaces launchd kickstart failures", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-start-fail-"));
+  const dataDir = path.join(tempRoot, "data");
+  const store = new ServiceInstallStore(resolveServiceInstallRecordPath(dataDir));
+  await store.save({
+    platform: "darwin",
+    service_id: "com.example.clawpool",
+    node_path: "/new/node",
+    cli_path: "/new/bin/clawpool-claude.js",
+    definition_path: path.join(tempRoot, "Library", "LaunchAgents", "com.example.clawpool.plist"),
+    data_dir: path.resolve(dataDir),
+    installed_at: 1,
+    updated_at: 1,
+  });
+
+  const calls = [];
+  const manager = new ServiceManager({
+    platform: "darwin",
+    homeDir: tempRoot,
+    uid: 501,
+    nodePath: "/new/node",
+    cliPath: "/new/bin/clawpool-claude.js",
+    runCommandImpl: async (command, args, options = {}) => {
+      calls.push({ command, args, options });
+      if (args[0] === "kickstart") {
+        return { exitCode: 1, stdout: "", stderr: "Operation not permitted" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  });
+
+  await assert.rejects(
+    manager.start({ dataDir }),
+    /launchctl start failed/u,
+  );
+  assert.deepEqual(calls.map((entry) => `${entry.command} ${entry.args.join(" ")}`), [
+    `launchctl bootstrap gui/501 ${path.join(tempRoot, "Library", "LaunchAgents", "com.example.clawpool.plist")}`,
     `launchctl kickstart -k gui/501/com.example.clawpool`,
   ]);
 });

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildWorkerReadyNoticeText,
   notifyWorkerReady,
+  shouldIgnoreWorkerStatusUpdate,
   shouldNotifyWorkerReady,
 } from "./daemon/main.js";
 
@@ -64,4 +65,60 @@ test("notifyWorkerReady sends a visible ready message to the bound aibot session
       },
     },
   ]);
+});
+
+test("shouldIgnoreWorkerStatusUpdate ignores stale stopped/failed status updates", () => {
+  const previousBinding = {
+    worker_id: "worker-current",
+    claude_session_id: "claude-current",
+  };
+
+  assert.equal(
+    shouldIgnoreWorkerStatusUpdate(previousBinding, {
+      status: "stopped",
+      worker_id: "worker-old",
+      claude_session_id: "claude-current",
+    }),
+    true,
+  );
+  assert.equal(
+    shouldIgnoreWorkerStatusUpdate(previousBinding, {
+      status: "failed",
+      worker_id: "worker-current",
+      claude_session_id: "claude-old",
+    }),
+    true,
+  );
+});
+
+test("shouldIgnoreWorkerStatusUpdate keeps non-terminal or matching updates", () => {
+  const previousBinding = {
+    worker_id: "worker-current",
+    claude_session_id: "claude-current",
+  };
+
+  assert.equal(
+    shouldIgnoreWorkerStatusUpdate(previousBinding, {
+      status: "connected",
+      worker_id: "worker-old",
+      claude_session_id: "claude-old",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldIgnoreWorkerStatusUpdate(previousBinding, {
+      status: "stopped",
+      worker_id: "worker-current",
+      claude_session_id: "claude-current",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldIgnoreWorkerStatusUpdate(null, {
+      status: "stopped",
+      worker_id: "worker-old",
+      claude_session_id: "claude-old",
+    }),
+    false,
+  );
 });

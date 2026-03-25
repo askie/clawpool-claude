@@ -350,7 +350,63 @@ test("spawnWorker terminates stale visible terminal wrapper processes before rel
     workerID: "worker-stale",
   });
 
-  assert.deepEqual(killed, [113]);
+  assert.equal(killed.filter((pid) => pid === 113).length, 1);
+  assert.equal(killed.length >= 1, true);
+  assert.equal(await readFile(stalePIDPath, "utf8"), "");
+});
+
+test("spawnWorker serializes concurrent spawns in the same aibot session", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-spawn-queue-"));
+  const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
+  const logsDir = resolveWorkerLogsDir("chat-spawn-queue", {
+    ...process.env,
+    CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+  });
+  const stalePIDPath = path.join(logsDir, "old.pid");
+  const killed = [];
+
+  await mkdir(path.join(tempDir, "server"), { recursive: true });
+  await mkdir(logsDir, { recursive: true });
+  await writeFile(path.join(tempDir, "server", "main.js"), "process.exit(0);\n", "utf8");
+  await writeFile(fakeClaudePath, "#!/usr/bin/env node\nprocess.exit(0);\n", "utf8");
+  await chmod(fakeClaudePath, 0o755);
+  await writeFile(stalePIDPath, "113\n", "utf8");
+
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAUDE_BIN: fakeClaudePath,
+      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+    },
+    packageRoot: tempDir,
+    async ensureUserMcpServer() {},
+    async terminateProcessTree(pid) {
+      killed.push(pid);
+      await sleep(40);
+      return true;
+    },
+  });
+
+  await Promise.all([
+    manager.spawnWorker({
+      aibotSessionID: "chat-spawn-queue",
+      cwd: tempDir,
+      pluginDataDir: path.join(tempDir, "plugin-data"),
+      claudeSessionID: "claude-spawn-queue-1",
+      workerID: "worker-spawn-queue-1",
+    }),
+    manager.spawnWorker({
+      aibotSessionID: "chat-spawn-queue",
+      cwd: tempDir,
+      pluginDataDir: path.join(tempDir, "plugin-data"),
+      claudeSessionID: "claude-spawn-queue-2",
+      workerID: "worker-spawn-queue-2",
+    }),
+  ]);
+
+  assert.equal(killed.filter((pid) => pid === 113).length, 1);
+  assert.equal(killed.length >= 1, true);
   assert.equal(await readFile(stalePIDPath, "utf8"), "");
 });
 

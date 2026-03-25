@@ -88,6 +88,31 @@ export function shouldNotifyWorkerReady(previousBinding, nextBinding, { pendingE
   return normalizeString(previousBinding?.worker_status) !== "ready";
 }
 
+export function shouldIgnoreWorkerStatusUpdate(previousBinding, payload) {
+  const status = normalizeString(payload?.status);
+  if (!previousBinding || (status !== "stopped" && status !== "failed")) {
+    return false;
+  }
+
+  const expectedWorkerID = normalizeString(previousBinding.worker_id);
+  const incomingWorkerID = normalizeString(payload?.worker_id);
+  if (expectedWorkerID && incomingWorkerID && expectedWorkerID !== incomingWorkerID) {
+    return true;
+  }
+
+  const expectedClaudeSessionID = normalizeString(previousBinding.claude_session_id);
+  const incomingClaudeSessionID = normalizeString(payload?.claude_session_id);
+  if (
+    expectedClaudeSessionID
+    && incomingClaudeSessionID
+    && expectedClaudeSessionID !== incomingClaudeSessionID
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export function buildWorkerReadyNoticeText(binding) {
   return "claude ready! please retry again.";
 }
@@ -211,6 +236,18 @@ export async function run(argv = [], env = process.env) {
         throw new Error("aibot_session_id and status are required");
       }
       const previousBinding = bindingRegistry.getByAibotSessionID(aibotSessionID);
+      if (shouldIgnoreWorkerStatusUpdate(previousBinding, payload)) {
+        logger.trace({
+          stage: "worker_status_ignored_stale",
+          aibot_session_id: aibotSessionID,
+          status,
+          worker_id: payload?.worker_id,
+          claude_session_id: payload?.claude_session_id,
+          expected_worker_id: previousBinding?.worker_id,
+          expected_claude_session_id: previousBinding?.claude_session_id,
+        }, { level: "error" });
+        return { ok: true };
+      }
       let nextBinding = null;
       if (status === "failed") {
         nextBinding = await bindingRegistry.markWorkerFailed(aibotSessionID, {

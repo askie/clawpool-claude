@@ -1016,6 +1016,60 @@ test("daemon runtime respawns when binding is stopped even if local runtime is s
   assert.equal(sent.filter((item) => item.kind === "text").length, 0);
 });
 
+test("daemon runtime coalesces concurrent ensureWorker for one session", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const workerCalls = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-coalesce-worker",
+    claude_session_id: "claude-coalesce-worker",
+    cwd: tempDir,
+    worker_id: "worker-coalesce-worker",
+    worker_status: "stopped",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: {
+      getWorkerRuntime() {
+        return null;
+      },
+      async spawnWorker(input) {
+        workerCalls.push({ kind: "spawn", input });
+        await sleep(30);
+        return {
+          worker_id: input.workerID,
+          status: "starting",
+        };
+      },
+    },
+    aibotClient: makeAibotClient([]),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    workerRuntimeHealthCheckMs: 0,
+    async claudeSessionExists() {
+      return true;
+    },
+  });
+
+  const binding = registry.getByAibotSessionID("chat-coalesce-worker");
+  const [left, right] = await Promise.all([
+    runtime.ensureWorker(binding),
+    runtime.ensureWorker(binding),
+  ]);
+
+  assert.equal(workerCalls.length, 1);
+  assert.equal(left?.worker_id, "worker-coalesce-worker");
+  assert.equal(right?.worker_id, "worker-coalesce-worker");
+});
+
 test("daemon runtime waits for ready before delivering to a connected worker bridge", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
@@ -2954,6 +3008,116 @@ test("daemon runtime retries with fresh Claude session after resume auth failure
   assert.ok(refreshed);
   assert.equal(refreshed.worker_status, "starting");
   assert.notEqual(refreshed.claude_session_id, "claude-resume-auth");
+});
+
+test("daemon runtime coalesces concurrent resume auth recovery attempts", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-resume-auth-coalesce",
+    claude_session_id: "claude-resume-auth-coalesce",
+    cwd: tempDir,
+    worker_id: "worker-resume-auth-coalesce",
+    worker_pid: 50030,
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-resume-auth-coalesce",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-resume-auth-coalesce",
+    session_id: "chat-resume-auth-coalesce",
+    msg_id: "msg-resume-auth-coalesce",
+    sender_id: "sender-resume-auth-coalesce",
+    content: "resume auth coalesce",
+  });
+  await deliveryStore.markPendingEventDelivered(
+    "evt-resume-auth-coalesce",
+    "worker-resume-auth-coalesce",
+  );
+
+  const runtimes = new Map([
+    ["worker-resume-auth-coalesce", {
+      worker_id: "worker-resume-auth-coalesce",
+      aibot_session_id: "chat-resume-auth-coalesce",
+      pid: 50030,
+      status: "stopped",
+      resume_session: true,
+      stdout_log_path: path.join(tempDir, "worker-resume-auth-coalesce.out.log"),
+      stderr_log_path: path.join(tempDir, "worker-resume-auth-coalesce.err.log"),
+    }],
+  ]);
+
+  const workerProcessManager = {
+    getWorkerRuntime(workerID) {
+      const runtime = runtimes.get(workerID);
+      return runtime ? { ...runtime } : null;
+    },
+    async hasAuthLoginRequiredError(workerID) {
+      await sleep(25);
+      return workerID === "worker-resume-auth-coalesce";
+    },
+    async spawnWorker(input) {
+      workerCalls.push({ kind: "spawn", input });
+      runtimes.set(input.workerID, {
+        worker_id: input.workerID,
+        aibot_session_id: input.aibotSessionID,
+        pid: 50031,
+        status: "starting",
+        resume_session: input.resumeSession,
+      });
+      return {
+        worker_id: input.workerID,
+        pid: 50031,
+        status: "starting",
+        claude_session_id: input.claudeSessionID,
+        resume_session: input.resumeSession,
+      };
+    },
+  };
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    isProcessRunning() {
+      return true;
+    },
+  });
+
+  const previousBinding = registry.getByAibotSessionID("chat-resume-auth-coalesce");
+  const stoppedBinding = await registry.markWorkerStopped("chat-resume-auth-coalesce", {
+    updatedAt: Date.now(),
+    lastStoppedAt: Date.now(),
+  });
+
+  await Promise.all([
+    runtime.handleWorkerStatusUpdate(previousBinding, stoppedBinding),
+    runtime.handleWorkerStatusUpdate(previousBinding, stoppedBinding),
+  ]);
+
+  assert.equal(workerCalls.filter((call) => call.kind === "spawn").length, 1);
+  assert.equal(
+    deliveryStore.getPendingEvent("evt-resume-auth-coalesce")?.delivery_state,
+    "pending",
+  );
 });
 
 test("daemon runtime prefers persisted worker pid over stale runtime pid during control probe", async () => {

@@ -204,6 +204,8 @@ export class DaemonRuntime {
       ? isProcessRunning
       : defaultIsProcessRunning;
     this.workerControlProbeFailures = new Map();
+    this.ensureWorkerInFlight = new Map();
+    this.resumeAuthRecoveryInFlight = new Map();
     this.controlCommandHandler = new DaemonControlCommandHandler({
       env: this.env,
       bindingRegistry: this.bindingRegistry,
@@ -248,6 +250,8 @@ export class DaemonRuntime {
       this.workerRuntimeHealthCheckTimer = null;
     }
     this.workerControlProbeFailures.clear();
+    this.ensureWorkerInFlight.clear();
+    this.resumeAuthRecoveryInFlight.clear();
   }
 
   purgeExpiredRecentRevokes(now = Date.now()) {
@@ -412,6 +416,32 @@ export class DaemonRuntime {
   }
 
   async ensureWorker(binding, { ignoreAuthCooldown = false } = {}) {
+    const sessionID = normalizeString(binding?.aibot_session_id);
+    if (!sessionID) {
+      return null;
+    }
+    const inFlight = this.ensureWorkerInFlight.get(sessionID);
+    if (inFlight) {
+      this.trace({
+        stage: "worker_ensure_coalesced",
+        session_id: sessionID,
+        worker_id: binding?.worker_id,
+      });
+      return inFlight;
+    }
+
+    const ensurePromise = this.ensureWorkerInternal(binding, { ignoreAuthCooldown });
+    this.ensureWorkerInFlight.set(sessionID, ensurePromise);
+    try {
+      return await ensurePromise;
+    } finally {
+      if (this.ensureWorkerInFlight.get(sessionID) === ensurePromise) {
+        this.ensureWorkerInFlight.delete(sessionID);
+      }
+    }
+  }
+
+  async ensureWorkerInternal(binding, { ignoreAuthCooldown = false } = {}) {
     if (canDeliverToWorker(binding)) {
       this.trace({
         stage: "worker_reused_ready",
@@ -1019,52 +1049,72 @@ export class DaemonRuntime {
     if (!sessionID || !workerID) {
       return false;
     }
-
-    const runtime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
-    if (!runtime || !runtime.resume_session) {
-      return false;
+    const inFlightRecovery = this.resumeAuthRecoveryInFlight.get(sessionID);
+    if (inFlightRecovery) {
+      this.trace({
+        stage: "worker_resume_auth_recovery_coalesced",
+        session_id: sessionID,
+        worker_id: workerID,
+      }, "error");
+      return inFlightRecovery;
     }
-    const hasAuthLoginRequiredError = await this.workerProcessManager?.hasAuthLoginRequiredError?.(workerID);
-    if (!hasAuthLoginRequiredError) {
-      return false;
-    }
 
-    this.trace({
-      stage: "worker_resume_auth_recovering",
-      session_id: sessionID,
-      worker_id: workerID,
-      claude_session_id: previousBinding?.claude_session_id || nextBinding?.claude_session_id,
-    }, "error");
-    await this.requeuePendingEventsForWorker(sessionID, workerID);
+    const recoveryPromise = (async () => {
+      const runtime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
+      if (!runtime || !runtime.resume_session) {
+        return false;
+      }
+      const hasAuthLoginRequiredError = await this.workerProcessManager?.hasAuthLoginRequiredError?.(workerID);
+      if (!hasAuthLoginRequiredError) {
+        return false;
+      }
 
-    const latestBinding = this.bindingRegistry.getByAibotSessionID(sessionID) ?? nextBinding ?? previousBinding;
-    if (!latestBinding) {
-      return false;
+      this.trace({
+        stage: "worker_resume_auth_recovering",
+        session_id: sessionID,
+        worker_id: workerID,
+        claude_session_id: previousBinding?.claude_session_id || nextBinding?.claude_session_id,
+      }, "error");
+      await this.requeuePendingEventsForWorker(sessionID, workerID);
+
+      const latestBinding = this.bindingRegistry.getByAibotSessionID(sessionID) ?? nextBinding ?? previousBinding;
+      if (!latestBinding) {
+        return false;
+      }
+      const fallbackBinding = await this.rotateClaudeSession(latestBinding);
+      const nextWorkerID = normalizeString(nextBinding?.worker_id) || workerID || randomUUID();
+      await this.bindingRegistry.markWorkerStarting(sessionID, {
+        workerID: nextWorkerID,
+        updatedAt: Date.now(),
+        lastStartedAt: Date.now(),
+      });
+      await this.workerProcessManager.spawnWorker({
+        aibotSessionID: sessionID,
+        cwd: fallbackBinding.cwd,
+        pluginDataDir: fallbackBinding.plugin_data_dir,
+        claudeSessionID: fallbackBinding.claude_session_id,
+        workerID: nextWorkerID,
+        bridgeURL: this.bridgeServer.getURL(),
+        bridgeToken: this.bridgeServer.token,
+        resumeSession: false,
+      });
+      this.trace({
+        stage: "worker_resume_auth_spawned_fresh",
+        session_id: sessionID,
+        worker_id: nextWorkerID,
+        claude_session_id: fallbackBinding.claude_session_id,
+      }, "error");
+      return true;
+    })();
+
+    this.resumeAuthRecoveryInFlight.set(sessionID, recoveryPromise);
+    try {
+      return await recoveryPromise;
+    } finally {
+      if (this.resumeAuthRecoveryInFlight.get(sessionID) === recoveryPromise) {
+        this.resumeAuthRecoveryInFlight.delete(sessionID);
+      }
     }
-    const fallbackBinding = await this.rotateClaudeSession(latestBinding);
-    const nextWorkerID = normalizeString(nextBinding?.worker_id) || workerID || randomUUID();
-    await this.bindingRegistry.markWorkerStarting(sessionID, {
-      workerID: nextWorkerID,
-      updatedAt: Date.now(),
-      lastStartedAt: Date.now(),
-    });
-    await this.workerProcessManager.spawnWorker({
-      aibotSessionID: sessionID,
-      cwd: fallbackBinding.cwd,
-      pluginDataDir: fallbackBinding.plugin_data_dir,
-      claudeSessionID: fallbackBinding.claude_session_id,
-      workerID: nextWorkerID,
-      bridgeURL: this.bridgeServer.getURL(),
-      bridgeToken: this.bridgeServer.token,
-      resumeSession: false,
-    });
-    this.trace({
-      stage: "worker_resume_auth_spawned_fresh",
-      session_id: sessionID,
-      worker_id: nextWorkerID,
-      claude_session_id: fallbackBinding.claude_session_id,
-    }, "error");
-    return true;
   }
 
   async reconcileWorkerProcesses() {

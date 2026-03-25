@@ -158,20 +158,35 @@ export class ServiceManager {
       uid: this.uid,
       runCommand: this.runCommandImpl,
     });
-    await this.waitForDaemonStarted(normalizedDataDir, null);
+    await this.waitForDaemonStarted(normalizedDataDir);
     return this.status({ dataDir: normalizedDataDir });
   }
 
-  async waitForDaemonStarted(dataDir, oldPid, timeoutMs = 5000) {
+  async waitForDaemonStarted(
+    dataDir,
+    {
+      oldPid = 0,
+      minUpdatedAt = 0,
+      timeoutMs = 5000,
+    } = {},
+  ) {
     const { setTimeout: sleep } = await import("node:timers/promises");
     const start = this.now();
+    let lastState = null;
     while (this.now() - start < timeoutMs) {
       const state = await inspectDaemonProcessState({ dataDir });
-      if (state.running && state.pid && state.pid !== oldPid) {
-        return;
+      lastState = state;
+      const restarted = oldPid <= 0
+        || state.pid !== oldPid
+        || Number(state.updated_at ?? 0) > Number(minUpdatedAt ?? 0);
+      if (state.running && state.pid && restarted) {
+        return state;
       }
       await sleep(100);
     }
+    throw new Error(
+      `daemon start timeout (${timeoutMs}ms), state=${lastState?.state || "unknown"}, pid=${Number(lastState?.pid ?? 0)}`,
+    );
   }
 
   async start({ dataDir }) {
@@ -188,7 +203,10 @@ export class ServiceManager {
       uid: this.uid,
       runCommand: this.runCommandImpl,
     });
-    await this.waitForDaemonStarted(descriptor.data_dir, state.pid);
+    await this.waitForDaemonStarted(descriptor.data_dir, {
+      oldPid: state.pid,
+      minUpdatedAt: state.updated_at,
+    });
     return this.status({ dataDir: descriptor.data_dir });
   }
 
@@ -231,7 +249,10 @@ export class ServiceManager {
       uid: this.uid,
       runCommand: this.runCommandImpl,
     });
-    await this.waitForDaemonStarted(descriptor.data_dir, before.pid);
+    await this.waitForDaemonStarted(descriptor.data_dir, {
+      oldPid: before.pid,
+      minUpdatedAt: before.updated_at,
+    });
     return this.status({ dataDir: descriptor.data_dir });
   }
 

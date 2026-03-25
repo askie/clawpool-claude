@@ -119,6 +119,19 @@ function getLaunchdDomain(uid = process.getuid?.() ?? 0) {
   return `gui/${uid}`;
 }
 
+function normalizeCommandOutput(result) {
+  const stdout = String(result?.stdout ?? "").trim();
+  const stderr = String(result?.stderr ?? "").trim();
+  return stderr || stdout || `exit=${Number(result?.exitCode ?? -1)}`;
+}
+
+function assertCommandSucceeded(result, action) {
+  if (Number(result?.exitCode ?? 0) === 0) {
+    return;
+  }
+  throw new Error(`${action}: ${normalizeCommandOutput(result)}`);
+}
+
 export function getPlatformServiceAdapter(platform = process.platform) {
   if (platform === "darwin") {
     return {
@@ -152,20 +165,28 @@ export function getPlatformServiceAdapter(platform = process.platform) {
       },
       async start({ serviceID, definitionPath, runCommand, uid = process.getuid?.() ?? 0 }) {
         const domain = getLaunchdDomain(uid);
-        await runCommand("launchctl", [
+        const bootstrapResult = await runCommand("launchctl", [
           "bootstrap",
           domain,
           definitionPath,
         ], {
           allowFailure: true,
         });
-        await runCommand("launchctl", [
+        const kickstartResult = await runCommand("launchctl", [
           "kickstart",
           "-k",
           `${domain}/${serviceID}`,
         ], {
           allowFailure: true,
         });
+        if (Number(kickstartResult?.exitCode ?? 0) !== 0) {
+          const bootoutDetail = Number(bootstrapResult?.exitCode ?? 0) === 0
+            ? ""
+            : `, bootstrap=${normalizeCommandOutput(bootstrapResult)}`;
+          throw new Error(
+            `launchctl start failed for ${domain}/${serviceID}: ${normalizeCommandOutput(kickstartResult)}${bootoutDetail}`,
+          );
+        }
       },
       async stop({ serviceID, runCommand, uid = process.getuid?.() ?? 0 }) {
         const domain = getLaunchdDomain(uid);
@@ -197,20 +218,22 @@ export function getPlatformServiceAdapter(platform = process.platform) {
           await new Promise((resolve) => setTimeout(resolve, 250));
         }
 
-        await runCommand("launchctl", [
+        const bootstrapResult = await runCommand("launchctl", [
           "bootstrap",
           domain,
           definitionPath,
         ], {
           allowFailure: true,
         });
-        await runCommand("launchctl", [
+        assertCommandSucceeded(bootstrapResult, `launchctl bootstrap ${domain}`);
+        const kickstartResult = await runCommand("launchctl", [
           "kickstart",
           "-k",
           `${domain}/${serviceID}`,
         ], {
           allowFailure: true,
         });
+        assertCommandSucceeded(kickstartResult, `launchctl kickstart ${domain}/${serviceID}`);
       },
       async uninstall({ serviceID, definitionPath, runCommand, uid = process.getuid?.() ?? 0 }) {
         const domain = getLaunchdDomain(uid);
