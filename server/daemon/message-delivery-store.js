@@ -85,12 +85,14 @@ function normalizePendingEvent(input) {
 function normalizeState(input) {
   const eventRoutes = {};
   const pendingEvents = {};
+  const recentRevokes = {};
 
   if (!input || typeof input !== "object" || Number(input.schema_version) !== schemaVersion) {
     return {
       schema_version: schemaVersion,
       event_routes: eventRoutes,
       pending_events: pendingEvents,
+      recent_revokes: recentRevokes,
     };
   }
 
@@ -112,10 +114,19 @@ function normalizeState(input) {
     pendingEvents[normalizedKey] = pendingEvent;
   }
 
+  for (const [key, rawTimestamp] of Object.entries(input.recent_revokes ?? {})) {
+    const normalizedKey = normalizeString(key);
+    if (!normalizedKey) {
+      continue;
+    }
+    recentRevokes[normalizedKey] = normalizeTimestamp(rawTimestamp);
+  }
+
   return {
     schema_version: schemaVersion,
     event_routes: eventRoutes,
     pending_events: pendingEvents,
+    recent_revokes: recentRevokes,
   };
 }
 
@@ -181,6 +192,46 @@ export class MessageDeliveryStore {
     }
     return this.listPendingEvents()
       .filter((record) => record.sessionID === normalizedSessionID);
+  }
+
+  hasRecentRevoke(revokeKey, { retentionMs = 0, now = Date.now() } = {}) {
+    const normalizedRevokeKey = normalizeString(revokeKey);
+    if (!normalizedRevokeKey) {
+      return false;
+    }
+    this.purgeExpiredRecentRevokes({ retentionMs, now });
+    return Object.hasOwn(this.state.recent_revokes, normalizedRevokeKey);
+  }
+
+  async rememberRecentRevoke(revokeKey, { retentionMs = 0, now = Date.now() } = {}) {
+    const normalizedRevokeKey = normalizeString(revokeKey);
+    if (!normalizedRevokeKey) {
+      return false;
+    }
+    this.purgeExpiredRecentRevokes({ retentionMs, now });
+    this.state.recent_revokes[normalizedRevokeKey] = normalizeTimestamp(now);
+    await this.save();
+    return true;
+  }
+
+  purgeExpiredRecentRevokes({ retentionMs = 0, now = Date.now() } = {}) {
+    const normalizedRetentionMs = Math.max(0, Math.floor(Number(retentionMs) || 0));
+    if (normalizedRetentionMs <= 0) {
+      if (Object.keys(this.state.recent_revokes).length > 0) {
+        this.state.recent_revokes = {};
+      }
+      return false;
+    }
+
+    const expireBefore = normalizeTimestamp(now) - normalizedRetentionMs;
+    let changed = false;
+    for (const [revokeKey, recordedAt] of Object.entries(this.state.recent_revokes)) {
+      if (Number(recordedAt) <= expireBefore) {
+        delete this.state.recent_revokes[revokeKey];
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   async trackPendingEvent(rawPayload) {

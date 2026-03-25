@@ -198,7 +198,6 @@ export class DaemonRuntime {
       ? isProcessRunning
       : defaultIsProcessRunning;
     this.workerControlProbeFailures = new Map();
-    this.recentRevokes = new Map();
     this.controlCommandHandler = new DaemonControlCommandHandler({
       env: this.env,
       bindingRegistry: this.bindingRegistry,
@@ -243,33 +242,27 @@ export class DaemonRuntime {
       this.workerRuntimeHealthCheckTimer = null;
     }
     this.workerControlProbeFailures.clear();
-    this.recentRevokes.clear();
   }
 
   purgeExpiredRecentRevokes(now = Date.now()) {
-    if (this.recentRevokeRetentionMs <= 0 || this.recentRevokes.size === 0) {
-      return;
-    }
-    const expireBefore = now - this.recentRevokeRetentionMs;
-    for (const [eventID, recordedAt] of this.recentRevokes.entries()) {
-      if (recordedAt <= expireBefore) {
-        this.recentRevokes.delete(eventID);
-      }
-    }
+    return this.messageDeliveryStore.purgeExpiredRecentRevokes({
+      retentionMs: this.recentRevokeRetentionMs,
+      now,
+    });
   }
 
   hasRecentRevoke(revokeKey, now = Date.now()) {
-    this.purgeExpiredRecentRevokes(now);
-    return this.recentRevokes.has(normalizeString(revokeKey));
+    return this.messageDeliveryStore.hasRecentRevoke(revokeKey, {
+      retentionMs: this.recentRevokeRetentionMs,
+      now,
+    });
   }
 
-  rememberRecentRevoke(revokeKey, now = Date.now()) {
-    const normalizedRevokeKey = normalizeString(revokeKey);
-    if (!normalizedRevokeKey) {
-      return;
-    }
-    this.purgeExpiredRecentRevokes(now);
-    this.recentRevokes.set(normalizedRevokeKey, now);
+  async rememberRecentRevoke(revokeKey, now = Date.now()) {
+    return this.messageDeliveryStore.rememberRecentRevoke(revokeKey, {
+      retentionMs: this.recentRevokeRetentionMs,
+      now,
+    });
   }
 
   async reply(event, text, extra = {}) {
@@ -1467,8 +1460,8 @@ export class DaemonRuntime {
       });
       return;
     }
-    this.rememberRecentRevoke(revokeKey, receivedAt);
-    this.rememberRecentRevoke(eventID, receivedAt);
+    await this.rememberRecentRevoke(revokeKey, receivedAt);
+    await this.rememberRecentRevoke(eventID, receivedAt);
 
     await this.deliverWithRecovery(sessionID, rawPayload, this.deliverRevokeToWorker);
     this.trace({

@@ -1742,6 +1742,116 @@ test("daemon runtime skips duplicate revoke forwards for the same message with a
   ]);
 });
 
+test("daemon runtime skips duplicate revoke forwards after runtime restart", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const deliveredRevokes = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const messageDeliveryStateFile = path.join(tempDir, "message-delivery-state.json");
+
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-revoke-restart",
+    claude_session_id: "claude-revoke-restart",
+    cwd: tempDir,
+    worker_id: "worker-revoke-restart",
+    worker_status: "ready",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+    worker_control_url: "http://127.0.0.1:9992",
+    worker_control_token: "token-revoke-restart",
+  });
+
+  const firstStore = new MessageDeliveryStore(messageDeliveryStateFile);
+  await firstStore.load();
+  const firstRuntime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager([]),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: firstStore,
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent() {
+          return { ok: true };
+        },
+        async deliverStop() {
+          return { ok: true };
+        },
+        async deliverRevoke(payload) {
+          deliveredRevokes.push(payload);
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await firstRuntime.handleRevokeEvent({
+    event_id: "evt-revoke-restart-1",
+    session_id: "chat-revoke-restart",
+    msg_id: "msg-revoke-restart",
+  });
+
+  const restartedRegistry = new BindingRegistry(bindingFile);
+  await restartedRegistry.load();
+  const restartedStore = new MessageDeliveryStore(messageDeliveryStateFile);
+  await restartedStore.load();
+  const restartedRuntime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: restartedRegistry,
+    workerProcessManager: makeWorkerProcessManager([]),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: restartedStore,
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent() {
+          return { ok: true };
+        },
+        async deliverStop() {
+          return { ok: true };
+        },
+        async deliverRevoke(payload) {
+          deliveredRevokes.push(payload);
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await restartedRuntime.handleRevokeEvent({
+    event_id: "evt-revoke-restart-2",
+    session_id: "chat-revoke-restart",
+    msg_id: "msg-revoke-restart",
+  });
+
+  assert.equal(sent.filter((item) => item.kind === "ack").length, 2);
+  assert.deepEqual(deliveredRevokes, [
+    {
+      event_id: "evt-revoke-restart-1",
+      session_id: "chat-revoke-restart",
+      msg_id: "msg-revoke-restart",
+    },
+  ]);
+});
+
 test("daemon runtime recovers stale worker control before forwarding stop", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
