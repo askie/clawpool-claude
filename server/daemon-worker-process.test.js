@@ -551,6 +551,11 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude
   assert.match(expectScript, /puts \$pid_file \[exp_pid -i \$spawn_id\]/u);
   assert.match(expectScript, /after 500/u);
   assert.match(expectScript, /-re \{Enter\.\*confirm\}/u);
+  assert.match(expectScript, /-re \{\(Press\|press\)\.\*Enter\.\*\(continue\|confirm\)\}/u);
+  assert.match(expectScript, /-re \{I am using this for local development\}/u);
+  assert.match(expectScript, /-re \{Listening for channel messages from:\}/u);
+  assert.match(expectScript, /\[clawpool\] startup_prompt_auto_confirm/u);
+  assert.match(expectScript, /\[clawpool\] startup_channel_listening/u);
   assert.match(expectScript, /send -- "\\r"/u);
   assert.match(expectScript, /exp_continue/u);
   assert.match(expectScript, /set claude_command \[list \{\/usr\/local\/bin\/claude\} \{--name\} \{clawpool-chat-visible\} \{--plugin-dir\} \{\/tmp\/clawpool-claude-plugin\} \{--dangerously-skip-permissions\} \{--session-id\} \{session-1\} \{--dangerously-load-development-channels\} \{server:clawpool-claude\}\]/u);
