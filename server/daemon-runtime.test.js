@@ -2669,7 +2669,6 @@ test("daemon runtime returns auth login required message when worker logs show 4
   });
   await deliveryStore.markPendingEventDelivered("evt-probe-auth", "worker-probe-auth");
 
-  let pingCount = 0;
   const workerProcessManager = {
     getWorkerRuntime() {
       return {
@@ -2691,6 +2690,10 @@ test("daemon runtime returns auth login required message when worker logs show 4
       assert.equal(workerID, "worker-probe-auth");
       return true;
     },
+    async stopWorker(workerID) {
+      workerCalls.push({ kind: "stop", workerID });
+      return true;
+    },
   };
 
   const runtime = new DaemonRuntime({
@@ -2706,37 +2709,19 @@ test("daemon runtime returns auth login required message when worker logs show 4
     },
     messageDeliveryStore: deliveryStore,
     workerRuntimeHealthCheckMs: 0,
-    workerControlProbeFailureThreshold: 2,
     isProcessRunning() {
       return true;
     },
-    workerControlClientFactory() {
-      return {
-        isConfigured() {
-          return true;
-        },
-        async ping() {
-          pingCount += 1;
-          throw new Error("connection refused");
-        },
-      };
-    },
   });
 
-  const unchanged = await runtime.reconcileWorkerProcess(
-    registry.getByAibotSessionID("chat-probe-auth"),
-  );
-  assert.equal(unchanged, false);
-  assert.equal(registry.getByAibotSessionID("chat-probe-auth")?.worker_status, "ready");
+  // Pre-seed 2 retries so the next reconcile triggers the final failure
+  runtime.authRetryCounts.set("chat-probe-auth", 2);
 
   const changed = await runtime.reconcileWorkerProcess(
     registry.getByAibotSessionID("chat-probe-auth"),
   );
   assert.equal(changed, true);
   assert.equal(registry.getByAibotSessionID("chat-probe-auth")?.worker_status, "stopped");
-  assert.equal(pingCount, 2);
-  assert.equal(workerCalls.length, 1);
-  assert.equal(workerCalls[0].exitSignal, "worker_control_unreachable");
   assert.equal(deliveryStore.getPendingEvent("evt-probe-auth"), null);
   assert.equal(
     sent.some(
@@ -3991,4 +3976,251 @@ test("daemon runtime fails pending events when worker stops before becoming read
       msg: "worker interrupted while processing event",
     },
   );
+});
+
+test("daemon runtime reconcileWorkerProcess retries auth error 3 times then fails with auth message", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-auth-retry",
+    claude_session_id: "claude-auth-retry",
+    cwd: tempDir,
+    worker_id: "worker-auth-retry",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-auth-retry",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-auth-retry",
+    session_id: "chat-auth-retry",
+    msg_id: "msg-auth-retry",
+    sender_id: "sender-auth-retry",
+    content: "hello",
+  });
+  await deliveryStore.markPendingEventDelivered("evt-auth-retry", "worker-auth-retry");
+
+  let spawnCount = 0;
+  const workerProcessManager = {
+    getWorkerRuntime() {
+      return {
+        worker_id: "worker-auth-retry",
+        aibot_session_id: "chat-auth-retry",
+        pid: 60001,
+        status: "ready",
+      };
+    },
+    markWorkerRuntimeStopped(workerID, { exitSignal = "" } = {}) {
+      workerCalls.push({ kind: "mark_stopped", workerID, exitSignal });
+      return {
+        worker_id: workerID,
+        status: "stopped",
+        exit_signal: exitSignal,
+      };
+    },
+    async hasAuthLoginRequiredError() {
+      return true;
+    },
+    async stopWorker(workerID) {
+      workerCalls.push({ kind: "stop", workerID });
+      return true;
+    },
+    async spawnWorker(input) {
+      spawnCount += 1;
+      workerCalls.push({ kind: "spawn", input });
+      return {
+        worker_id: input.workerID || "worker-auth-retry",
+        status: "starting",
+      };
+    },
+  };
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    isProcessRunning() {
+      return true;
+    },
+    claudeSessionExists() {
+      return false;
+    },
+  });
+
+  // Retry 1: should stop worker and re-spawn (no user notification)
+  let changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-auth-retry"),
+  );
+  assert.equal(changed, true);
+  assert.equal(spawnCount, 1);
+  assert.equal(sent.filter((item) => item.kind === "text").length, 0);
+
+  // Reset binding to ready for next reconcile (simulating worker came back up)
+  await registry.markWorkerReady("chat-auth-retry", {
+    workerID: "worker-auth-retry",
+    workerPid: 60002,
+    workerControlURL: "http://127.0.0.1:9001",
+    workerControlToken: "token-auth-retry",
+    updatedAt: Date.now(),
+    lastStartedAt: Date.now(),
+  });
+
+  // Retry 2: should stop again and re-spawn
+  changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-auth-retry"),
+  );
+  assert.equal(changed, true);
+  assert.equal(spawnCount, 2);
+  assert.equal(sent.filter((item) => item.kind === "text").length, 0);
+
+  // Reset binding to ready
+  await registry.markWorkerReady("chat-auth-retry", {
+    workerID: "worker-auth-retry",
+    workerPid: 60003,
+    workerControlURL: "http://127.0.0.1:9001",
+    workerControlToken: "token-auth-retry",
+    updatedAt: Date.now(),
+    lastStartedAt: Date.now(),
+  });
+
+  // Retry 3: should fail and notify user with auth message
+  changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-auth-retry"),
+  );
+  assert.equal(changed, true);
+  assert.equal(spawnCount, 2); // no additional spawn on final failure
+  assert.equal(registry.getByAibotSessionID("chat-auth-retry")?.worker_status, "stopped");
+
+  // Should have sent auth login required message
+  assert.equal(
+    sent.some(
+      (item) =>
+        item.kind === "text"
+        && item.payload.eventID === "evt-auth-retry"
+        && /claude auth login/iu.test(item.payload.text),
+    ),
+    true,
+  );
+  assert.deepEqual(
+    sent.find(
+      (item) => item.kind === "event_result" && item.payload.event_id === "evt-auth-retry",
+    )?.payload,
+    {
+      event_id: "evt-auth-retry",
+      status: "failed",
+      code: "claude_auth_login_required",
+      msg: "claude authentication expired; run claude auth login",
+    },
+  );
+});
+
+test("daemon runtime clears auth retry count when event completes successfully", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-auth-clear",
+    claude_session_id: "claude-auth-clear",
+    cwd: tempDir,
+    worker_id: "worker-auth-clear",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-auth-clear",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-auth-clear",
+    session_id: "chat-auth-clear",
+    msg_id: "msg-auth-clear",
+    sender_id: "sender-auth-clear",
+    content: "hello",
+  });
+  await deliveryStore.markPendingEventDelivered("evt-auth-clear", "worker-auth-clear");
+
+  let authErrorEnabled = true;
+  let spawnCount = 0;
+  const workerProcessManager = {
+    getWorkerRuntime() {
+      return {
+        worker_id: "worker-auth-clear",
+        aibot_session_id: "chat-auth-clear",
+        pid: 60010,
+        status: "ready",
+      };
+    },
+    markWorkerRuntimeStopped(workerID, { exitSignal = "" } = {}) {
+      workerCalls.push({ kind: "mark_stopped", workerID, exitSignal });
+      return { worker_id: workerID, status: "stopped", exit_signal: exitSignal };
+    },
+    async hasAuthLoginRequiredError() {
+      return authErrorEnabled;
+    },
+    async stopWorker(workerID) {
+      workerCalls.push({ kind: "stop", workerID });
+      return true;
+    },
+    async spawnWorker(input) {
+      spawnCount += 1;
+      workerCalls.push({ kind: "spawn", input });
+      return { worker_id: input.workerID || "worker-auth-clear", status: "starting" };
+    },
+  };
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    isProcessRunning() {
+      return true;
+    },
+    claudeSessionExists() {
+      return false;
+    },
+  });
+
+  // Trigger one auth retry
+  await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-auth-clear"),
+  );
+  assert.equal(spawnCount, 1);
+
+  // Now simulate event completion (which should clear the retry counter)
+  authErrorEnabled = false;
+  await runtime.handleEventCompleted("evt-auth-clear");
+
+  // Verify counter was cleared by checking internal state
+  assert.equal(runtime.authRetryCounts.has("chat-auth-clear"), false);
 });

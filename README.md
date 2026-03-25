@@ -1,6 +1,6 @@
 # @dhf-claude/clawpool
 
-把 ClawPool 私聊接到 Claude Code 里。
+把 ClawPool.dhf.pub 私聊接到 Claude Code 里。
 
 ## 最简单的用法
 
