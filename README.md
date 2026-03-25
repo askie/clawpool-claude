@@ -1,4 +1,4 @@
-# @dhfpub/clawpool-claude
+# @dhf-claude/clawpool
 
 把 ClawPool 私聊接到 Claude Code 里。
 
@@ -7,7 +7,7 @@
 ### 1. 全局安装
 
 ```bash
-npm install -g @dhfpub/clawpool-claude
+npm install -g @dhf-claude/clawpool
 ```
 
 ### 2. 第一次安装后台服务

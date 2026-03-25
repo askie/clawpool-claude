@@ -9,7 +9,7 @@ if [[ -n $(git status -s) ]]; then
   exit 1
 fi
 
-echo "=> Publishing @dhfpub/clawpool-claude to NPM (Public)..."
+echo "=> Publishing @dhf-claude/clawpool to NPM (Public)..."
 # publishConfig is set to access: public in package.json,
 # but it's okay to also explicitly pass it.
 "$ROOT_DIR/scripts/npm-publish.exp" npm publish --access public
