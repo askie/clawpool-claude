@@ -90,6 +90,7 @@ const defaultDeliveredInFlightMaxAgeMs = 60 * 1000;
 const defaultWorkerControlProbeFailureThreshold = 3;
 const defaultMcpInteractionIdleMs = 5 * 60 * 1000;
 const defaultMcpResultTimeoutMs = 12 * 60 * 1000;
+const defaultRecentRevokeRetentionMs = 24 * 60 * 60 * 1000;
 
 function normalizeNonNegativeInt(value, fallbackValue) {
   const numeric = Number(value);
@@ -128,6 +129,7 @@ export class DaemonRuntime {
     workerControlProbeFailureThreshold = defaultWorkerControlProbeFailureThreshold,
     mcpInteractionIdleMs = defaultMcpInteractionIdleMs,
     mcpResultTimeoutMs = defaultMcpResultTimeoutMs,
+    recentRevokeRetentionMs = defaultRecentRevokeRetentionMs,
   }) {
     this.env = env;
     this.bindingRegistry = bindingRegistry;
@@ -166,6 +168,10 @@ export class DaemonRuntime {
       mcpResultTimeoutMs ?? env.CLAWPOOL_CLAUDE_MCP_RESULT_TIMEOUT_MS,
       defaultMcpResultTimeoutMs,
     );
+    this.recentRevokeRetentionMs = normalizeNonNegativeInt(
+      recentRevokeRetentionMs ?? env.CLAWPOOL_CLAUDE_RECENT_REVOKE_RETENTION_MS,
+      defaultRecentRevokeRetentionMs,
+    );
     this.workerHealthInspector = new WorkerHealthInspector({
       getPendingEventsForSession: (sessionID) => this.messageDeliveryStore.listPendingEventsForSession(sessionID),
       mcpInteractionIdleMs: this.mcpInteractionIdleMs,
@@ -175,6 +181,7 @@ export class DaemonRuntime {
       ? isProcessRunning
       : defaultIsProcessRunning;
     this.workerControlProbeFailures = new Map();
+    this.recentRevokes = new Map();
     this.controlCommandHandler = new DaemonControlCommandHandler({
       env: this.env,
       bindingRegistry: this.bindingRegistry,
@@ -219,6 +226,33 @@ export class DaemonRuntime {
       this.workerRuntimeHealthCheckTimer = null;
     }
     this.workerControlProbeFailures.clear();
+    this.recentRevokes.clear();
+  }
+
+  purgeExpiredRecentRevokes(now = Date.now()) {
+    if (this.recentRevokeRetentionMs <= 0 || this.recentRevokes.size === 0) {
+      return;
+    }
+    const expireBefore = now - this.recentRevokeRetentionMs;
+    for (const [eventID, recordedAt] of this.recentRevokes.entries()) {
+      if (recordedAt <= expireBefore) {
+        this.recentRevokes.delete(eventID);
+      }
+    }
+  }
+
+  hasRecentRevoke(eventID, now = Date.now()) {
+    this.purgeExpiredRecentRevokes(now);
+    return this.recentRevokes.has(normalizeString(eventID));
+  }
+
+  rememberRecentRevoke(eventID, now = Date.now()) {
+    const normalizedEventID = normalizeString(eventID);
+    if (!normalizedEventID) {
+      return;
+    }
+    this.purgeExpiredRecentRevokes(now);
+    this.recentRevokes.set(normalizedEventID, now);
   }
 
   async reply(event, text, extra = {}) {
@@ -1379,14 +1413,21 @@ export class DaemonRuntime {
     if (!eventID) {
       return;
     }
+    const receivedAt = Date.now();
+    const resolvedSessionID = normalizeString(rawPayload?.session_id)
+      || this.messageDeliveryStore.getRememberedSessionID(eventID);
+    this.aibotClient.ackEvent(eventID, {
+      sessionID: resolvedSessionID,
+      msgID: rawPayload?.msg_id,
+      receivedAt,
+    });
     this.trace({
       stage: "revoke_received",
       event_id: eventID,
       session_id: rawPayload?.session_id,
       msg_id: rawPayload?.msg_id,
     });
-    const sessionID = normalizeString(rawPayload?.session_id)
-      || this.messageDeliveryStore.getRememberedSessionID(eventID);
+    const sessionID = resolvedSessionID;
     if (!sessionID) {
       this.trace({
         stage: "revoke_route_missing",
@@ -1395,6 +1436,17 @@ export class DaemonRuntime {
       }, "error");
       return;
     }
+
+    if (this.hasRecentRevoke(eventID, receivedAt)) {
+      this.trace({
+        stage: "revoke_duplicate_skipped",
+        event_id: eventID,
+        session_id: sessionID,
+        msg_id: rawPayload?.msg_id,
+      });
+      return;
+    }
+    this.rememberRecentRevoke(eventID, receivedAt);
 
     await this.deliverWithRecovery(sessionID, rawPayload, this.deliverRevokeToWorker);
     this.trace({

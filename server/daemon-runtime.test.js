@@ -1583,6 +1583,11 @@ test("daemon runtime forwards stop and revoke to ready worker control", async ()
     msg_id: "msg-5",
   });
 
+  const revokeAck = sent.find((item) => item.kind === "ack" && item.eventID === "evt-revoke-5");
+  assert.ok(revokeAck);
+  assert.equal(revokeAck.payload.sessionID, "chat-5");
+  assert.equal(revokeAck.payload.msgID, "msg-5");
+  assert.equal(Number.isFinite(revokeAck.payload.receivedAt), true);
   assert.deepEqual(deliveredStops, [
     {
       event_id: "evt-stop-5",
@@ -1595,6 +1600,75 @@ test("daemon runtime forwards stop and revoke to ready worker control", async ()
       event_id: "evt-revoke-5",
       session_id: "chat-5",
       msg_id: "msg-5",
+    },
+  ]);
+});
+
+test("daemon runtime acknowledges revoke immediately and skips duplicate forwards", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const deliveredRevokes = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-revoke",
+    claude_session_id: "claude-revoke",
+    cwd: tempDir,
+    worker_id: "worker-revoke",
+    worker_status: "ready",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+    worker_control_url: "http://127.0.0.1:9994",
+    worker_control_token: "token-revoke",
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent() {
+          return { ok: true };
+        },
+        async deliverStop() {
+          return { ok: true };
+        },
+        async deliverRevoke(payload) {
+          deliveredRevokes.push(payload);
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await runtime.handleRevokeEvent({
+    event_id: "evt-revoke-dup",
+    session_id: "chat-revoke",
+    msg_id: "msg-revoke",
+  });
+  await runtime.handleRevokeEvent({
+    event_id: "evt-revoke-dup",
+    session_id: "chat-revoke",
+    msg_id: "msg-revoke",
+  });
+
+  assert.equal(sent.filter((item) => item.kind === "ack" && item.eventID === "evt-revoke-dup").length, 2);
+  assert.deepEqual(deliveredRevokes, [
+    {
+      event_id: "evt-revoke-dup",
+      session_id: "chat-revoke",
+      msg_id: "msg-revoke",
     },
   ]);
 });
