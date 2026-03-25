@@ -158,7 +158,20 @@ export class ServiceManager {
       uid: this.uid,
       runCommand: this.runCommandImpl,
     });
+    await this.waitForDaemonStarted(normalizedDataDir, null);
     return this.status({ dataDir: normalizedDataDir });
+  }
+
+  async waitForDaemonStarted(dataDir, oldPid, timeoutMs = 5000) {
+    const { setTimeout: sleep } = await import("node:timers/promises");
+    const start = this.now();
+    while (this.now() - start < timeoutMs) {
+      const state = await inspectDaemonProcessState({ dataDir });
+      if (state.running && state.pid && state.pid !== oldPid) {
+        return;
+      }
+      await sleep(100);
+    }
   }
 
   async start({ dataDir }) {
@@ -175,6 +188,7 @@ export class ServiceManager {
       uid: this.uid,
       runCommand: this.runCommandImpl,
     });
+    await this.waitForDaemonStarted(descriptor.data_dir, state.pid);
     return this.status({ dataDir: descriptor.data_dir });
   }
 
@@ -208,12 +222,16 @@ export class ServiceManager {
 
   async restart({ dataDir }) {
     const descriptor = await this.resolveActiveDescriptor(dataDir);
+    const before = await inspectDaemonProcessState({
+      dataDir: descriptor.data_dir,
+    });
     await this.adapter.restart({
       ...this.toAdapterPayload(descriptor),
       homeDir: this.homeDir,
       uid: this.uid,
       runCommand: this.runCommandImpl,
     });
+    await this.waitForDaemonStarted(descriptor.data_dir, before.pid);
     return this.status({ dataDir: descriptor.data_dir });
   }
 
