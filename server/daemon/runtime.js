@@ -850,6 +850,11 @@ export class DaemonRuntime {
     if (!record?.eventID || !record?.sessionID) {
       return;
     }
+    const cleared = await this.clearPendingEvent(record.eventID);
+    if (!cleared) {
+      return; // Already cleared by a concurrent handler execution
+    }
+
     if (notifyText) {
       try {
         await this.aibotClient.sendText({
@@ -875,7 +880,6 @@ export class DaemonRuntime {
     } catch {
       // best effort only
     }
-    await this.clearPendingEvent(record.eventID);
     this.trace({
       stage: "pending_event_failed",
       event_id: record.eventID,

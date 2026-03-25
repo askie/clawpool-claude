@@ -244,10 +244,18 @@ export async function run(argv = [], env = process.env) {
       if (status === "ready") {
         const timer = setTimeout(() => {
           void (async () => {
-            await runtime?.handleWorkerStatusUpdate?.(previousBinding, nextBinding);
+            const currentBinding = bindingRegistry.getByAibotSessionID(aibotSessionID);
+            if (
+              !currentBinding ||
+              currentBinding.worker_id !== nextBinding.worker_id ||
+              currentBinding.worker_status !== "ready"
+            ) {
+              return;
+            }
+            await runtime?.handleWorkerStatusUpdate?.(previousBinding, currentBinding);
             const pendingEventCount = runtime?.listPendingEventsForSession?.(aibotSessionID)?.length ?? 0;
-            if (shouldNotifyWorkerReady(previousBinding, nextBinding, { pendingEventCount })) {
-              await notifyWorkerReady(aibotClient, nextBinding);
+            if (shouldNotifyWorkerReady(previousBinding, currentBinding, { pendingEventCount })) {
+              await notifyWorkerReady(aibotClient, currentBinding);
             }
           })().catch((error) => {
             logger.error(`ready status follow-up failed session=${aibotSessionID}: ${String(error)}`);
