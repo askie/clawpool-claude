@@ -562,7 +562,7 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude
   assert.match(expectScript, /after 500/u);
   assert.match(expectScript, /-re \{\(\?i\)\(Enter\.\*confirm\|Press\.\*Enter\|Hit\.\*Enter\|Continue\.\*Enter\)\}/u);
   assert.match(expectScript, /-re \{\(\?i\)Listening\.\*channel messages\.\*server:clawpool-claude\}/u);
-  assert.match(expectScript, /-re \{\(\?i\)MCP server failed\}/u);
+  assert.match(expectScript, /-re \{\(\?i\)MCP\.\*server failed\}/u);
   assert.match(expectScript, /send -- "\\r"/u);
   assert.match(expectScript, /exp_continue/u);
   assert.match(expectScript, /eof \{\}/u);
@@ -666,4 +666,31 @@ test("worker process manager detects startup observability markers from logs", a
   assert.equal(await manager.hasStartupPromptAutoConfirm("worker-startup-marker"), true);
   assert.equal(await manager.hasStartupChannelListening("worker-startup-marker"), true);
   assert.equal(await manager.hasStartupMcpServerFailed("worker-startup-marker"), true);
+  assert.equal(await manager.hasStartupBlockingMcpServerFailure("worker-startup-marker"), false);
+});
+
+test("worker process manager detects ANSI-styled MCP startup failure logs", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-startup-ansi-mcp-"));
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+    },
+    packageRoot: tempDir,
+  });
+
+  manager.runtimes.set("worker-startup-ansi-mcp", {
+    worker_id: "worker-startup-ansi-mcp",
+    stdout_log_path: path.join(tempDir, "worker-startup-ansi-mcp.out.log"),
+    stderr_log_path: path.join(tempDir, "worker-startup-ansi-mcp.err.log"),
+  });
+  await writeFile(
+    path.join(tempDir, "worker-startup-ansi-mcp.out.log"),
+    "1\u001B[1CMCP\u001B[1Cserver failed · /mcp\n",
+    "utf8",
+  );
+
+  assert.equal(await manager.hasStartupMcpServerFailed("worker-startup-ansi-mcp"), true);
+  assert.equal(await manager.hasStartupBlockingMcpServerFailure("worker-startup-ansi-mcp"), true);
 });

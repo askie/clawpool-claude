@@ -28,6 +28,21 @@ const startupMcpServerFailedPatterns = [
   /MCP\s+server\s+failed/u,
 ];
 
+function stripTerminalControlSequences(content) {
+  return String(content ?? "")
+    .replace(/\u001B\][^\u0007]*(?:\u0007|\u001B\\)/gu, " ")
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, " ")
+    .replace(/\r/g, "\n");
+}
+
+function patternMatches(pattern, content) {
+  if (!(pattern instanceof RegExp)) {
+    return false;
+  }
+  pattern.lastIndex = 0;
+  return pattern.test(content);
+}
+
 function normalizeString(value) {
   return String(value ?? "").trim();
 }
@@ -213,7 +228,7 @@ export async function createVisibleClaudeLaunchScript({
     "    emit_marker startup_channel_listening",
     "    exp_continue",
     "  }",
-    "  -re {(?i)MCP server failed} {",
+    "  -re {(?i)MCP.*server failed} {",
     "    emit_marker startup_mcp_server_failed",
     "    exp_continue",
     "  }",
@@ -697,7 +712,11 @@ export class WorkerProcessManager {
       }
       try {
         const content = await readFile(filePath, "utf8");
-        if (patterns.some((pattern) => pattern.test(content))) {
+        const normalizedContent = stripTerminalControlSequences(content);
+        if (patterns.some((pattern) => (
+          patternMatches(pattern, content)
+          || patternMatches(pattern, normalizedContent)
+        ))) {
           return true;
         }
       } catch {
@@ -725,5 +744,15 @@ export class WorkerProcessManager {
 
   async hasStartupMcpServerFailed(workerID) {
     return this.hasLogPatternMatch(workerID, startupMcpServerFailedPatterns);
+  }
+
+  async hasStartupBlockingMcpServerFailure(workerID) {
+    if (!await this.hasStartupMcpServerFailed(workerID)) {
+      return false;
+    }
+    if (await this.hasStartupChannelListening(workerID)) {
+      return false;
+    }
+    return true;
   }
 }

@@ -1230,7 +1230,7 @@ test("daemon runtime fails fast when startup log reports MCP server failed", asy
           status: "starting",
         };
       },
-      async hasStartupMcpServerFailed(workerID) {
+      async hasStartupBlockingMcpServerFailure(workerID) {
         return workerID === "worker-4d-mcp-fail";
       },
     },
@@ -1266,6 +1266,56 @@ test("daemon runtime fails fast when startup log reports MCP server failed", asy
     true,
   );
   assert.equal(workerCalls.some((call) => call.kind === "stop" && call.workerID === "worker-4d-mcp-fail"), true);
+});
+
+test("daemon runtime only treats MCP startup failure as blocking when worker manager reports blocking failure", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-4d-mcp-check",
+    claude_session_id: "claude-4d-mcp-check",
+    cwd: tempDir,
+    worker_id: "worker-4d-mcp-check",
+    worker_status: "starting",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: {
+      async hasMissingResumeSessionError() {
+        return false;
+      },
+      async hasStartupMcpServerFailed() {
+        return true;
+      },
+      async hasStartupBlockingMcpServerFailure() {
+        return false;
+      },
+    },
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    workerRuntimeHealthCheckMs: 0,
+  });
+
+  const nonBlocking = await runtime.resolveWorkerLaunchFailure(
+    registry.getByAibotSessionID("chat-4d-mcp-check"),
+  );
+  assert.equal(nonBlocking, "");
+
+  runtime.workerProcessManager.hasStartupBlockingMcpServerFailure = async () => true;
+  const blocking = await runtime.resolveWorkerLaunchFailure(
+    registry.getByAibotSessionID("chat-4d-mcp-check"),
+  );
+  assert.equal(blocking, "startup_mcp_server_failed");
 });
 
 test("daemon runtime avoids redelivering the first event when ready recovery already flushed it", async () => {

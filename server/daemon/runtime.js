@@ -574,7 +574,10 @@ export class DaemonRuntime {
     if (await this.workerProcessManager?.hasMissingResumeSessionError?.(workerID)) {
       return "resume_session_missing";
     }
-    if (await this.workerProcessManager?.hasStartupMcpServerFailed?.(workerID)) {
+    const hasBlockingMcpStartupFailure = typeof this.workerProcessManager?.hasStartupBlockingMcpServerFailure === "function"
+      ? await this.workerProcessManager.hasStartupBlockingMcpServerFailure(workerID)
+      : await this.workerProcessManager?.hasStartupMcpServerFailed?.(workerID);
+    if (hasBlockingMcpStartupFailure) {
       return "startup_mcp_server_failed";
     }
     return "";
