@@ -571,6 +571,85 @@ test("daemon runtime queues a second session event until the first one completes
   assert.equal(runtime.getPendingEvent("evt-serial-2")?.delivery_state, "delivered");
 });
 
+test("daemon runtime skips recovered dispatch when event is completed during startup wait", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const delivered = [];
+  const workerCalls = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-startup-race",
+    claude_session_id: "claude-startup-race",
+    cwd: tempDir,
+    worker_id: "worker-startup-race",
+    worker_status: "stopped",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  let runtime;
+  runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: {
+      getWorkerRuntime() {
+        return null;
+      },
+      async spawnWorker(input) {
+        workerCalls.push({ kind: "spawn", input });
+        await runtime.handleEventCompleted("evt-startup-race");
+        await registry.markWorkerReady(input.aibotSessionID, {
+          workerID: input.workerID,
+          workerPid: 70001,
+          workerControlURL: "http://127.0.0.1:99973",
+          workerControlToken: "token-startup-race",
+          updatedAt: Date.now(),
+          lastStartedAt: Date.now(),
+        });
+        return {
+          worker_id: input.workerID,
+          status: "starting",
+        };
+      },
+      async stopWorker() {
+        return true;
+      },
+    },
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    workerRuntimeHealthCheckMs: 0,
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          delivered.push(payload);
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await runtime.handleEvent({
+    event_id: "evt-startup-race",
+    session_id: "chat-startup-race",
+    msg_id: "msg-startup-race",
+    sender_id: "sender-startup-race",
+    content: "hello",
+  });
+
+  assert.equal(workerCalls.length, 1);
+  assert.equal(delivered.length, 0);
+  assert.equal(runtime.getPendingEvent("evt-startup-race"), null);
+  assert.equal(sent.filter((item) => item.kind === "ack").length, 1);
+});
+
 test("daemon runtime does not flush a queued event while another session event is still in flight", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];

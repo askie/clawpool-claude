@@ -1225,7 +1225,7 @@ export class DaemonRuntime {
     }
   }
 
-  async deliverWithRecovery(aibotSessionID, rawPayload, deliverFn) {
+  async deliverWithRecovery(aibotSessionID, rawPayload, deliverFn, { requireTrackedPendingEvent = false } = {}) {
     const binding = this.bindingRegistry.getByAibotSessionID(aibotSessionID);
     if (!binding) {
       return null;
@@ -1286,6 +1286,17 @@ export class DaemonRuntime {
       path: "recovered_worker",
     });
     const currentRecord = this.getPendingEvent(rawPayload?.event_id);
+    if (requireTrackedPendingEvent && !currentRecord) {
+      this.trace({
+        stage: "event_dispatch_skipped",
+        event_id: rawPayload?.event_id,
+        session_id: aibotSessionID,
+        worker_id: readyBinding?.worker_id,
+        path: "recovered_worker",
+        reason: "pending_event_cleared",
+      });
+      return null;
+    }
     if (
       currentRecord
       && ["dispatching", "delivered"].includes(normalizeString(currentRecord.delivery_state))
@@ -1301,7 +1312,20 @@ export class DaemonRuntime {
       });
       return readyBinding;
     }
-    await this.markPendingEventDispatching(rawPayload?.event_id, readyBinding);
+    const dispatchingRecord = requireTrackedPendingEvent
+      ? await this.markPendingEventDispatching(rawPayload?.event_id, readyBinding)
+      : currentRecord;
+    if (requireTrackedPendingEvent && !dispatchingRecord) {
+      this.trace({
+        stage: "event_dispatch_skipped",
+        event_id: rawPayload?.event_id,
+        session_id: aibotSessionID,
+        worker_id: readyBinding?.worker_id,
+        path: "recovered_worker",
+        reason: "pending_event_cleared",
+      });
+      return null;
+    }
     await deliverFn.call(this, readyBinding, rawPayload);
     this.trace({
       stage: "event_dispatched",
@@ -1462,6 +1486,7 @@ export class DaemonRuntime {
         binding.aibot_session_id,
         rawPayload,
         this.deliverEventToWorker,
+        { requireTrackedPendingEvent: true },
       );
       if (deliveredBinding) {
         if (pending) {
