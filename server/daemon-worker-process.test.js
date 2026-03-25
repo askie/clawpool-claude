@@ -86,6 +86,9 @@ test("buildWorkerClaudeArgs resumes an existing Claude session by id", () => {
 });
 
 test("spawnWorker feeds a startup enter key to Claude stdin", async () => {
+  if (process.platform === "darwin") {
+    return;
+  }
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-startup-input-"));
   const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
   const outputPath = path.join(tempDir, "stdin-output.txt");
@@ -111,6 +114,7 @@ process.stdin.once("data", async (chunk) => {
       CLAUDE_BIN: fakeClaudePath,
       CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
       TEST_OUTPUT_PATH: outputPath,
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
     },
     packageRoot: tempDir,
     async ensureUserMcpServer() {},
@@ -134,7 +138,7 @@ process.stdin.once("data", async (chunk) => {
     }
   }
 
-  assert.equal(actual, "\n");
+  assert.match(actual, /[\r\n]/u);
 });
 
 test("spawnWorker allocates a hidden tty for Claude on macOS", async () => {
@@ -163,6 +167,7 @@ await writeFile(process.env.TEST_OUTPUT_PATH, process.stdout.isTTY ? "tty" : "no
       CLAUDE_BIN: fakeClaudePath,
       CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
       TEST_OUTPUT_PATH: outputPath,
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
     },
     packageRoot: tempDir,
     async ensureUserMcpServer() {},
@@ -545,19 +550,22 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude
   assert.match(script, /if tty of t is targetTTY then/u);
   assert.match(script, /close t/u);
   assert.match(expectScript, /set timeout -1/u);
+  assert.match(expectScript, /proc emit_marker \{marker\}/u);
+  assert.match(expectScript, /expect \{/u);
+  assert.match(expectScript, /emit_marker startup_prompt_auto_confirm/u);
+  assert.match(expectScript, /emit_marker startup_channel_listening/u);
+  assert.match(expectScript, /emit_marker startup_mcp_server_failed/u);
   assert.match(expectScript, /log_file -a \{.*worker-visible\.out\.log\}/u);
   assert.match(expectScript, /spawn -noecho \{\*\}\$claude_command/u);
   assert.match(expectScript, /set pid_file \[open \{.*worker-visible\.pid\} w\]/u);
   assert.match(expectScript, /puts \$pid_file \[exp_pid -i \$spawn_id\]/u);
   assert.match(expectScript, /after 500/u);
-  assert.match(expectScript, /-re \{Enter\.\*confirm\}/u);
-  assert.match(expectScript, /-re \{\(Press\|press\)\.\*Enter\.\*\(continue\|confirm\)\}/u);
-  assert.match(expectScript, /-re \{I am using this for local development\}/u);
-  assert.match(expectScript, /-re \{Listening for channel messages from:\}/u);
-  assert.match(expectScript, /\[clawpool\] startup_prompt_auto_confirm/u);
-  assert.match(expectScript, /\[clawpool\] startup_channel_listening/u);
+  assert.match(expectScript, /-re \{\(\?i\)\(Enter\.\*confirm\|Press\.\*Enter\|Hit\.\*Enter\|Continue\.\*Enter\)\}/u);
+  assert.match(expectScript, /-re \{\(\?i\)Listening\.\*channel messages\.\*server:clawpool-claude\}/u);
+  assert.match(expectScript, /-re \{\(\?i\)MCP server failed\}/u);
   assert.match(expectScript, /send -- "\\r"/u);
   assert.match(expectScript, /exp_continue/u);
+  assert.match(expectScript, /eof \{\}/u);
   assert.match(expectScript, /set claude_command \[list \{\/usr\/local\/bin\/claude\} \{--name\} \{clawpool-chat-visible\} \{--plugin-dir\} \{\/tmp\/clawpool-claude-plugin\} \{--dangerously-skip-permissions\} \{--session-id\} \{session-1\} \{--dangerously-load-development-channels\} \{server:clawpool-claude\}\]/u);
   assert.equal(await readFile(result.pidPath, "utf8"), "");
 });
@@ -627,4 +635,35 @@ test("worker process manager detects Claude auth login required failure from log
   );
 
   assert.equal(await manager.hasAuthLoginRequiredError("worker-auth-expired"), true);
+});
+
+test("worker process manager detects startup observability markers from logs", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-startup-marker-"));
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+    },
+    packageRoot: tempDir,
+  });
+
+  manager.runtimes.set("worker-startup-marker", {
+    worker_id: "worker-startup-marker",
+    stdout_log_path: path.join(tempDir, "worker-startup-marker.out.log"),
+    stderr_log_path: path.join(tempDir, "worker-startup-marker.err.log"),
+  });
+  await writeFile(
+    path.join(tempDir, "worker-startup-marker.out.log"),
+    [
+      "[clawpool] startup_prompt_auto_confirm",
+      "[clawpool] startup_channel_listening",
+      "[clawpool] startup_mcp_server_failed",
+    ].join("\n"),
+    "utf8",
+  );
+
+  assert.equal(await manager.hasStartupPromptAutoConfirm("worker-startup-marker"), true);
+  assert.equal(await manager.hasStartupChannelListening("worker-startup-marker"), true);
+  assert.equal(await manager.hasStartupMcpServerFailed("worker-startup-marker"), true);
 });

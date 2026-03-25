@@ -58,6 +58,10 @@ function buildAuthLoginRequiredEventNotice() {
   return "Claude 登录已失效，请在电脑上执行 claude auth login 后重试。";
 }
 
+function buildWorkerStartupFailedNotice() {
+  return "Claude 启动未完成，消息未发送。请执行 clawpool-claude restart 后重试。";
+}
+
 function buildMissingBindingCardOptions() {
   return {
     summaryText: "当前会话还没有绑定目录。",
@@ -561,6 +565,21 @@ export class DaemonRuntime {
     return this.bindingRegistry.getByAibotSessionID(aibotSessionID);
   }
 
+  async resolveWorkerLaunchFailure(binding) {
+    const workerID = normalizeString(binding?.worker_id);
+    const workerStatus = normalizeString(binding?.worker_status);
+    if (!workerID || !["starting", "connected"].includes(workerStatus)) {
+      return "";
+    }
+    if (await this.workerProcessManager?.hasMissingResumeSessionError?.(workerID)) {
+      return "resume_session_missing";
+    }
+    if (await this.workerProcessManager?.hasStartupMcpServerFailed?.(workerID)) {
+      return "startup_mcp_server_failed";
+    }
+    return "";
+  }
+
   async waitForWorkerBridgeState(
     aibotSessionID,
     { timeoutMs = 1500, intervalMs = 100 } = {},
@@ -572,21 +591,15 @@ export class DaemonRuntime {
         return null;
       }
       if (canDeliverToWorker(current)) {
-        const hasMissingResumeSessionError = (
-          normalizeString(current.worker_status) === "starting" ||
-          normalizeString(current.worker_status) === "connected"
-        ) && await this.workerProcessManager?.hasMissingResumeSessionError?.(current.worker_id);
-        if (hasMissingResumeSessionError) {
-          return withWorkerLaunchFailure(current, "resume_session_missing");
+        const launchFailure = await this.resolveWorkerLaunchFailure(current);
+        if (launchFailure) {
+          return withWorkerLaunchFailure(current, launchFailure);
         }
         return current;
       }
-      if (
-        (normalizeString(current.worker_status) === "starting" ||
-          normalizeString(current.worker_status) === "connected") &&
-        await this.workerProcessManager?.hasMissingResumeSessionError?.(current.worker_id)
-      ) {
-        return withWorkerLaunchFailure(current, "resume_session_missing");
+      const launchFailure = await this.resolveWorkerLaunchFailure(current);
+      if (launchFailure) {
+        return withWorkerLaunchFailure(current, launchFailure);
       }
       if (current.worker_status === "stopped" || current.worker_status === "failed") {
         return current;
@@ -594,12 +607,12 @@ export class DaemonRuntime {
       await sleep(intervalMs);
     }
     const current = this.bindingRegistry.getByAibotSessionID(aibotSessionID);
-    if (
-      (normalizeString(current?.worker_status) === "starting" ||
-        normalizeString(current?.worker_status) === "connected") &&
-      await this.workerProcessManager?.hasMissingResumeSessionError?.(current?.worker_id)
-    ) {
-      return withWorkerLaunchFailure(current, "resume_session_missing");
+    const launchFailure = await this.resolveWorkerLaunchFailure(current);
+    if (launchFailure) {
+      return withWorkerLaunchFailure(current, launchFailure);
+    }
+    if (["starting", "connected"].includes(normalizeString(current?.worker_status))) {
+      return withWorkerLaunchFailure(current, "startup_wait_timeout");
     }
     return current;
   }
@@ -1384,7 +1397,12 @@ export class DaemonRuntime {
     }
   }
 
-  async deliverWithRecovery(aibotSessionID, rawPayload, deliverFn, { requireTrackedPendingEvent = false } = {}) {
+  async deliverWithRecovery(
+    aibotSessionID,
+    rawPayload,
+    deliverFn,
+    { requireTrackedPendingEvent = false, includeUnreadyBinding = false } = {},
+  ) {
     const binding = this.bindingRegistry.getByAibotSessionID(aibotSessionID);
     if (!binding) {
       return null;
@@ -1434,7 +1452,7 @@ export class DaemonRuntime {
         event_id: rawPayload?.event_id,
         session_id: aibotSessionID,
       });
-      return null;
+      return includeUnreadyBinding ? readyBinding : null;
     }
 
     this.trace({
@@ -1641,34 +1659,73 @@ export class DaemonRuntime {
           return;
         }
       }
-      const deliveredBinding = await this.deliverWithRecovery(
+      const routedBinding = await this.deliverWithRecovery(
         binding.aibot_session_id,
         rawPayload,
         this.deliverEventToWorker,
-        { requireTrackedPendingEvent: true },
+        {
+          requireTrackedPendingEvent: true,
+          includeUnreadyBinding: true,
+        },
       );
-      if (deliveredBinding) {
+      if (routedBinding && canDeliverToWorker(routedBinding)) {
         if (pending) {
-          await this.markPendingEventDelivered(pending.eventID, deliveredBinding);
+          await this.markPendingEventDelivered(pending.eventID, routedBinding);
         }
         this.trace({
           stage: "event_forwarded",
           event_id: event.event_id,
           session_id: event.session_id,
-          worker_id: deliveredBinding?.worker_id,
+          worker_id: routedBinding?.worker_id,
         });
         return;
       }
 
-      const readyBinding = this.bindingRegistry.getByAibotSessionID(binding.aibot_session_id) ?? binding;
+      const readyBinding = routedBinding ?? this.bindingRegistry.getByAibotSessionID(binding.aibot_session_id) ?? binding;
       if (!readyBinding.worker_control_url || !readyBinding.worker_control_token) {
+        const launchFailure = normalizeString(readyBinding?.worker_launch_failure);
         this.trace({
           stage: "event_worker_not_ready",
           event_id: event.event_id,
           session_id: event.session_id,
           worker_id: readyBinding?.worker_id,
           status: readyBinding?.worker_status,
+          worker_launch_failure: launchFailure,
         }, "error");
+        if (pending && (launchFailure === "startup_mcp_server_failed" || launchFailure === "startup_wait_timeout")) {
+          const workerID = normalizeString(readyBinding?.worker_id);
+          if (workerID) {
+            try {
+              await this.workerProcessManager?.stopWorker?.(workerID);
+            } catch {
+              // best effort
+            }
+            try {
+              await this.bindingRegistry.markWorkerStopped(event.session_id, {
+                updatedAt: Date.now(),
+                lastStoppedAt: Date.now(),
+              });
+            } catch {
+              // best effort
+            }
+            this.workerProcessManager?.markWorkerRuntimeStopped?.(workerID, {
+              exitCode: 0,
+              exitSignal: launchFailure,
+            });
+          }
+          await this.markPendingEventInterrupted(pending.eventID);
+          await this.failPendingEvent(pending, {
+            noticeText: buildWorkerStartupFailedNotice(),
+            replySource: "daemon_worker_startup_failed",
+            resultCode: launchFailure === "startup_mcp_server_failed"
+              ? "claude_startup_mcp_failed"
+              : "claude_startup_timeout",
+            resultMessage: launchFailure === "startup_mcp_server_failed"
+              ? "claude worker startup failed: mcp server not ready"
+              : "claude worker startup timed out",
+          });
+          return;
+        }
       }
     } catch (error) {
       const message = formatRuntimeError(error);

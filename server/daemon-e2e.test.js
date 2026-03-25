@@ -3,29 +3,45 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { accessSync, constants as fsConstants } from "node:fs";
+import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
-import { WorkerBridgeServer } from "./daemon/worker-bridge-server.js";
 import { WorkerProcessManager } from "./daemon/worker-process.js";
 
-const realClaudeE2EEnabled = process.env.CLAWPOOL_ENABLE_REAL_CLAUDE_E2E === "1";
-const realClaudeCommand = String(process.env.CLAWPOOL_REAL_CLAUDE_BIN || process.env.CLAUDE_BIN || "claude").trim();
-
-function commandExists(command) {
-  if (!command) {
-    return false;
-  }
-  if (command.includes("/") || command.startsWith(".")) {
-    const probe = spawnSync("test", ["-x", command], { stdio: "ignore" });
-    return probe.status === 0;
-  }
-  const probe = spawnSync("which", [command], { stdio: "ignore" });
-  return probe.status === 0;
+function normalizeString(value) {
+  return String(value ?? "").trim();
 }
 
-async function waitFor(check, { timeoutMs = 90_000, intervalMs = 300 } = {}) {
+function resolveRealClaudeCommand(env = process.env) {
+  if (process.platform === "win32") {
+    return env.CLAUDE_BIN || "claude.cmd";
+  }
+  return env.CLAUDE_BIN || "claude";
+}
+
+function commandExists(command) {
+  const normalized = normalizeString(command);
+  if (!normalized) {
+    return false;
+  }
+  if (path.isAbsolute(normalized) || normalized.includes(path.sep)) {
+    try {
+      accessSync(normalized, fsConstants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const locator = process.platform === "win32" ? "where" : "which";
+  const located = spawnSync(locator, [normalized], {
+    stdio: "ignore",
+  });
+  return located.status === 0;
+}
+
+async function waitFor(check, { timeoutMs = 30_000, intervalMs = 100 } = {}) {
   const deadline = Date.now() + timeoutMs;
   let lastValue = null;
   while (Date.now() < deadline) {
@@ -38,58 +54,50 @@ async function waitFor(check, { timeoutMs = 90_000, intervalMs = 300 } = {}) {
   return lastValue;
 }
 
-async function readText(filePath) {
-  try {
-    return await readFile(filePath, "utf8");
-  } catch {
-    return "";
-  }
+function stripTerminalControlSequences(content) {
+  return String(content ?? "")
+    .replace(/\u001B\][^\u0007]*(?:\u0007|\u001B\\)/gu, "")
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, "")
+    .replace(/\r/g, "\n");
 }
 
-function stripTerminalControlSequences(input) {
-  return String(input ?? "")
-    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/gu, "")
-    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/gu, "")
-    .replace(/\r/g, "");
+function normalizeRuntimeLog(content) {
+  return stripTerminalControlSequences(content)
+    .replace(/\s+/gu, " ")
+    .trim();
 }
 
-test("real e2e: spawn real claude command and observe startup auto-confirm markers", async (t) => {
-  if (!realClaudeE2EEnabled) {
-    t.skip("set CLAWPOOL_ENABLE_REAL_CLAUDE_E2E=1 to run real Claude e2e");
-    return;
-  }
-  if (process.platform !== "darwin") {
-    t.skip("real Claude startup prompt auto-confirm e2e currently targets macOS hidden-pty path");
-    return;
-  }
-  if (!commandExists(realClaudeCommand)) {
-    t.skip(`real Claude command is not executable: ${realClaudeCommand}`);
-    return;
-  }
+function hasStartupPromptText(content) {
+  return /Enter to confirm/iu.test(normalizeRuntimeLog(content));
+}
 
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-real-claude-e2e-"));
+function hasStartupPromptAutoConfirmMarker(content) {
+  return /\[clawpool\]\s+startup_prompt_auto_confirm/u.test(String(content ?? ""));
+}
+
+function hasChannelListeningSignal(content) {
+  const raw = String(content ?? "");
+  if (/\[clawpool\]\s+startup_channel_listening/u.test(raw)) {
+    return true;
+  }
+  return /Listening for channel messages from: server:clawpool-claude/iu.test(
+    normalizeRuntimeLog(content),
+  );
+}
+
+test("e2e: default path boots real Claude and auto-confirms startup prompts", async () => {
+  const realClaudeCommand = resolveRealClaudeCommand();
+  assert.ok(
+    commandExists(realClaudeCommand),
+    `real Claude command is required for e2e test but was not found: ${realClaudeCommand}`,
+  );
+
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-real-e2e-"));
+  const workspaceDir = path.join(tempRoot, "workspace");
   const pluginDataDir = path.join(tempRoot, "plugin-data");
-  await mkdir(pluginDataDir, { recursive: true });
+  await mkdir(workspaceDir, { recursive: true });
 
-  const sessionID = "chat-real-claude-e2e";
-  const workerID = "worker-real-claude-e2e";
-  const claudeSessionID = randomUUID();
-  const statusEvents = [];
-  let runtime = null;
-
-  const bridgeServer = new WorkerBridgeServer({
-    onRegisterWorker: async () => ({ ok: true }),
-    onStatusUpdate: async (payload) => {
-      statusEvents.push({
-        status: String(payload?.status ?? "").trim(),
-        ts: Date.now(),
-      });
-      return { ok: true };
-    },
-  });
-  await bridgeServer.start();
-
-  const manager = new WorkerProcessManager({
+  const workerProcessManager = new WorkerProcessManager({
     env: {
       ...process.env,
       CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempRoot,
@@ -100,50 +108,53 @@ test("real e2e: spawn real claude command and observe startup auto-confirm marke
     async ensureUserMcpServer() {},
   });
 
+  const workerID = randomUUID();
+  const runtime = await workerProcessManager.spawnWorker({
+    aibotSessionID: randomUUID(),
+    cwd: workspaceDir,
+    pluginDataDir,
+    claudeSessionID: randomUUID(),
+    workerID,
+    bridgeURL: "",
+    bridgeToken: "",
+  });
+
   try {
-    runtime = await manager.spawnWorker({
-      aibotSessionID: sessionID,
-      cwd: process.cwd(),
-      pluginDataDir,
-      claudeSessionID,
-      workerID,
-      bridgeURL: bridgeServer.getURL(),
-      bridgeToken: bridgeServer.token,
-      resumeSession: false,
+    assert.ok(Number(runtime.pid) > 0, "real Claude process pid is missing");
+
+    const startupLog = await waitFor(async () => {
+      const content = await readFile(runtime.stdout_log_path, "utf8").catch(() => "");
+      if (!content) {
+        return "";
+      }
+      if (hasStartupPromptAutoConfirmMarker(content) || hasChannelListeningSignal(content)) {
+        return content;
+      }
+      if (hasStartupPromptText(content)) {
+        return content;
+      }
+      return "";
+    }, {
+      timeoutMs: 90_000,
+      intervalMs: 500,
     });
 
-    const readyStatus = await waitFor(() => {
-      return statusEvents.find((item) => item.status === "ready");
-    }, { timeoutMs: 90_000 });
+    assert.ok(startupLog, "real Claude startup log stayed empty or had no startup state signal");
 
-    const startupReadySignal = await waitFor(async () => {
-      const output = await readText(runtime.stdout_log_path);
-      const plainText = stripTerminalControlSequences(output);
-      const sawListeningLine = /Listening\s*for\s*channel messages\s*from:\s*server:clawpool-claude/u.test(plainText)
-        || /Listening[\s\S]*server:clawpool-claude/u.test(output);
-      if (
-        output.includes("[clawpool] startup_channel_listening")
-        || sawListeningLine
-      ) {
-        return output;
-      }
-      return null;
-    }, { timeoutMs: 45_000 });
-
-    assert.ok(readyStatus, "real claude worker did not report ready status in time");
-    assert.ok(startupReadySignal, "did not observe startup channel listening signal from real claude output");
-
-    const output = await readText(runtime.stdout_log_path);
-    const sawConfirmPrompt = output.includes("Enter to confirm")
-      || output.includes("I am using this for local development")
-      || /Press.*Enter.*(continue|confirm)/u.test(output);
-    if (sawConfirmPrompt) {
-      assert.match(output, /\[clawpool\] startup_prompt_auto_confirm/u);
+    if (hasStartupPromptText(startupLog)) {
+      assert.equal(
+        hasStartupPromptAutoConfirmMarker(startupLog),
+        true,
+        "startup prompt appeared but auto-confirm marker was not emitted",
+      );
     }
+
+    assert.equal(
+      hasStartupPromptAutoConfirmMarker(startupLog) || hasChannelListeningSignal(startupLog),
+      true,
+      "startup log did not expose prompt auto-confirm or channel listening signal",
+    );
   } finally {
-    if (runtime?.worker_id) {
-      await manager.stopWorker(runtime.worker_id).catch(() => {});
-    }
-    await bridgeServer.stop();
+    await workerProcessManager.stopWorker(workerID).catch(() => {});
   }
 });

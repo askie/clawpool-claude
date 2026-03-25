@@ -27,7 +27,8 @@
     "build": "npm run clean && npm run build:worker && npm run build:daemon",
     "dev": "node ./scripts/dev-build.js",
     "daemon": "node ./dist/daemon.js --show-claude",
-    "test": "node --test server/*.test.js cli/*.test.js"
+    "test": "node --test server/*.test.js cli/*.test.js",
+    "test:daemon-sim": "node --test server/daemon-simulated-e2e.scenario.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.18.0",

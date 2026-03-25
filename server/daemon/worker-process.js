@@ -18,6 +18,15 @@ const authLoginRequiredPatterns = [
   /authentication_error/u,
   /OAuth token has expired/u,
 ];
+const startupPromptAutoConfirmPattern = /\[clawpool\]\s+startup_prompt_auto_confirm/u;
+const startupChannelListeningPatterns = [
+  /\[clawpool\]\s+startup_channel_listening/u,
+  /Listening\s+for\s+channel\s+messages\s+from:\s*server:clawpool-claude/u,
+];
+const startupMcpServerFailedPatterns = [
+  /\[clawpool\]\s+startup_mcp_server_failed/u,
+  /MCP\s+server\s+failed/u,
+];
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -90,43 +99,6 @@ function resolveWorkerLogPaths({ logsDir, workerID }) {
     stdoutLogPath: path.join(logsDir, `${normalizedWorkerID}.out.log`),
     stderrLogPath: path.join(logsDir, `${normalizedWorkerID}.err.log`),
   };
-}
-
-function buildStartupPromptAutoConfirmExpectLines() {
-  return [
-    "proc clawpool_auto_confirm_prompt {} {",
-    "  send_user {[clawpool] startup_prompt_auto_confirm\\n}",
-    "  send -- \"\\r\"",
-    "  after 500",
-    "}",
-    "expect {",
-    "  -re {Enter.*confirm} {",
-    "    clawpool_auto_confirm_prompt",
-    "    exp_continue",
-    "  }",
-    "  -re {(Press|press).*Enter.*(continue|confirm)} {",
-    "    clawpool_auto_confirm_prompt",
-    "    exp_continue",
-    "  }",
-    "  -re {I am using this for local development} {",
-    "    clawpool_auto_confirm_prompt",
-    "    exp_continue",
-    "  }",
-    "  -re {本地开发} {",
-    "    clawpool_auto_confirm_prompt",
-    "    exp_continue",
-    "  }",
-    "  -re {Listening for channel messages from:} {",
-    "    send_user {[clawpool] startup_channel_listening\\n}",
-    "    exp_continue",
-    "  }",
-    "  -re {MCP server failed} {",
-    "    send_user {[clawpool] startup_mcp_server_failed\\n}",
-    "    exp_continue",
-    "  }",
-    "  eof {}",
-    "}",
-  ];
 }
 
 export function buildWorkerEnvironment({
@@ -218,6 +190,10 @@ export async function createVisibleClaudeLaunchScript({
   const expectLines = [
     "log_user 1",
     "set timeout -1",
+    "proc emit_marker {marker} {",
+    "  puts [format {[clawpool] %s} $marker]",
+    "  flush stdout",
+    "}",
     ...(captureOutputInExpectLog ? [`log_file -a {${tclEscape(stdoutLogPath)}}`] : []),
     `set claude_command [list {${tclEscape(command)}}${args.map((item) => ` {${tclEscape(item)}}`).join("")}]`,
     "spawn -noecho {*}$claude_command",
@@ -226,11 +202,22 @@ export async function createVisibleClaudeLaunchScript({
     "close $pid_file",
     "after 500",
     "send -- \"\\r\"",
-    ...buildStartupPromptAutoConfirmExpectLines(),
-    "if {[catch {interact} interact_error]} {",
-    "  if {![string match {*spawn id*not open*} $interact_error]} {",
-    "    error $interact_error",
+    "expect {",
+    "  -re {(?i)(Enter.*confirm|Press.*Enter|Hit.*Enter|Continue.*Enter)} {",
+    "    emit_marker startup_prompt_auto_confirm",
+    "    send -- \"\\r\"",
+    "    after 300",
+    "    exp_continue",
     "  }",
+    "  -re {(?i)Listening.*channel messages.*server:clawpool-claude} {",
+    "    emit_marker startup_channel_listening",
+    "    exp_continue",
+    "  }",
+    "  -re {(?i)MCP server failed} {",
+    "    emit_marker startup_mcp_server_failed",
+    "    exp_continue",
+    "  }",
+    "  eof {}",
     "}",
     "",
   ];
@@ -726,5 +713,17 @@ export class WorkerProcessManager {
 
   async hasAuthLoginRequiredError(workerID) {
     return this.hasLogPatternMatch(workerID, authLoginRequiredPatterns);
+  }
+
+  async hasStartupPromptAutoConfirm(workerID) {
+    return this.hasLogPatternMatch(workerID, [startupPromptAutoConfirmPattern]);
+  }
+
+  async hasStartupChannelListening(workerID) {
+    return this.hasLogPatternMatch(workerID, startupChannelListeningPatterns);
+  }
+
+  async hasStartupMcpServerFailed(workerID) {
+    return this.hasLogPatternMatch(workerID, startupMcpServerFailedPatterns);
   }
 }

@@ -1136,7 +1136,7 @@ test("daemon runtime waits for ready before delivering to a connected worker bri
   assert.equal(sent.filter((item) => item.kind === "text").length, 0);
 });
 
-test("daemon runtime stays silent while worker is not ready", async () => {
+test("daemon runtime fails fast when worker startup stays unready", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
@@ -1175,7 +1175,10 @@ test("daemon runtime stays silent while worker is not ready", async () => {
       return true;
     },
   });
-  runtime.waitForWorkerBridgeState = async () => registry.getByAibotSessionID("chat-4d-starting");
+  runtime.waitForWorkerBridgeState = async () => ({
+    ...registry.getByAibotSessionID("chat-4d-starting"),
+    worker_launch_failure: "startup_wait_timeout",
+  });
 
   await runtime.handleEvent({
     event_id: "evt-4d-starting",
@@ -1185,8 +1188,84 @@ test("daemon runtime stays silent while worker is not ready", async () => {
     content: "hello",
   });
 
-  assert.equal(workerCalls.length, 0);
-  assert.equal(sent.filter((item) => item.kind === "text").length, 0);
+  assert.equal(workerCalls.length, 1);
+  assert.equal(
+    sent.some((item) => item.kind === "text" && /Claude 启动未完成/u.test(String(item?.payload?.text ?? ""))),
+    true,
+  );
+  assert.equal(
+    sent.some(
+      (item) => item.kind === "event_result"
+        && item.payload?.event_id === "evt-4d-starting"
+        && item.payload?.code === "claude_startup_timeout",
+    ),
+    true,
+  );
+});
+
+test("daemon runtime fails fast when startup log reports MCP server failed", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-4d-mcp-fail",
+    claude_session_id: "claude-4d-mcp-fail",
+    cwd: tempDir,
+    worker_id: "worker-4d-mcp-fail",
+    worker_status: "starting",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: {
+      ...makeWorkerProcessManager(workerCalls),
+      getWorkerRuntime() {
+        return {
+          worker_id: "worker-4d-mcp-fail",
+          pid: 123,
+          status: "starting",
+        };
+      },
+      async hasStartupMcpServerFailed(workerID) {
+        return workerID === "worker-4d-mcp-fail";
+      },
+    },
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    isProcessRunning() {
+      return true;
+    },
+  });
+  await runtime.handleEvent({
+    event_id: "evt-4d-mcp-fail",
+    session_id: "chat-4d-mcp-fail",
+    msg_id: "msg-4d-mcp-fail",
+    sender_id: "sender-4d-mcp-fail",
+    content: "hello",
+  });
+
+  assert.equal(
+    sent.some((item) => item.kind === "text" && /Claude 启动未完成/u.test(String(item?.payload?.text ?? ""))),
+    true,
+  );
+  assert.equal(
+    sent.some(
+      (item) => item.kind === "event_result"
+        && item.payload?.event_id === "evt-4d-mcp-fail"
+        && item.payload?.code === "claude_startup_mcp_failed",
+    ),
+    true,
+  );
+  assert.equal(workerCalls.some((call) => call.kind === "stop" && call.workerID === "worker-4d-mcp-fail"), true);
 });
 
 test("daemon runtime avoids redelivering the first event when ready recovery already flushed it", async () => {
