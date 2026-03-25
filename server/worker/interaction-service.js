@@ -52,6 +52,10 @@ export class WorkerInteractionService {
     bridge,
     permissionRelayService = null,
     elicitationRelayService = null,
+    resultTimeoutMs = undefined,
+    resultRetryTimeoutMs = undefined,
+    composingHeartbeatMs = undefined,
+    composingTTLMS = undefined,
     logger,
   }) {
     this.eventState = eventState;
@@ -67,6 +71,18 @@ export class WorkerInteractionService {
       eventState: this.eventState,
       bridge: this.bridge,
       logger: this.logger,
+      ...(Number.isFinite(Number(resultTimeoutMs)) && Number(resultTimeoutMs) > 0
+        ? { defaultTimeoutMs: Number(resultTimeoutMs) }
+        : {}),
+      ...(Number.isFinite(Number(resultRetryTimeoutMs)) && Number(resultRetryTimeoutMs) > 0
+        ? { retryTimeoutMs: Number(resultRetryTimeoutMs) }
+        : {}),
+      ...(Number.isFinite(Number(composingHeartbeatMs)) && Number(composingHeartbeatMs) > 0
+        ? { composingHeartbeatMs: Number(composingHeartbeatMs) }
+        : {}),
+      ...(Number.isFinite(Number(composingTTLMS)) && Number(composingTTLMS) > 0
+        ? { composingTTLMS: Number(composingTTLMS) }
+        : {}),
     });
   }
 

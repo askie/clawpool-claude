@@ -20,6 +20,10 @@ function createService({
   accessStore = {},
   mcp = {},
   eventStatesDir = "/tmp/clawpool-claude-test-event-states",
+  resultTimeoutMs = undefined,
+  resultRetryTimeoutMs = undefined,
+  composingHeartbeatMs = undefined,
+  composingTTLMS = undefined,
 } = {}) {
   const eventState = new EventState();
   const service = new WorkerInteractionService({
@@ -78,12 +82,30 @@ function createService({
       },
       ...bridge,
     },
+    resultTimeoutMs,
+    resultRetryTimeoutMs,
+    composingHeartbeatMs,
+    composingTTLMS,
     logger: createLogger(),
   });
   return {
     service,
     eventState,
   };
+}
+
+async function waitForCondition(predicate, {
+  timeoutMs = 1_000,
+  intervalMs = 20,
+} = {}) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (await predicate()) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return false;
 }
 
 async function writePendingEventState(eventStatesDir, {
@@ -273,6 +295,59 @@ test("worker inbound handling sends structured pairing card for blocked direct s
   );
   assert.equal(sentResults.length, 1);
   assert.equal(sentResults[0].code, "pairing_required");
+
+  await service.shutdown();
+});
+
+test("worker inbound handling falls back with claude_result_timeout when Claude does not call tools", async () => {
+  const sentResults = [];
+  const { service, eventState } = createService({
+    resultTimeoutMs: 40,
+    resultRetryTimeoutMs: 20,
+    composingHeartbeatMs: 10,
+    composingTTLMS: 30,
+    bridge: {
+      async sendEventResult(payload) {
+        sentResults.push(payload);
+        return {};
+      },
+      async setSessionComposing() {
+        return {};
+      },
+    },
+    mcp: {
+      async notification() {
+        return {};
+      },
+    },
+  });
+
+  await service.handleInboundEvent({
+    event_id: "evt-timeout-1",
+    session_id: "chat-timeout-1",
+    msg_id: "msg-timeout-1",
+    sender_id: "sender-timeout-1",
+    content: "hello",
+  });
+
+  const completed = await waitForCondition(
+    () => sentResults.some((payload) => payload.event_id === "evt-timeout-1"),
+    { timeoutMs: 1_000, intervalMs: 20 },
+  );
+  assert.equal(completed, true);
+  assert.deepEqual(
+    sentResults.find((payload) => payload.event_id === "evt-timeout-1"),
+    {
+      event_id: "evt-timeout-1",
+      status: "failed",
+      code: "claude_result_timeout",
+      msg: "Claude did not call reply or complete before timeout.",
+      updated_at: sentResults.find((payload) => payload.event_id === "evt-timeout-1").updated_at,
+    },
+  );
+  const stored = eventState.get("evt-timeout-1");
+  assert.equal(stored?.completed?.status, "failed");
+  assert.equal(stored?.completed?.code, "claude_result_timeout");
 
   await service.shutdown();
 });

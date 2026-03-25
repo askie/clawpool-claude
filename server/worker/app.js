@@ -33,6 +33,14 @@ function normalizeOptionalString(value) {
   return normalized || "";
 }
 
+function parsePositiveInt(value, fallbackValue) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return fallbackValue;
+  }
+  return Math.floor(numeric);
+}
+
 function buildInstructions() {
   return [
     'Messages arrive as <channel source="clawpool-claude" chat_id="..." event_id="..." message_id="..." user_id="...">text</channel>.',
@@ -125,6 +133,10 @@ export function createWorkerApp({ env = process.env } = {}) {
     bridge,
     permissionRelayService,
     elicitationRelayService,
+    resultTimeoutMs: parsePositiveInt(env.CLAWPOOL_CLAUDE_EVENT_RESULT_TIMEOUT_MS, undefined),
+    resultRetryTimeoutMs: parsePositiveInt(env.CLAWPOOL_CLAUDE_EVENT_RESULT_RETRY_TIMEOUT_MS, undefined),
+    composingHeartbeatMs: parsePositiveInt(env.CLAWPOOL_CLAUDE_COMPOSING_HEARTBEAT_MS, undefined),
+    composingTTLMS: parsePositiveInt(env.CLAWPOOL_CLAUDE_COMPOSING_TTL_MS, undefined),
     logger,
   });
 

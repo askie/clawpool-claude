@@ -1,6 +1,6 @@
 import { ResultTimeoutManager } from "../result-timeout.js";
 
-const defaultResultTimeoutMs = 10 * 60 * 1000;
+const defaultResultTimeoutMs = 90 * 1000;
 const defaultResultTimeoutRetryMs = 10 * 1000;
 const defaultComposingHeartbeatMs = 10 * 1000;
 const defaultComposingTTLMS = 30 * 1000;
