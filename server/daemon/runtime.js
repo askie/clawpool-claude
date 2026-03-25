@@ -112,6 +112,14 @@ function resolveExpectedWorkerPid(binding, runtime) {
   return 0;
 }
 
+function resolveExpectedIdentityWorkerPid(binding) {
+  const bindingPid = Number(binding?.worker_pid ?? 0);
+  if (Number.isFinite(bindingPid) && bindingPid > 0) {
+    return Math.floor(bindingPid);
+  }
+  return 0;
+}
+
 function buildRevokeDedupKey({ eventID = "", sessionID = "", msgID = "" } = {}) {
   const normalizedSessionID = normalizeString(sessionID);
   const normalizedMsgID = normalizeString(msgID);
@@ -766,8 +774,7 @@ export class DaemonRuntime {
       return null;
     }
 
-    const runtime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
-    const expectedPid = resolveExpectedWorkerPid(binding, runtime);
+    const expectedPid = resolveExpectedIdentityWorkerPid(binding);
     if (Number.isFinite(expectedPid) && expectedPid > 0) {
       if (!Number.isFinite(reportedPid) || reportedPid <= 0 || reportedPid !== expectedPid) {
         this.trace({

@@ -10,12 +10,12 @@ function normalizePid(value) {
   return Math.floor(numeric);
 }
 
-function resolveExpectedWorkerPid(binding, runtime) {
+function resolvePersistedWorkerPid(binding) {
   const bindingPid = normalizePid(binding?.worker_pid);
   if (bindingPid > 0) {
     return bindingPid;
   }
-  return normalizePid(runtime?.pid);
+  return 0;
 }
 
 export class WorkerHealthInspector {
@@ -84,7 +84,7 @@ export class WorkerHealthInspector {
       };
     }
 
-    const expectedPid = resolveExpectedWorkerPid(binding, runtime);
+    const expectedPid = resolvePersistedWorkerPid(binding);
     if (expectedPid > 0) {
       const reportedPid = normalizePid(pingPayload?.pid ?? pingPayload?.worker_pid);
       if (reportedPid <= 0) {

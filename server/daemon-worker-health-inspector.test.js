@@ -64,6 +64,7 @@ test("worker health inspector detects pid mismatch in ping identity", () => {
       worker_id: "worker-1",
       aibot_session_id: "chat-1",
       claude_session_id: "claude-1",
+      worker_pid: 12345,
     },
     { pid: 12345 },
     {
@@ -121,6 +122,27 @@ test("worker health inspector prefers persisted worker pid over stale runtime pi
     {
       worker_id: "worker-3",
       pid: 30001,
+    },
+  );
+
+  assert.equal(result.ok, true);
+});
+
+test("worker health inspector ignores runtime pid mismatch before worker reports persisted pid", () => {
+  const inspector = new WorkerHealthInspector({
+    getPendingEventsForSession() {
+      return [];
+    },
+  });
+
+  const result = inspector.inspectWorkerIdentityHealth(
+    {
+      worker_id: "worker-4",
+    },
+    { pid: 40001 },
+    {
+      worker_id: "worker-4",
+      pid: 40002,
     },
   );
 
