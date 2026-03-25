@@ -158,6 +158,8 @@ export class WorkerBridgeServer {
         stage: "worker_register_received",
         aibot_session_id: payload?.aibot_session_id,
         worker_id: payload?.worker_id,
+        worker_pid: payload?.pid,
+        claude_session_id: payload?.claude_session_id,
       });
       const result = this.onRegisterWorker
         ? await this.onRegisterWorker(payload)
@@ -171,6 +173,8 @@ export class WorkerBridgeServer {
         stage: "worker_status_received",
         aibot_session_id: payload?.aibot_session_id,
         worker_id: payload?.worker_id,
+        worker_pid: payload?.pid,
+        claude_session_id: payload?.claude_session_id,
         status: payload?.status,
       });
       const result = this.onStatusUpdate

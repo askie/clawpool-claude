@@ -14,6 +14,14 @@ function normalizeTimestamp(value, fallbackValue = 0) {
   return Math.floor(numeric);
 }
 
+function normalizePid(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 0;
+  }
+  return Math.floor(numeric);
+}
+
 function resolveWorkerRuntimeStorePath(bindingFilePath) {
   const parsed = path.parse(bindingFilePath);
   return path.join(parsed.dir, `${parsed.name}.worker-runtimes${parsed.ext || ".json"}`);
@@ -27,6 +35,7 @@ function mergeBindingWithRuntime(binding, runtime) {
   return {
     ...binding,
     worker_id: normalizeString(runtime?.worker_id),
+    worker_pid: normalizePid(runtime?.worker_pid),
     worker_status: normalizeString(runtime?.worker_status) || "stopped",
     worker_control_url: normalizeString(runtime?.worker_control_url),
     worker_control_token: normalizeString(runtime?.worker_control_token),
@@ -85,6 +94,7 @@ export class BindingRegistry {
     const binding = await this.bindingStore.create(input);
     const runtime = await this.workerRuntimeStore.createOrUpdate(binding.aibot_session_id, {
       worker_id: input.worker_id,
+      worker_pid: input.worker_pid,
       worker_status: input.worker_status || "starting",
       worker_control_url: input.worker_control_url,
       worker_control_token: input.worker_control_token,
@@ -112,6 +122,7 @@ export class BindingRegistry {
 
   async markWorkerStarting(aibotSessionID, {
     workerID = "",
+    workerPid = 0,
     workerControlURL = "",
     workerControlToken = "",
     updatedAt = Date.now(),
@@ -123,6 +134,7 @@ export class BindingRegistry {
     }
     const runtime = await this.workerRuntimeStore.createOrUpdate(aibotSessionID, {
       worker_id: workerID,
+      worker_pid: workerPid,
       worker_status: "starting",
       worker_control_url: workerControlURL,
       worker_control_token: workerControlToken,
@@ -134,6 +146,7 @@ export class BindingRegistry {
 
   async markWorkerConnected(aibotSessionID, {
     workerID = "",
+    workerPid = 0,
     workerControlURL = "",
     workerControlToken = "",
     updatedAt = Date.now(),
@@ -145,6 +158,7 @@ export class BindingRegistry {
     }
     const runtime = await this.workerRuntimeStore.createOrUpdate(aibotSessionID, {
       worker_id: workerID,
+      worker_pid: workerPid,
       worker_status: "connected",
       worker_control_url: workerControlURL,
       worker_control_token: workerControlToken,
@@ -156,6 +170,7 @@ export class BindingRegistry {
 
   async markWorkerReady(aibotSessionID, {
     workerID = "",
+    workerPid = 0,
     workerControlURL = "",
     workerControlToken = "",
     updatedAt = Date.now(),
@@ -167,6 +182,7 @@ export class BindingRegistry {
     }
     const runtime = await this.workerRuntimeStore.createOrUpdate(aibotSessionID, {
       worker_id: workerID,
+      worker_pid: workerPid,
       worker_status: "ready",
       worker_control_url: workerControlURL,
       worker_control_token: workerControlToken,
@@ -182,6 +198,7 @@ export class BindingRegistry {
       throw new Error("binding not found");
     }
     const runtime = await this.workerRuntimeStore.createOrUpdate(aibotSessionID, {
+      worker_pid: 0,
       worker_status: "stopped",
       worker_control_url: "",
       worker_control_token: "",
@@ -197,6 +214,7 @@ export class BindingRegistry {
       throw new Error("binding not found");
     }
     const runtime = await this.workerRuntimeStore.createOrUpdate(aibotSessionID, {
+      worker_pid: 0,
       worker_status: "failed",
       worker_control_url: "",
       worker_control_token: "",

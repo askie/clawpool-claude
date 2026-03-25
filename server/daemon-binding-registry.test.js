@@ -15,22 +15,27 @@ test("binding registry creates and updates fixed bindings", async () => {
     claude_session_id: "claude-1",
     cwd: "/repo/a",
     worker_id: "worker-1",
+    worker_pid: 101,
     worker_status: "starting",
     plugin_data_dir: "/data/chat-1",
   });
   assert.equal(created.aibot_session_id, "chat-1");
   assert.equal(created.cwd, "/repo/a");
+  assert.equal(created.worker_pid, 101);
 
   const ready = await registry.markWorkerReady("chat-1", {
     workerID: "worker-1",
+    workerPid: 102,
     lastStartedAt: 10,
     updatedAt: 11,
   });
   assert.equal(ready.worker_status, "ready");
   assert.equal(ready.last_started_at, 10);
+  assert.equal(ready.worker_pid, 102);
 
   const connected = await registry.markWorkerConnected("chat-1", {
     workerID: "worker-1",
+    workerPid: 103,
     workerControlURL: "http://127.0.0.1:9000",
     workerControlToken: "token-1",
     lastStartedAt: 12,
@@ -38,6 +43,7 @@ test("binding registry creates and updates fixed bindings", async () => {
   });
   assert.equal(connected.worker_status, "connected");
   assert.equal(connected.worker_control_url, "http://127.0.0.1:9000");
+  assert.equal(connected.worker_pid, 103);
 
   const failed = await registry.markWorkerFailed("chat-1", {
     lastStoppedAt: 14,
@@ -45,6 +51,7 @@ test("binding registry creates and updates fixed bindings", async () => {
   });
   assert.equal(failed.worker_status, "failed");
   assert.equal(failed.last_stopped_at, 14);
+  assert.equal(failed.worker_pid, 0);
 
   const loaded = new BindingRegistry(path.join(dir, "binding-registry.json"));
   await loaded.load();

@@ -15,6 +15,7 @@ import { DaemonRuntime } from "./runtime.js";
 import { createSessionActivityDispatcher } from "../session-activity-dispatcher.js";
 import { createProcessLogger } from "../logging.js";
 import { DaemonProcessState } from "./process-state.js";
+import { SessionLogWriter } from "./session-log-writer.js";
 
 const workerReadySettleDelayMs = 3000;
 
@@ -69,6 +70,14 @@ function normalizeString(value) {
   return String(value ?? "").trim();
 }
 
+function normalizePid(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 0;
+  }
+  return Math.floor(numeric);
+}
+
 export function shouldNotifyWorkerReady(previousBinding, nextBinding, { pendingEventCount = 0 } = {}) {
   if (!nextBinding || normalizeString(nextBinding.worker_status) !== "ready") {
     return false;
@@ -108,7 +117,13 @@ export async function run(argv = [], env = process.env) {
     ...(options.dataDir ? { CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: options.dataDir } : {}),
     ...(options.showClaude ? { CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "1" } : {}),
   };
-  const logger = createProcessLogger({ env: runtimeEnv });
+  const sessionLogWriter = new SessionLogWriter({ env: runtimeEnv });
+  const logger = createProcessLogger({
+    env: runtimeEnv,
+    onTrace(fields, { level }) {
+      void sessionLogWriter.writeTrace(fields, { level });
+    },
+  });
 
   const dataDir = resolveDaemonDataDir(runtimeEnv);
   const processState = new DaemonProcessState({
@@ -170,6 +185,7 @@ export async function run(argv = [], env = process.env) {
     onRegisterWorker: async (payload) => {
       const aibotSessionID = String(payload?.aibot_session_id ?? "").trim();
       const workerID = String(payload?.worker_id ?? "").trim();
+      const workerPid = normalizePid(payload?.pid);
       if (!aibotSessionID || !workerID) {
         throw new Error("aibot_session_id and worker_id are required");
       }
@@ -179,6 +195,7 @@ export async function run(argv = [], env = process.env) {
       }
       await bindingRegistry.markWorkerStarting(aibotSessionID, {
         workerID,
+        workerPid,
         workerControlURL: String(payload?.worker_control_url ?? "").trim(),
         workerControlToken: String(payload?.worker_control_token ?? "").trim(),
         updatedAt: Date.now(),
@@ -189,6 +206,7 @@ export async function run(argv = [], env = process.env) {
     onStatusUpdate: async (payload) => {
       const aibotSessionID = String(payload?.aibot_session_id ?? "").trim();
       const status = String(payload?.status ?? "").trim();
+      const workerPid = normalizePid(payload?.pid);
       if (!aibotSessionID || !status) {
         throw new Error("aibot_session_id and status are required");
       }
@@ -207,6 +225,7 @@ export async function run(argv = [], env = process.env) {
       } else if (status === "connected") {
         nextBinding = await bindingRegistry.markWorkerConnected(aibotSessionID, {
           workerID: String(payload?.worker_id ?? "").trim(),
+          workerPid,
           workerControlURL: String(payload?.worker_control_url ?? "").trim(),
           workerControlToken: String(payload?.worker_control_token ?? "").trim(),
           updatedAt: Date.now(),
@@ -215,6 +234,7 @@ export async function run(argv = [], env = process.env) {
       } else {
         nextBinding = await bindingRegistry.markWorkerReady(aibotSessionID, {
           workerID: String(payload?.worker_id ?? "").trim(),
+          workerPid,
           workerControlURL: String(payload?.worker_control_url ?? "").trim(),
           workerControlToken: String(payload?.worker_control_token ?? "").trim(),
           updatedAt: Date.now(),
@@ -282,6 +302,13 @@ export async function run(argv = [], env = process.env) {
       return { ok: true };
     },
     onSetSessionComposing: async (payload) => {
+      try {
+        await runtime?.handleWorkerSessionComposing?.(payload);
+      } catch (error) {
+        logger.error(
+          `session composing activity refresh failed event=${String(payload?.ref_event_id ?? "")}: ${String(error)}`,
+        );
+      }
       await dispatchSessionActivity({
         sessionID: payload.session_id,
         kind: payload.kind,

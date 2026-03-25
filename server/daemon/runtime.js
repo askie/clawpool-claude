@@ -3,14 +3,20 @@ import { stat } from "node:fs/promises";
 import { parseControlCommand } from "./control-command.js";
 import { normalizeInboundEventPayload } from "../inbound-event-meta.js";
 import { MessageDeliveryStore } from "./message-delivery-store.js";
-import { resolveWorkerPluginDataDir } from "./daemon-paths.js";
 import { WorkerControlClient } from "./worker-control-client.js";
 import { buildOpenWorkspaceCard } from "./control-card.js";
 import { claudeSessionExists as defaultClaudeSessionExists } from "./claude-session-store.js";
+import { DaemonControlCommandHandler } from "./control-command-handler.js";
+import { WorkerHealthInspector } from "./worker-health-inspector.js";
+import { PendingEventOrchestrator } from "./pending-event-orchestrator.js";
 import { isProcessRunning as defaultIsProcessRunning } from "../process-control.js";
 
 function normalizeString(value) {
   return String(value ?? "").trim();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function ensureDirectoryExists(directoryPath) {
@@ -30,10 +36,6 @@ async function ensureDirectoryExists(directoryPath) {
   if (!info.isDirectory()) {
     throw new Error("指定路径不是目录。");
   }
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function formatBindingSummary(binding) {
@@ -81,7 +83,6 @@ function formatRuntimeError(error, fallback = "处理失败。") {
 }
 
 const defaultDeliveredInFlightMaxAgeMs = 60 * 1000;
-const queuedEventRetryDelayMs = 200;
 const defaultWorkerControlProbeFailureThreshold = 3;
 const defaultMcpInteractionIdleMs = 5 * 60 * 1000;
 const defaultMcpResultTimeoutMs = 12 * 60 * 1000;
@@ -149,10 +150,37 @@ export class DaemonRuntime {
       mcpResultTimeoutMs ?? env.CLAWPOOL_CLAUDE_MCP_RESULT_TIMEOUT_MS,
       defaultMcpResultTimeoutMs,
     );
+    this.workerHealthInspector = new WorkerHealthInspector({
+      getPendingEventsForSession: (sessionID) => this.messageDeliveryStore.listPendingEventsForSession(sessionID),
+      mcpInteractionIdleMs: this.mcpInteractionIdleMs,
+      mcpResultTimeoutMs: this.mcpResultTimeoutMs,
+    });
     this.isProcessRunning = typeof isProcessRunning === "function"
       ? isProcessRunning
       : defaultIsProcessRunning;
     this.workerControlProbeFailures = new Map();
+    this.controlCommandHandler = new DaemonControlCommandHandler({
+      env: this.env,
+      bindingRegistry: this.bindingRegistry,
+      workerProcessManager: this.workerProcessManager,
+      bridgeServer: this.bridgeServer,
+      ensureWorker: async (binding) => this.ensureWorker(binding),
+      respond: async (event, text, extra = {}, result = {}) => this.respond(event, text, extra, result),
+      respondWithOpenWorkspaceCard: async (event, options = {}, result = {}) => (
+        this.respondWithOpenWorkspaceCard(event, options, result)
+      ),
+      ensureDirectoryExists,
+      formatBindingSummary,
+      buildMissingBindingCardOptions,
+      formatRuntimeError,
+    });
+    this.pendingEventOrchestrator = new PendingEventOrchestrator({
+      messageDeliveryStore: this.messageDeliveryStore,
+      bindingRegistry: this.bindingRegistry,
+      deliverEventToWorker: async (binding, payload) => this.deliverEventToWorker(binding, payload),
+      trace: (fields, level = "info") => this.trace(fields, level),
+      deliveredInFlightMaxAgeMs: this.deliveredInFlightMaxAgeMs,
+    });
     this.workerRuntimeHealthCheckTimer = null;
     if (this.workerRuntimeHealthCheckMs > 0) {
       this.workerRuntimeHealthCheckTimer = setInterval(() => {
@@ -274,6 +302,13 @@ export class DaemonRuntime {
 
   async ensureWorker(binding) {
     if (canDeliverToWorker(binding)) {
+      this.trace({
+        stage: "worker_reused_ready",
+        session_id: binding.aibot_session_id,
+        worker_id: binding.worker_id,
+        worker_pid: binding.worker_pid,
+        status: binding.worker_status,
+      });
       return {
         worker_id: binding.worker_id,
         status: binding.worker_status,
@@ -283,6 +318,13 @@ export class DaemonRuntime {
     if (binding.worker_status === "starting" || binding.worker_status === "connected") {
       const current = await this.waitForWorkerBridgeState(binding.aibot_session_id);
       if (canDeliverToWorker(current)) {
+        this.trace({
+          stage: "worker_reused_after_wait",
+          session_id: binding.aibot_session_id,
+          worker_id: current.worker_id,
+          worker_pid: current.worker_pid,
+          status: current.worker_status,
+        });
         return {
           worker_id: current.worker_id,
           status: current.worker_status,
@@ -293,6 +335,13 @@ export class DaemonRuntime {
         const existingRuntime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
         const existingPid = Number(existingRuntime?.pid ?? 0);
         if (existingPid > 0 && this.isProcessRunning(existingPid)) {
+          this.trace({
+            stage: "worker_runtime_alive_starting",
+            session_id: binding.aibot_session_id,
+            worker_id: workerID,
+            worker_pid: existingPid,
+            status: binding.worker_status,
+          });
           return { worker_id: workerID, status: "starting" };
         }
       }
@@ -305,12 +354,21 @@ export class DaemonRuntime {
       launchBinding = await this.rotateClaudeSession(binding);
     }
 
+    this.trace({
+      stage: "worker_spawn_requested",
+      session_id: launchBinding.aibot_session_id,
+      worker_id: workerID,
+      cwd: launchBinding.cwd,
+      claude_session_id: launchBinding.claude_session_id,
+      resume_session: resumeSession,
+      previous_worker_status: binding.worker_status,
+    });
     await this.bindingRegistry.markWorkerStarting(launchBinding.aibot_session_id, {
       workerID,
       updatedAt: Date.now(),
       lastStartedAt: Date.now(),
     });
-    return this.workerProcessManager.spawnWorker({
+    const spawnedRuntime = await this.workerProcessManager.spawnWorker({
       aibotSessionID: launchBinding.aibot_session_id,
       cwd: launchBinding.cwd,
       pluginDataDir: launchBinding.plugin_data_dir,
@@ -320,6 +378,16 @@ export class DaemonRuntime {
       bridgeToken: this.bridgeServer.token,
       resumeSession,
     });
+    this.trace({
+      stage: "worker_spawned",
+      session_id: launchBinding.aibot_session_id,
+      worker_id: spawnedRuntime.worker_id,
+      worker_pid: spawnedRuntime.pid,
+      claude_session_id: spawnedRuntime.claude_session_id,
+      resume_session: spawnedRuntime.resume_session,
+      visible_terminal: spawnedRuntime.visible_terminal,
+    });
+    return spawnedRuntime;
   }
 
   async waitForReadyBinding(aibotSessionID, { timeoutMs = 15000, intervalMs = 100 } = {}) {
@@ -402,78 +470,33 @@ export class DaemonRuntime {
     return nextFailures;
   }
 
+  listInFlightSessionEvents(sessionID) {
+    return this.workerHealthInspector.listInFlightSessionEvents(sessionID);
+  }
+
   hasPendingDeliveredOrDispatchingEvent(sessionID) {
-    const normalizedSessionID = normalizeString(sessionID);
-    if (!normalizedSessionID) {
-      return false;
-    }
-    return this.listPendingEventsForSession(normalizedSessionID).some((record) => {
-      const deliveryState = normalizeString(record.delivery_state);
-      return deliveryState === "dispatching" || deliveryState === "delivered";
+    return this.listInFlightSessionEvents(sessionID).length > 0;
+  }
+
+  inspectWorkerIdentityHealth(binding, runtime, pingPayload) {
+    return this.workerHealthInspector.inspectWorkerIdentityHealth(binding, runtime, pingPayload);
+  }
+
+  inspectMcpInteractionHealth(binding, pingPayload, { now = Date.now() } = {}) {
+    return this.workerHealthInspector.inspectMcpInteractionHealth(binding, pingPayload, { now });
+  }
+
+  listTimedOutMcpResultRecords(
+    sessionID,
+    now = Date.now(),
+    { latestMcpActivityAt = 0 } = {},
+  ) {
+    return this.workerHealthInspector.listTimedOutMcpResultRecords(sessionID, now, {
+      latestMcpActivityAt,
     });
   }
 
-  inspectMcpInteractionHealth(binding, pingPayload) {
-    if (normalizeString(binding?.worker_status) !== "ready") {
-      return { ok: true };
-    }
-
-    if (pingPayload && Object.hasOwn(pingPayload, "mcp_ready") && pingPayload.mcp_ready === false) {
-      return {
-        ok: false,
-        reason: "mcp_not_ready",
-      };
-    }
-
-    if (this.mcpInteractionIdleMs <= 0) {
-      return { ok: true };
-    }
-
-    const sessionID = normalizeString(binding?.aibot_session_id);
-    if (!this.hasPendingDeliveredOrDispatchingEvent(sessionID)) {
-      return { ok: true };
-    }
-
-    const activityAt = Number(pingPayload?.mcp_last_activity_at ?? 0);
-    if (!Number.isFinite(activityAt) || activityAt <= 0) {
-      return {
-        ok: false,
-        reason: "mcp_activity_missing",
-      };
-    }
-    const idleMs = Date.now() - activityAt;
-    if (idleMs > this.mcpInteractionIdleMs) {
-      return {
-        ok: false,
-        reason: "mcp_activity_stale",
-        idleMs,
-      };
-    }
-    return { ok: true };
-  }
-
-  listTimedOutMcpResultRecords(sessionID, now = Date.now()) {
-    if (this.mcpResultTimeoutMs <= 0) {
-      return [];
-    }
-    const normalizedSessionID = normalizeString(sessionID);
-    if (!normalizedSessionID) {
-      return [];
-    }
-    return this.listPendingEventsForSession(normalizedSessionID).filter((record) => {
-      const deliveryState = normalizeString(record.delivery_state);
-      if (deliveryState !== "dispatching" && deliveryState !== "delivered") {
-        return false;
-      }
-      const updatedAt = Number(record.updated_at ?? 0);
-      if (!Number.isFinite(updatedAt) || updatedAt <= 0) {
-        return true;
-      }
-      return now - updatedAt > this.mcpResultTimeoutMs;
-    });
-  }
-
-  async probeWorkerControl(binding) {
+  async probeWorkerControl(binding, runtime) {
     if (this.workerControlProbeFailureThreshold <= 0) {
       return { ok: true };
     }
@@ -499,6 +522,35 @@ export class DaemonRuntime {
     }
     try {
       const pingPayload = await client.ping();
+      const identityHealth = this.inspectWorkerIdentityHealth(binding, runtime, pingPayload);
+      if (!identityHealth.ok) {
+        const details = [
+          `reason=${identityHealth.reason}`,
+          Number.isFinite(identityHealth.expectedPid) ? `expected_pid=${identityHealth.expectedPid}` : "",
+          Number.isFinite(identityHealth.reportedPid) ? `reported_pid=${identityHealth.reportedPid}` : "",
+          identityHealth.expectedWorkerID ? `expected_worker_id=${identityHealth.expectedWorkerID}` : "",
+          identityHealth.reportedWorkerID ? `reported_worker_id=${identityHealth.reportedWorkerID}` : "",
+          identityHealth.expectedSessionID ? `expected_session_id=${identityHealth.expectedSessionID}` : "",
+          identityHealth.reportedSessionID ? `reported_session_id=${identityHealth.reportedSessionID}` : "",
+          identityHealth.expectedClaudeSessionID ? `expected_claude_session_id=${identityHealth.expectedClaudeSessionID}` : "",
+          identityHealth.reportedClaudeSessionID ? `reported_claude_session_id=${identityHealth.reportedClaudeSessionID}` : "",
+        ]
+          .filter((part) => part)
+          .join(" ");
+        const failures = this.markWorkerControlProbeFailure(
+          workerID,
+          new Error(details || "worker identity mismatch"),
+        );
+        return {
+          ok: false,
+          failures,
+          reason: identityHealth.reason,
+          expectedPid: identityHealth.expectedPid,
+          reportedPid: identityHealth.reportedPid,
+          pingPayload,
+        };
+      }
+
       const mcpHealth = this.inspectMcpInteractionHealth(binding, pingPayload);
       if (!mcpHealth.ok) {
         const details = [
@@ -516,10 +568,11 @@ export class DaemonRuntime {
           failures,
           reason: mcpHealth.reason,
           idleMs: mcpHealth.idleMs,
+          pingPayload,
         };
       }
       this.clearWorkerControlProbeFailure(workerID);
-      return { ok: true };
+      return { ok: true, pingPayload };
     } catch (error) {
       const failures = this.markWorkerControlProbeFailure(workerID, error);
       return { ok: false, failures, reason: "worker_control_probe_failed" };
@@ -551,184 +604,176 @@ export class DaemonRuntime {
   }
 
   async trackPendingEvent(rawPayload) {
-    return this.messageDeliveryStore.trackPendingEvent(rawPayload);
+    return this.pendingEventOrchestrator.trackPendingEvent(rawPayload);
   }
 
   async markPendingEventDelivered(eventID, binding) {
-    return this.messageDeliveryStore.markPendingEventDelivered(
-      eventID,
-      normalizeString(binding?.worker_id),
-    );
+    return this.pendingEventOrchestrator.markPendingEventDelivered(eventID, binding);
   }
 
   async markPendingEventDispatching(eventID, binding) {
-    return this.messageDeliveryStore.markPendingEventDispatching(
-      eventID,
-      normalizeString(binding?.worker_id),
-    );
+    return this.pendingEventOrchestrator.markPendingEventDispatching(eventID, binding);
   }
 
   async markPendingEventPending(eventID) {
-    return this.messageDeliveryStore.markPendingEventPending(eventID);
+    return this.pendingEventOrchestrator.markPendingEventPending(eventID);
   }
 
   async markPendingEventInterrupted(eventID) {
-    return this.messageDeliveryStore.markPendingEventInterrupted(eventID);
+    return this.pendingEventOrchestrator.markPendingEventInterrupted(eventID);
   }
 
   async clearPendingEvent(eventID) {
-    await this.messageDeliveryStore.clearEventState(eventID);
+    await this.pendingEventOrchestrator.clearPendingEvent(eventID);
   }
 
   listPendingEventsForSession(sessionID) {
-    return this.messageDeliveryStore.listPendingEventsForSession(sessionID);
+    return this.pendingEventOrchestrator.listPendingEventsForSession(sessionID);
   }
 
   listPendingEvents() {
-    return this.messageDeliveryStore.listPendingEvents();
+    return this.pendingEventOrchestrator.listPendingEvents();
   }
 
   getPendingEvent(eventID) {
-    return this.messageDeliveryStore.getPendingEvent(eventID);
+    return this.pendingEventOrchestrator.getPendingEvent(eventID);
+  }
+
+  async touchPendingEventActivity(eventID) {
+    return this.pendingEventOrchestrator.touchPendingEvent(eventID);
+  }
+
+  async handleWorkerSessionComposing(payload = {}) {
+    const eventID = normalizeString(payload.ref_event_id);
+    if (!eventID) {
+      return null;
+    }
+
+    const workerID = normalizeString(payload.worker_id);
+    const workerSessionID = normalizeString(payload.session_id || payload.aibot_session_id);
+    const claudeSessionID = normalizeString(payload.claude_session_id);
+    const reportedPid = Number(payload.pid ?? 0);
+
+    const record = this.getPendingEvent(eventID);
+    if (!record) {
+      return null;
+    }
+
+    const deliveryState = normalizeString(record.delivery_state);
+    if (deliveryState !== "dispatching" && deliveryState !== "delivered") {
+      this.trace({
+        stage: "pending_event_activity_rejected",
+        reason: "delivery_state_not_inflight",
+        event_id: eventID,
+        session_id: record.sessionID,
+        delivery_state: deliveryState,
+      }, "error");
+      return null;
+    }
+
+    const sessionID = normalizeString(record.sessionID);
+    if (workerSessionID && workerSessionID !== sessionID) {
+      this.trace({
+        stage: "pending_event_activity_rejected",
+        reason: "session_mismatch",
+        event_id: eventID,
+        expected_session_id: sessionID,
+        reported_session_id: workerSessionID,
+      }, "error");
+      return null;
+    }
+
+    const binding = this.bindingRegistry.getByAibotSessionID(sessionID);
+    if (!binding) {
+      this.trace({
+        stage: "pending_event_activity_rejected",
+        reason: "binding_not_found",
+        event_id: eventID,
+        session_id: sessionID,
+      }, "error");
+      return null;
+    }
+
+    const expectedWorkerID = normalizeString(binding.worker_id);
+    if (!workerID || !expectedWorkerID || workerID !== expectedWorkerID) {
+      this.trace({
+        stage: "pending_event_activity_rejected",
+        reason: "worker_id_mismatch",
+        event_id: eventID,
+        session_id: sessionID,
+        expected_worker_id: expectedWorkerID,
+        reported_worker_id: workerID,
+      }, "error");
+      return null;
+    }
+
+    const runtime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
+    const expectedPid = Number(runtime?.pid ?? binding.worker_pid ?? 0);
+    if (Number.isFinite(expectedPid) && expectedPid > 0) {
+      if (!Number.isFinite(reportedPid) || reportedPid <= 0 || reportedPid !== expectedPid) {
+        this.trace({
+          stage: "pending_event_activity_rejected",
+          reason: "worker_pid_mismatch",
+          event_id: eventID,
+          session_id: sessionID,
+          expected_pid: expectedPid,
+          reported_pid: reportedPid,
+        }, "error");
+        return null;
+      }
+    }
+
+    const dispatchedWorkerID = normalizeString(record.last_worker_id);
+    if (dispatchedWorkerID && workerID !== dispatchedWorkerID) {
+      this.trace({
+        stage: "pending_event_activity_rejected",
+        reason: "event_worker_mismatch",
+        event_id: eventID,
+        session_id: sessionID,
+        expected_worker_id: dispatchedWorkerID,
+        reported_worker_id: workerID,
+      }, "error");
+      return null;
+    }
+
+    const expectedClaudeSessionID = normalizeString(binding.claude_session_id);
+    if (!claudeSessionID || !expectedClaudeSessionID || claudeSessionID !== expectedClaudeSessionID) {
+      this.trace({
+        stage: "pending_event_activity_rejected",
+        reason: "claude_session_mismatch",
+        event_id: eventID,
+        session_id: sessionID,
+        expected_claude_session_id: expectedClaudeSessionID,
+        reported_claude_session_id: claudeSessionID,
+      }, "error");
+      return null;
+    }
+
+    const touched = await this.touchPendingEventActivity(eventID);
+    if (!touched) {
+      return null;
+    }
+    this.trace({
+      stage: "pending_event_activity_touched",
+      event_id: touched.eventID,
+      session_id: touched.sessionID,
+      worker_id: workerID,
+      worker_pid: reportedPid,
+      worker_session_id: workerSessionID,
+      claude_session_id: claudeSessionID,
+      active: Boolean(payload.active),
+    }, "debug");
+    return touched;
   }
 
   hasInFlightSessionEvent(sessionID, { excludeEventID = "" } = {}) {
-    const normalizedSessionID = normalizeString(sessionID);
-    const excludedEventID = normalizeString(excludeEventID);
-    if (!normalizedSessionID) {
-      return false;
-    }
-    return this.listPendingEventsForSession(normalizedSessionID).some((record) => {
-      if (excludedEventID && normalizeString(record.eventID) === excludedEventID) {
-        return false;
-      }
-      const deliveryState = normalizeString(record.delivery_state);
-      if (deliveryState === "dispatching") {
-        return true;
-      }
-      if (deliveryState !== "delivered") {
-        return false;
-      }
-      if (this.deliveredInFlightMaxAgeMs <= 0) {
-        return false;
-      }
-      const updatedAt = Number(record.updated_at ?? 0);
-      if (!Number.isFinite(updatedAt) || updatedAt <= 0) {
-        return true;
-      }
-      const ageMs = Date.now() - updatedAt;
-      if (ageMs <= this.deliveredInFlightMaxAgeMs) {
-        return true;
-      }
-      this.trace({
-        stage: "delivered_inflight_released",
-        session_id: normalizedSessionID,
-        event_id: record.eventID,
-        age_ms: ageMs,
-      }, "error");
-      return false;
+    return this.pendingEventOrchestrator.hasInFlightSessionEvent(sessionID, {
+      excludeEventID,
     });
   }
 
   async flushPendingSessionEvents(sessionID, binding) {
-    const normalizedSessionID = normalizeString(sessionID);
-    if (
-      !normalizedSessionID ||
-      !binding?.worker_control_url ||
-      !binding?.worker_control_token
-    ) {
-      return;
-    }
-
-    if (this.hasInFlightSessionEvent(normalizedSessionID)) {
-      this.trace({
-        stage: "pending_event_flush_skipped_inflight",
-        session_id: normalizedSessionID,
-        worker_id: binding?.worker_id,
-      });
-      return;
-    }
-
-    for (const record of this.listPendingEventsForSession(normalizedSessionID)) {
-      const currentRecord = this.getPendingEvent(record.eventID) ?? record;
-      if (currentRecord.delivery_state !== "pending") {
-        continue;
-      }
-      try {
-        this.trace({
-          stage: "pending_event_flushing",
-          event_id: currentRecord.eventID,
-          session_id: currentRecord.sessionID,
-          worker_id: binding?.worker_id,
-          attempt: 1,
-        });
-        await this.markPendingEventDispatching(currentRecord.eventID, binding);
-        await this.deliverEventToWorker(binding, currentRecord.rawPayload);
-        await this.markPendingEventDelivered(currentRecord.eventID, binding);
-        this.trace({
-          stage: "pending_event_flushed",
-          event_id: currentRecord.eventID,
-          session_id: currentRecord.sessionID,
-          worker_id: binding?.worker_id,
-        });
-        return;
-      } catch (error) {
-        await this.markPendingEventPending(currentRecord.eventID);
-        this.trace({
-          stage: "pending_event_flush_retrying",
-          event_id: currentRecord.eventID,
-          session_id: currentRecord.sessionID,
-          worker_id: binding?.worker_id,
-          attempt: 1,
-          error: error instanceof Error ? error.message : String(error),
-        }, "error");
-      }
-
-      await sleep(queuedEventRetryDelayMs);
-      const latestBinding = this.bindingRegistry.getByAibotSessionID(normalizedSessionID);
-      if (!canDeliverToWorker(latestBinding)) {
-        this.trace({
-          stage: "pending_event_flush_retry_aborted",
-          event_id: currentRecord.eventID,
-          session_id: currentRecord.sessionID,
-          worker_id: latestBinding?.worker_id,
-          status: latestBinding?.worker_status,
-        }, "error");
-        return;
-      }
-
-      try {
-        this.trace({
-          stage: "pending_event_flushing",
-          event_id: currentRecord.eventID,
-          session_id: currentRecord.sessionID,
-          worker_id: latestBinding?.worker_id,
-          attempt: 2,
-        });
-        await this.markPendingEventDispatching(currentRecord.eventID, latestBinding);
-        await this.deliverEventToWorker(latestBinding, currentRecord.rawPayload);
-        await this.markPendingEventDelivered(currentRecord.eventID, latestBinding);
-        this.trace({
-          stage: "pending_event_flushed",
-          event_id: currentRecord.eventID,
-          session_id: currentRecord.sessionID,
-          worker_id: latestBinding?.worker_id,
-          attempt: 2,
-        });
-        return;
-      } catch (error) {
-        await this.markPendingEventPending(currentRecord.eventID);
-        this.trace({
-          stage: "pending_event_flush_failed",
-          event_id: currentRecord.eventID,
-          session_id: currentRecord.sessionID,
-          worker_id: latestBinding?.worker_id || binding?.worker_id,
-          attempt: 2,
-          error: error instanceof Error ? error.message : String(error),
-        }, "error");
-        return;
-      }
-    }
+    return this.pendingEventOrchestrator.flushPendingSessionEvents(sessionID, binding);
   }
 
   async failPendingEvent(record, { notifyText = true } = {}) {
@@ -797,32 +842,6 @@ export class DaemonRuntime {
       return false;
     }
 
-    const timedOutMcpResults = this.listTimedOutMcpResultRecords(sessionID);
-    if (timedOutMcpResults.length > 0) {
-      const runtime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
-      const pid = Number(runtime?.pid ?? 0);
-      this.workerProcessManager?.markWorkerRuntimeStopped?.(workerID, {
-        exitCode: Number(runtime?.exit_code ?? 0),
-        exitSignal: "mcp_result_timeout",
-      });
-      this.trace({
-        stage: "worker_mcp_result_timeout_detected",
-        session_id: sessionID,
-        worker_id: workerID,
-        pid,
-        previous_status: workerStatus,
-        timeout_ms: this.mcpResultTimeoutMs,
-        timed_out_count: timedOutMcpResults.length,
-        event_ids: timedOutMcpResults.map((record) => record.eventID).slice(0, 5),
-      }, "error");
-      const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
-        updatedAt: Date.now(),
-        lastStoppedAt: Date.now(),
-      });
-      await this.handleWorkerStatusUpdate(previousBinding, nextBinding);
-      return true;
-    }
-
     const runtime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
     if (!runtime) {
       return false;
@@ -851,7 +870,7 @@ export class DaemonRuntime {
       return true;
     }
 
-    const probe = await this.probeWorkerControl(previousBinding);
+    const probe = await this.probeWorkerControl(previousBinding, runtime);
     if (!probe.ok && probe.failures >= this.workerControlProbeFailureThreshold) {
       this.workerProcessManager?.markWorkerRuntimeStopped?.(workerID, {
         exitCode: Number(runtime.exit_code ?? 0),
@@ -866,8 +885,42 @@ export class DaemonRuntime {
         failures: probe.failures,
         reason: probe.reason,
         idle_ms: probe.idleMs,
+        expected_pid: probe.expectedPid,
+        reported_pid: probe.reportedPid,
       }, "error");
 
+      const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
+        updatedAt: Date.now(),
+        lastStoppedAt: Date.now(),
+      });
+      await this.handleWorkerStatusUpdate(previousBinding, nextBinding);
+      return true;
+    }
+
+    if (!probe.ok && probe.reason === "worker_control_probe_failed") {
+      return false;
+    }
+
+    const latestMcpActivityAt = Number(probe?.pingPayload?.mcp_last_activity_at ?? 0);
+    const timedOutMcpResults = this.listTimedOutMcpResultRecords(sessionID, Date.now(), {
+      latestMcpActivityAt,
+    });
+    if (timedOutMcpResults.length > 0) {
+      this.workerProcessManager?.markWorkerRuntimeStopped?.(workerID, {
+        exitCode: Number(runtime?.exit_code ?? 0),
+        exitSignal: "mcp_result_timeout",
+      });
+      this.trace({
+        stage: "worker_mcp_result_timeout_detected",
+        session_id: sessionID,
+        worker_id: workerID,
+        pid,
+        previous_status: workerStatus,
+        timeout_ms: this.mcpResultTimeoutMs,
+        latest_mcp_activity_at: Number.isFinite(latestMcpActivityAt) ? latestMcpActivityAt : 0,
+        timed_out_count: timedOutMcpResults.length,
+        event_ids: timedOutMcpResults.map((record) => record.eventID).slice(0, 5),
+      }, "error");
       const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
         updatedAt: Date.now(),
         lastStoppedAt: Date.now(),
@@ -890,6 +943,8 @@ export class DaemonRuntime {
       stage: "worker_status_updated",
       session_id: sessionID,
       worker_id: nextBinding?.worker_id || previousBinding?.worker_id,
+      worker_pid: Number(nextBinding?.worker_pid ?? previousBinding?.worker_pid ?? 0),
+      claude_session_id: nextBinding?.claude_session_id || previousBinding?.claude_session_id,
       status: nextStatus,
     });
 
@@ -940,6 +995,7 @@ export class DaemonRuntime {
     this.trace({
       stage: "event_completed",
       event_id: eventID,
+      session_id: sessionID,
     });
     if (!sessionID) {
       return;
@@ -1094,6 +1150,12 @@ export class DaemonRuntime {
       readyBinding?.worker_launch_failure === "resume_session_missing" &&
       normalizeString(binding.claude_session_id)
     ) {
+      this.trace({
+        stage: "worker_resume_missing_recovering",
+        session_id: binding.aibot_session_id,
+        worker_id: binding.worker_id,
+        claude_session_id: binding.claude_session_id,
+      }, "error");
       const fallbackBinding = await this.rotateClaudeSession(binding);
       const workerID = fallbackBinding.worker_id || randomUUID();
       await this.bindingRegistry.markWorkerStarting(fallbackBinding.aibot_session_id, {
@@ -1111,6 +1173,12 @@ export class DaemonRuntime {
         bridgeToken: this.bridgeServer.token,
         resumeSession: false,
       });
+      this.trace({
+        stage: "worker_resume_missing_spawned_fresh",
+        session_id: fallbackBinding.aibot_session_id,
+        worker_id: workerID,
+        claude_session_id: fallbackBinding.claude_session_id,
+      }, "error");
       readyBinding = await this.waitForWorkerBridgeState(aibotSessionID, {
         timeoutMs: 15000,
       });
@@ -1119,164 +1187,8 @@ export class DaemonRuntime {
     return readyBinding ?? binding;
   }
 
-  async handleOpenCommand(event, parsed) {
-    const cwd = normalizeString(parsed.args.cwd);
-    await ensureDirectoryExists(cwd);
-
-    const existing = this.bindingRegistry.getByAibotSessionID(event.session_id);
-    if (existing) {
-      if (existing.cwd !== cwd) {
-        await this.respond(
-          event,
-          `当前会话已经固定绑定目录，不能改成新目录。\n\n${formatBindingSummary(existing)}`,
-          { reply_source: "daemon_control_open_reject" },
-        );
-        return;
-      }
-
-      await this.ensureWorker(existing);
-      await this.respond(
-        event,
-        `当前会话已经绑定，已按原目录恢复或保持原会话。\n\n${formatBindingSummary(existing)}`,
-        { reply_source: "daemon_control_open_existing" },
-      );
-      return;
-    }
-
-    const workerID = randomUUID();
-    const claudeSessionID = randomUUID();
-    const pluginDataDir = resolveWorkerPluginDataDir(event.session_id, this.env);
-    const created = await this.bindingRegistry.createBinding({
-      aibot_session_id: event.session_id,
-      claude_session_id: claudeSessionID,
-      cwd,
-      worker_id: workerID,
-      worker_status: "starting",
-      plugin_data_dir: pluginDataDir,
-      created_at: Date.now(),
-      updated_at: Date.now(),
-      last_started_at: Date.now(),
-      last_stopped_at: 0,
-    });
-
-    await this.workerProcessManager.spawnWorker({
-      aibotSessionID: created.aibot_session_id,
-      cwd: created.cwd,
-      pluginDataDir: created.plugin_data_dir,
-      claudeSessionID: created.claude_session_id,
-      workerID: created.worker_id,
-      bridgeURL: this.bridgeServer.getURL(),
-      bridgeToken: this.bridgeServer.token,
-    });
-
-    await this.respond(
-      event,
-      `已新建目录会话。\n\n${formatBindingSummary(created)}`,
-      { reply_source: "daemon_control_open_created" },
-    );
-  }
-
-  async handleStatusCommand(event) {
-    const binding = this.bindingRegistry.getByAibotSessionID(event.session_id);
-    if (!binding) {
-      await this.respondWithOpenWorkspaceCard(event, {
-        ...buildMissingBindingCardOptions(),
-        replySource: "daemon_control_status_missing",
-      });
-      return;
-    }
-    await this.respond(event, formatBindingSummary(binding), {
-      reply_source: "daemon_control_status",
-    });
-  }
-
-  async handleWhereCommand(event) {
-    const binding = this.bindingRegistry.getByAibotSessionID(event.session_id);
-    if (!binding) {
-      await this.respondWithOpenWorkspaceCard(event, {
-        ...buildMissingBindingCardOptions(),
-        replySource: "daemon_control_where_missing",
-      });
-      return;
-    }
-    const text = `当前目录: ${binding.cwd}`;
-    await this.respond(event, text, {
-      reply_source: "daemon_control_where",
-    });
-  }
-
-  async handleStopCommand(event) {
-    const binding = this.bindingRegistry.getByAibotSessionID(event.session_id);
-    if (!binding) {
-      await this.respondWithOpenWorkspaceCard(event, {
-        ...buildMissingBindingCardOptions(),
-        replySource: "daemon_control_stop_missing",
-      });
-      return;
-    }
-
-    if (binding.worker_id) {
-      await this.workerProcessManager.stopWorker(binding.worker_id);
-    }
-    await this.bindingRegistry.markWorkerStopped(event.session_id, {
-      updatedAt: Date.now(),
-      lastStoppedAt: Date.now(),
-    });
-    await this.respond(event, `已停止当前会话对应的 Claude。\n\n${formatBindingSummary({
-      ...binding,
-      worker_status: "stopped",
-    })}`, {
-      reply_source: "daemon_control_stop",
-    });
-  }
-
   async handleControlCommand(event, parsed) {
-    if (!parsed.ok) {
-      if (parsed.command === "open") {
-        await this.respondWithOpenWorkspaceCard(event, {
-          summaryText: parsed.error,
-          replySource: "daemon_control_invalid",
-        });
-        return true;
-      }
-      await this.respond(event, parsed.error, {
-        reply_source: "daemon_control_invalid",
-      });
-      return true;
-    }
-
-    try {
-      switch (parsed.command) {
-        case "open":
-          await this.handleOpenCommand(event, parsed);
-          return true;
-        case "status":
-          await this.handleStatusCommand(event);
-          return true;
-        case "where":
-          await this.handleWhereCommand(event);
-          return true;
-        case "stop":
-          await this.handleStopCommand(event);
-          return true;
-        default:
-          return false;
-      }
-    } catch (error) {
-      const message = formatRuntimeError(error, "命令执行失败。");
-      if (parsed.command === "open") {
-        await this.respondWithOpenWorkspaceCard(event, {
-          summaryText: message,
-          detailText: "发送 open <目录> 来创建会话。",
-          replySource: "daemon_control_open_error",
-        });
-        return true;
-      }
-      await this.respond(event, message, {
-        reply_source: "daemon_control_error",
-      });
-      return true;
-    }
+    return this.controlCommandHandler.handleControlCommand(event, parsed);
   }
 
   async handleEvent(rawPayload) {

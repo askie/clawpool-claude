@@ -54,9 +54,11 @@ export function writeTraceStderr(fields = {}, { env = process.env } = {}) {
 export function createProcessLogger({
   env = process.env,
   name = "clawpool-claude",
+  onTrace = null,
 } = {}) {
   const verboseDebugEnabled = env.CLAWPOOL_CLAUDE_E2E_DEBUG === "1";
   const verboseDebugLogPath = normalizeString(env.CLAWPOOL_CLAUDE_E2E_DEBUG_LOG);
+  const traceCallback = typeof onTrace === "function" ? onTrace : null;
 
   function write(prefix, message) {
     if (verboseDebugLogPath) {
@@ -66,6 +68,13 @@ export function createProcessLogger({
   }
 
   function trace(fields, { level = "info" } = {}) {
+    if (traceCallback) {
+      try {
+        traceCallback(fields, { level });
+      } catch {
+        // trace sink failure must not affect daemon runtime
+      }
+    }
     if (!isTraceLoggingEnabled(env)) {
       return;
     }

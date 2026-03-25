@@ -241,6 +241,10 @@ export class MessageDeliveryStore {
     });
   }
 
+  async touchPendingEvent(eventID) {
+    return this.updatePendingEvent(eventID);
+  }
+
   async clearEventState(eventID) {
     const normalizedEventID = normalizeString(eventID);
     if (!normalizedEventID) {

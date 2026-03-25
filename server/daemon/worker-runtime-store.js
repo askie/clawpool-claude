@@ -30,6 +30,14 @@ function normalizeWorkerStatus(value) {
   return "stopped";
 }
 
+function normalizeWorkerPid(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 0;
+  }
+  return Math.floor(numeric);
+}
+
 function normalizeRuntime(input) {
   if (!input || typeof input !== "object") {
     return null;
@@ -44,6 +52,7 @@ function normalizeRuntime(input) {
     schema_version: schemaVersion,
     aibot_session_id: aibotSessionID,
     worker_id: normalizeString(input.worker_id),
+    worker_pid: normalizeWorkerPid(input.worker_pid),
     worker_status: normalizeWorkerStatus(input.worker_status),
     worker_control_url: normalizeString(input.worker_control_url),
     worker_control_token: normalizeString(input.worker_control_token),
@@ -114,6 +123,7 @@ export class WorkerRuntimeStore {
       ...(existing ?? {
         aibot_session_id: normalizedSessionID,
         worker_status: "stopped",
+        worker_pid: 0,
         updated_at: Date.now(),
         last_started_at: 0,
         last_stopped_at: 0,
@@ -150,6 +160,7 @@ export class WorkerRuntimeStore {
       this.state.runtimes[sessionID] = normalizeRuntime({
         ...existing,
         worker_status: shouldResetStatus ? "stopped" : existing.worker_status,
+        worker_pid: shouldResetStatus ? 0 : existing.worker_pid,
         worker_control_url: "",
         worker_control_token: "",
         updated_at: updatedAt,

@@ -98,7 +98,14 @@ open <你的工作目录>
 
 ## 审批和提问
 
-当 Claude 需要你确认或补充信息时，消息会回到 ClawPool。你在 ClawPool 里直接回复：
+当 Claude 需要你确认或补充信息时，消息会回到 ClawPool。
+
+默认优先走交互卡片：
+
+- 审批卡直接点通过/拒绝
+- 提问卡直接在卡片里填完提交
+
+文本命令仍保留为兜底：
 
 ```text
 yes <request_id>
@@ -106,13 +113,30 @@ no <request_id>
 /clawpool-question <request_id> 你的回答
 ```
 
-- 审批卡直接点按钮就行，手输时只需要 `yes <request_id>` 或 `no <request_id>`
-- 提问卡直接在卡片里填完提交，不需要复制命令
-- 只有调试或兜底时，才需要手工输入 `/clawpool-question ...`
+- 只有调试、排障或卡片不可用时，才需要手工输入这些命令
 
 ## 文件发送
 
 Claude 可以把本地文件回发到 ClawPool。单个文件最大 50MB，只支持常见图片、视频、文档类型。
+
+## 日志排查
+
+每个 AIBot 会话 ID 都会有独立日志文件：
+
+```text
+~/.claude/clawpool-claude-daemon/sessions/<aibot_session_id>/logs/daemon-session.log
+```
+
+这份日志会记录该会话里 Claude 调度全过程，包括：
+
+- worker 进程状态变化和 pid
+- 进程退出后的重拉起
+- 消息投递和结果回传
+- 通信探测与超时判定
+
+完整排查步骤见：
+
+- `docs/session-log-troubleshooting.md`
 
 ## CLI 命令
 
@@ -144,6 +168,7 @@ clawpool-claude [options]
 - 第一次执行 `install` 或前台启动时，需要传完整连接参数
 - 后续如果本地已经保存过配置，可以省略连接参数
 - `--data-dir` 用来指定单独的数据目录，适合多套环境分开跑
+- `--show-claude` 当前仅支持 macOS Terminal
 
 开发时如果你怀疑 Claude 卡在启动确认页，可以加 `--show-claude`，这样 daemon 会把对应 Claude 会话直接拉到一个可见的 Terminal 窗口里。
 
@@ -171,9 +196,9 @@ npm run daemon
 如果你想让 `npm run daemon` 直接从环境变量取连接参数，可以这样跑：
 
 ```bash
-CLAWPOOL_CLAUDE_ENDPOINT='ws://127.0.0.1:27189/v1/agent-api/ws?agent_id=2035251418226495488' \
-CLAWPOOL_CLAUDE_AGENT_ID='2035251418226495488' \
-CLAWPOOL_CLAUDE_API_KEY='ak_2035251418226495488_Gyav9cyaOHbAUP7qrOJ4JHv13FR0XgwB' \
+CLAWPOOL_CLAUDE_ENDPOINT='ws://127.0.0.1:27189/v1/agent-api/ws?agent_id=<agent_id>' \
+CLAWPOOL_CLAUDE_AGENT_ID='<agent_id>' \
+CLAWPOOL_CLAUDE_API_KEY='<api_key>' \
 npm run daemon -- --no-launch
 ```
 

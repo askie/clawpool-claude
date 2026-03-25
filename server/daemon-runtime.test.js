@@ -2386,7 +2386,94 @@ test("daemon runtime marks worker stopped after repeated worker control probe fa
   );
 });
 
-test("daemon runtime marks worker stopped when MCP interaction is stale for in-flight events", async () => {
+test("daemon runtime marks worker stopped when worker control ping pid mismatches runtime pid", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-pid-mismatch",
+    claude_session_id: "claude-pid-mismatch",
+    cwd: tempDir,
+    worker_id: "worker-pid-mismatch",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-pid-mismatch",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+
+  const workerProcessManager = {
+    getWorkerRuntime() {
+      return {
+        worker_id: "worker-pid-mismatch",
+        aibot_session_id: "chat-pid-mismatch",
+        pid: 50011,
+        status: "ready",
+      };
+    },
+    markWorkerRuntimeStopped(workerID, { exitSignal = "" } = {}) {
+      workerCalls.push({ kind: "mark_stopped", workerID, exitSignal });
+      return {
+        worker_id: workerID,
+        status: "stopped",
+        exit_signal: exitSignal,
+      };
+    },
+  };
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient([]),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    workerControlProbeFailureThreshold: 1,
+    isProcessRunning() {
+      return true;
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async ping() {
+          return {
+            ok: true,
+            worker_id: "worker-pid-mismatch",
+            aibot_session_id: "chat-pid-mismatch",
+            claude_session_id: "claude-pid-mismatch",
+            pid: 99999,
+            mcp_ready: true,
+            mcp_last_activity_at: Date.now(),
+          };
+        },
+      };
+    },
+  });
+
+  const changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-pid-mismatch"),
+  );
+
+  assert.equal(changed, true);
+  assert.equal(registry.getByAibotSessionID("chat-pid-mismatch")?.worker_status, "stopped");
+  assert.equal(workerCalls.length, 1);
+  assert.equal(workerCalls[0].exitSignal, "worker_control_unreachable");
+});
+
+test("daemon runtime gives in-flight MCP activity a grace window before declaring stale", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
@@ -2449,7 +2536,7 @@ test("daemon runtime marks worker stopped when MCP interaction is stale for in-f
     messageDeliveryStore: deliveryStore,
     workerRuntimeHealthCheckMs: 0,
     workerControlProbeFailureThreshold: 1,
-    mcpInteractionIdleMs: 60 * 1000,
+    mcpInteractionIdleMs: 50,
     isProcessRunning() {
       return true;
     },
@@ -2461,6 +2548,10 @@ test("daemon runtime marks worker stopped when MCP interaction is stale for in-f
         async ping() {
           return {
             ok: true,
+            worker_id: "worker-mcp-stale",
+            aibot_session_id: "chat-mcp-stale",
+            claude_session_id: "claude-mcp-stale",
+            pid: 50002,
             mcp_ready: true,
             mcp_last_activity_at: Date.now() - (10 * 60 * 1000),
           };
@@ -2468,6 +2559,14 @@ test("daemon runtime marks worker stopped when MCP interaction is stale for in-f
       };
     },
   });
+
+  const unchanged = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-mcp-stale"),
+  );
+  assert.equal(unchanged, false);
+  assert.equal(registry.getByAibotSessionID("chat-mcp-stale")?.worker_status, "ready");
+
+  await sleep(80);
 
   const changed = await runtime.reconcileWorkerProcess(
     registry.getByAibotSessionID("chat-mcp-stale"),
@@ -2568,8 +2667,12 @@ test("daemon runtime marks worker stopped when MCP result timeout is reached", a
         async ping() {
           return {
             ok: true,
+            worker_id: "worker-mcp-result-timeout",
+            aibot_session_id: "chat-mcp-result-timeout",
+            claude_session_id: "claude-mcp-result-timeout",
+            pid: 50003,
             mcp_ready: true,
-            mcp_last_activity_at: Date.now(),
+            mcp_last_activity_at: 0,
           };
         },
       };
@@ -2596,6 +2699,533 @@ test("daemon runtime marks worker stopped when MCP result timeout is reached", a
       msg: "worker interrupted while processing event",
     },
   );
+});
+
+test("daemon runtime keeps worker alive when ping reports fresh MCP activity", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-mcp-ping-fresh",
+    claude_session_id: "claude-mcp-ping-fresh",
+    cwd: tempDir,
+    worker_id: "worker-mcp-ping-fresh",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-mcp-ping-fresh",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-mcp-ping-fresh",
+    session_id: "chat-mcp-ping-fresh",
+    msg_id: "msg-mcp-ping-fresh",
+    sender_id: "sender-mcp-ping-fresh",
+    content: "probe",
+  });
+  await deliveryStore.markPendingEventDelivered("evt-mcp-ping-fresh", "worker-mcp-ping-fresh");
+  await sleep(40);
+
+  const workerProcessManager = {
+    getWorkerRuntime() {
+      return {
+        worker_id: "worker-mcp-ping-fresh",
+        aibot_session_id: "chat-mcp-ping-fresh",
+        pid: 50006,
+        status: "ready",
+      };
+    },
+    markWorkerRuntimeStopped(workerID, { exitSignal = "" } = {}) {
+      workerCalls.push({ kind: "mark_stopped", workerID, exitSignal });
+      return {
+        worker_id: workerID,
+        status: "stopped",
+        exit_signal: exitSignal,
+      };
+    },
+  };
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    workerControlProbeFailureThreshold: 3,
+    mcpInteractionIdleMs: 0,
+    mcpResultTimeoutMs: 30,
+    isProcessRunning() {
+      return true;
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async ping() {
+          return {
+            ok: true,
+            worker_id: "worker-mcp-ping-fresh",
+            aibot_session_id: "chat-mcp-ping-fresh",
+            claude_session_id: "claude-mcp-ping-fresh",
+            pid: 50006,
+            mcp_ready: true,
+            mcp_last_activity_at: Date.now(),
+          };
+        },
+      };
+    },
+  });
+
+  assert.equal(runtime.listTimedOutMcpResultRecords("chat-mcp-ping-fresh").length, 1);
+
+  const changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-mcp-ping-fresh"),
+  );
+  assert.equal(changed, false);
+  assert.equal(registry.getByAibotSessionID("chat-mcp-ping-fresh")?.worker_status, "ready");
+  assert.equal(workerCalls.length, 0);
+  assert.notEqual(deliveryStore.getPendingEvent("evt-mcp-ping-fresh"), null);
+});
+
+test("daemon runtime does not force MCP timeout on transient worker control probe failure", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-mcp-probe-transient",
+    claude_session_id: "claude-mcp-probe-transient",
+    cwd: tempDir,
+    worker_id: "worker-mcp-probe-transient",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-mcp-probe-transient",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-mcp-probe-transient",
+    session_id: "chat-mcp-probe-transient",
+    msg_id: "msg-mcp-probe-transient",
+    sender_id: "sender-mcp-probe-transient",
+    content: "probe",
+  });
+  await deliveryStore.markPendingEventDelivered(
+    "evt-mcp-probe-transient",
+    "worker-mcp-probe-transient",
+  );
+  await sleep(20);
+
+  const workerProcessManager = {
+    getWorkerRuntime() {
+      return {
+        worker_id: "worker-mcp-probe-transient",
+        aibot_session_id: "chat-mcp-probe-transient",
+        pid: 50007,
+        status: "ready",
+      };
+    },
+    markWorkerRuntimeStopped(workerID, { exitSignal = "" } = {}) {
+      workerCalls.push({ kind: "mark_stopped", workerID, exitSignal });
+      return {
+        worker_id: workerID,
+        status: "stopped",
+        exit_signal: exitSignal,
+      };
+    },
+  };
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    workerControlProbeFailureThreshold: 3,
+    mcpInteractionIdleMs: 0,
+    mcpResultTimeoutMs: 1,
+    isProcessRunning() {
+      return true;
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async ping() {
+          throw new Error("temporary worker control blip");
+        },
+      };
+    },
+  });
+
+  const changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-mcp-probe-transient"),
+  );
+  assert.equal(changed, false);
+  assert.equal(registry.getByAibotSessionID("chat-mcp-probe-transient")?.worker_status, "ready");
+  assert.equal(workerCalls.length, 0);
+  assert.notEqual(deliveryStore.getPendingEvent("evt-mcp-probe-transient"), null);
+});
+
+test("daemon runtime uses composing heartbeat to refresh MCP result timeout tracking", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-mcp-heartbeat",
+    claude_session_id: "claude-mcp-heartbeat",
+    cwd: tempDir,
+    worker_id: "worker-mcp-heartbeat",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-mcp-heartbeat",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-mcp-heartbeat",
+    session_id: "chat-mcp-heartbeat",
+    msg_id: "msg-mcp-heartbeat",
+    sender_id: "sender-mcp-heartbeat",
+    content: "probe",
+  });
+  await deliveryStore.markPendingEventDelivered("evt-mcp-heartbeat", "worker-mcp-heartbeat");
+  await sleep(40);
+
+  const workerProcessManager = {
+    getWorkerRuntime() {
+      return {
+        worker_id: "worker-mcp-heartbeat",
+        aibot_session_id: "chat-mcp-heartbeat",
+        pid: 50004,
+        status: "ready",
+      };
+    },
+    markWorkerRuntimeStopped(workerID, { exitSignal = "" } = {}) {
+      workerCalls.push({ kind: "mark_stopped", workerID, exitSignal });
+      return {
+        worker_id: workerID,
+        status: "stopped",
+        exit_signal: exitSignal,
+      };
+    },
+  };
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    workerControlProbeFailureThreshold: 3,
+    mcpInteractionIdleMs: 0,
+    mcpResultTimeoutMs: 30,
+    isProcessRunning() {
+      return true;
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async ping() {
+          return {
+            ok: true,
+            worker_id: "worker-mcp-heartbeat",
+            aibot_session_id: "chat-mcp-heartbeat",
+            claude_session_id: "claude-mcp-heartbeat",
+            pid: 50004,
+            mcp_ready: true,
+            mcp_last_activity_at: Date.now(),
+          };
+        },
+      };
+    },
+  });
+
+  assert.equal(runtime.listTimedOutMcpResultRecords("chat-mcp-heartbeat").length, 1);
+
+  await runtime.handleWorkerSessionComposing({
+    worker_id: "worker-mcp-heartbeat",
+    aibot_session_id: "chat-mcp-heartbeat",
+    session_id: "chat-mcp-heartbeat",
+    claude_session_id: "claude-mcp-heartbeat",
+    pid: 50004,
+    ref_event_id: "evt-mcp-heartbeat",
+    active: true,
+  });
+
+  assert.equal(runtime.listTimedOutMcpResultRecords("chat-mcp-heartbeat").length, 0);
+
+  const changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-mcp-heartbeat"),
+  );
+  assert.equal(changed, false);
+  assert.equal(registry.getByAibotSessionID("chat-mcp-heartbeat")?.worker_status, "ready");
+  assert.equal(workerCalls.length, 0);
+  assert.notEqual(deliveryStore.getPendingEvent("evt-mcp-heartbeat"), null);
+});
+
+test("daemon runtime rejects composing heartbeat with mismatched worker identity", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-mcp-heartbeat-reject",
+    claude_session_id: "claude-mcp-heartbeat-reject",
+    cwd: tempDir,
+    worker_id: "worker-mcp-heartbeat-reject",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-mcp-heartbeat-reject",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-mcp-heartbeat-reject",
+    session_id: "chat-mcp-heartbeat-reject",
+    msg_id: "msg-mcp-heartbeat-reject",
+    sender_id: "sender-mcp-heartbeat-reject",
+    content: "probe",
+  });
+  await deliveryStore.markPendingEventDelivered(
+    "evt-mcp-heartbeat-reject",
+    "worker-mcp-heartbeat-reject",
+  );
+  await sleep(40);
+
+  const workerProcessManager = {
+    getWorkerRuntime() {
+      return {
+        worker_id: "worker-mcp-heartbeat-reject",
+        aibot_session_id: "chat-mcp-heartbeat-reject",
+        pid: 50005,
+        status: "ready",
+      };
+    },
+    markWorkerRuntimeStopped(workerID, { exitSignal = "" } = {}) {
+      workerCalls.push({ kind: "mark_stopped", workerID, exitSignal });
+      return {
+        worker_id: workerID,
+        status: "stopped",
+        exit_signal: exitSignal,
+      };
+    },
+  };
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    workerControlProbeFailureThreshold: 3,
+    mcpInteractionIdleMs: 0,
+    mcpResultTimeoutMs: 30,
+    isProcessRunning() {
+      return true;
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async ping() {
+          return {
+            ok: true,
+            worker_id: "worker-mcp-heartbeat-reject",
+            aibot_session_id: "chat-mcp-heartbeat-reject",
+            claude_session_id: "claude-mcp-heartbeat-reject",
+            pid: 50005,
+            mcp_ready: true,
+            mcp_last_activity_at: 0,
+          };
+        },
+      };
+    },
+  });
+
+  assert.equal(runtime.listTimedOutMcpResultRecords("chat-mcp-heartbeat-reject").length, 1);
+
+  await runtime.handleWorkerSessionComposing({
+    worker_id: "worker-not-owner",
+    aibot_session_id: "chat-mcp-heartbeat-reject",
+    session_id: "chat-mcp-heartbeat-reject",
+    claude_session_id: "claude-mcp-heartbeat-reject",
+    pid: 50005,
+    ref_event_id: "evt-mcp-heartbeat-reject",
+    active: true,
+  });
+
+  assert.equal(runtime.listTimedOutMcpResultRecords("chat-mcp-heartbeat-reject").length, 1);
+
+  const changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-mcp-heartbeat-reject"),
+  );
+  assert.equal(changed, true);
+  assert.equal(registry.getByAibotSessionID("chat-mcp-heartbeat-reject")?.worker_status, "stopped");
+  assert.equal(workerCalls.length, 1);
+  assert.equal(workerCalls[0].exitSignal, "mcp_result_timeout");
+});
+
+test("daemon runtime rejects composing heartbeat with mismatched worker pid", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-mcp-heartbeat-pid",
+    claude_session_id: "claude-mcp-heartbeat-pid",
+    cwd: tempDir,
+    worker_id: "worker-mcp-heartbeat-pid",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-mcp-heartbeat-pid",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-mcp-heartbeat-pid",
+    session_id: "chat-mcp-heartbeat-pid",
+    msg_id: "msg-mcp-heartbeat-pid",
+    sender_id: "sender-mcp-heartbeat-pid",
+    content: "probe",
+  });
+  await deliveryStore.markPendingEventDelivered(
+    "evt-mcp-heartbeat-pid",
+    "worker-mcp-heartbeat-pid",
+  );
+  await sleep(40);
+  const before = deliveryStore.getPendingEvent("evt-mcp-heartbeat-pid");
+
+  const workerProcessManager = {
+    getWorkerRuntime() {
+      return {
+        worker_id: "worker-mcp-heartbeat-pid",
+        aibot_session_id: "chat-mcp-heartbeat-pid",
+        pid: 50008,
+        status: "ready",
+      };
+    },
+    markWorkerRuntimeStopped(workerID, { exitSignal = "" } = {}) {
+      workerCalls.push({ kind: "mark_stopped", workerID, exitSignal });
+      return {
+        worker_id: workerID,
+        status: "stopped",
+        exit_signal: exitSignal,
+      };
+    },
+  };
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    workerControlProbeFailureThreshold: 3,
+    mcpInteractionIdleMs: 0,
+    mcpResultTimeoutMs: 30,
+    isProcessRunning() {
+      return true;
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async ping() {
+          return {
+            ok: true,
+            worker_id: "worker-mcp-heartbeat-pid",
+            aibot_session_id: "chat-mcp-heartbeat-pid",
+            claude_session_id: "claude-mcp-heartbeat-pid",
+            pid: 50008,
+            mcp_ready: true,
+            mcp_last_activity_at: 0,
+          };
+        },
+      };
+    },
+  });
+
+  await runtime.handleWorkerSessionComposing({
+    worker_id: "worker-mcp-heartbeat-pid",
+    aibot_session_id: "chat-mcp-heartbeat-pid",
+    session_id: "chat-mcp-heartbeat-pid",
+    claude_session_id: "claude-mcp-heartbeat-pid",
+    pid: 50009,
+    ref_event_id: "evt-mcp-heartbeat-pid",
+    active: true,
+  });
+
+  const after = deliveryStore.getPendingEvent("evt-mcp-heartbeat-pid");
+  assert.equal(after?.updated_at, before?.updated_at);
 });
 
 test("daemon runtime fails pending events when worker stops before becoming ready", async () => {

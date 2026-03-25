@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createProcessLogger,
   formatTraceLine,
   isTraceLoggingEnabled,
 } from "./logging.js";
@@ -28,4 +29,24 @@ test("isTraceLoggingEnabled accepts explicit trace switch and debug switch", () 
   assert.equal(isTraceLoggingEnabled({ CLAWPOOL_CLAUDE_TRACE_LOG: "1" }), true);
   assert.equal(isTraceLoggingEnabled({ CLAWPOOL_CLAUDE_E2E_DEBUG: "1" }), true);
   assert.equal(isTraceLoggingEnabled({}), false);
+});
+
+test("createProcessLogger trace callback runs even when stderr trace is disabled", () => {
+  const calls = [];
+  const logger = createProcessLogger({
+    env: {},
+    onTrace(fields, { level }) {
+      calls.push({ fields, level });
+    },
+  });
+
+  logger.trace({
+    component: "daemon.runtime",
+    stage: "event_received",
+    session_id: "chat-1",
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].level, "info");
+  assert.equal(calls[0].fields.session_id, "chat-1");
 });

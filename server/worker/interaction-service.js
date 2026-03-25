@@ -1,16 +1,11 @@
 import { loadEventEntries } from "../event-state-persistence.js";
 import { normalizeInboundEventPayload } from "../inbound-event-meta.js";
-import { ResultTimeoutManager } from "../result-timeout.js";
 import { buildChannelNotificationParams } from "../channel-notification.js";
 import {
   buildAccessStatusBizCard,
   buildPairingBizCard,
 } from "../claude-card-payload.js";
-
-const defaultResultTimeoutMs = 10 * 60 * 1000;
-const resultTimeoutRetryMs = 10 * 1000;
-const composingHeartbeatMs = 10 * 1000;
-const composingTTLMS = 30 * 1000;
+import { WorkerEventLifecycleManager } from "./event-lifecycle-manager.js";
 function normalizeString(value) {
   return String(value ?? "").trim();
 }
@@ -68,44 +63,11 @@ export class WorkerInteractionService {
     this.permissionRelayService = permissionRelayService;
     this.elicitationRelayService = elicitationRelayService;
     this.logger = logger;
-    this.composingKeepaliveTimers = new Map();
-    this.resultTimeouts = new ResultTimeoutManager({
-      defaultResultTimeoutMs,
-      onTimeout: async (eventID) => this.onResultTimeout(eventID),
+    this.eventLifecycle = new WorkerEventLifecycleManager({
+      eventState: this.eventState,
+      bridge: this.bridge,
+      logger: this.logger,
     });
-  }
-
-  async onResultTimeout(eventID) {
-    const event = this.eventState.get(eventID);
-    if (!event || event.completed) {
-      return;
-    }
-
-    const result = event.result_intent
-      ? this.buildTerminalResult(event.result_intent)
-      : this.buildTerminalResult({
-          status: "failed",
-          code: "claude_result_timeout",
-          msg: "Claude did not call reply or complete before timeout.",
-        });
-
-    this.eventState.setResultIntent(eventID, result);
-    try {
-      await this.bridge.sendEventResult({
-        event_id: eventID,
-        ...result,
-      });
-      this.cancelResultTimeout(eventID);
-      this.eventState.clearResultIntent(eventID);
-      this.eventState.markCompleted(eventID, result);
-      this.logger.info(`result timeout finalized event=${eventID} status=${result.status}`);
-    } catch (error) {
-      this.logger.error(`result timeout send failed event=${eventID}: ${String(error)}`);
-      const deadlineAt = this.resultTimeouts.arm(eventID, {
-        timeoutMs: resultTimeoutRetryMs,
-      });
-      this.eventState.setResultDeadline(eventID, { deadlineAt });
-    }
   }
 
   markEventAccepted(event) {
@@ -116,136 +78,12 @@ export class WorkerInteractionService {
     );
   }
 
-  armResultTimeout(eventID, timeoutMs = defaultResultTimeoutMs) {
-    const deadlineAt = this.resultTimeouts.arm(eventID, { timeoutMs });
-    this.eventState.setResultDeadline(eventID, { deadlineAt });
-    return deadlineAt;
-  }
-
-  cancelResultTimeout(eventID) {
-    this.resultTimeouts.cancel(eventID);
-    this.eventState.clearResultDeadline(eventID);
-  }
-
-  clearComposingKeepaliveTimer(eventID) {
-    const normalizedEventID = normalizeString(eventID);
-    if (!normalizedEventID) {
-      return;
-    }
-    const timer = this.composingKeepaliveTimers.get(normalizedEventID);
-    if (!timer) {
-      return;
-    }
-    clearInterval(timer);
-    this.composingKeepaliveTimers.delete(normalizedEventID);
-  }
-
-  sendComposingState(event, active) {
-    if (!event || !normalizeString(event.session_id)) {
-      return false;
-    }
-    void this.bridge.setSessionComposing({
-      sessionID: event.session_id,
-      active,
-      ttlMs: active ? composingTTLMS : 0,
-      refMsgID: event.msg_id,
-      refEventID: event.event_id,
-    }).catch((error) => {
-      this.logger.error(
-        `composing state send failed event=${event?.event_id ?? ""} active=${active}: ${String(error)}`,
-      );
-    });
-    return true;
-  }
-
-  startComposingKeepalive(eventID) {
-    const normalizedEventID = normalizeString(eventID);
-    if (!normalizedEventID) {
-      return;
-    }
-    this.clearComposingKeepaliveTimer(normalizedEventID);
-    const tick = () => {
-      const current = this.eventState.get(normalizedEventID);
-      if (!current || current.completed || current.stopped) {
-        this.clearComposingKeepaliveTimer(normalizedEventID);
-        return;
-      }
-      this.sendComposingState(current, true);
-    };
-    tick();
-    const timer = setInterval(tick, composingHeartbeatMs);
-    this.composingKeepaliveTimers.set(normalizedEventID, timer);
-  }
-
-  stopComposingKeepalive(eventID, fallbackEvent = null) {
-    const normalizedEventID = normalizeString(eventID);
-    if (!normalizedEventID) {
-      return;
-    }
-    this.clearComposingKeepaliveTimer(normalizedEventID);
-    const current = this.eventState.get(normalizedEventID) ?? fallbackEvent;
-    if (!current) {
-      return;
-    }
-    this.sendComposingState(current, false);
-  }
-
-  buildTerminalResult({ status, code = "", msg = "" }) {
-    return {
-      status: normalizeString(status),
-      code: normalizeOptionalString(code),
-      msg: normalizeOptionalString(msg),
-      updated_at: Date.now(),
-    };
-  }
-
-  async sendTerminalResult(eventID, { status, code = "", msg = "" }) {
-    const event = this.eventState.get(eventID);
-    const result = this.buildTerminalResult({
-      status,
-      code,
-      msg,
-    });
-    this.eventState.setResultIntent(eventID, result);
-    try {
-      await this.bridge.sendEventResult({
-        event_id: eventID,
-        ...result,
-      });
-    } catch (error) {
-      this.logger.error(`sendTerminalResult send failed event=${eventID}, will retry: ${String(error)}`);
-      const deadlineAt = this.resultTimeouts.arm(eventID, { timeoutMs: resultTimeoutRetryMs });
-      this.eventState.setResultDeadline(eventID, { deadlineAt });
-      this.stopComposingKeepalive(eventID, event);
-      return null;
-    }
-    this.logger.trace?.({
-      component: "worker.interaction",
-      stage: "event_finalized",
-      event_id: eventID,
-      session_id: event?.session_id,
-      status: result.status,
-      code: result.code,
-    });
-    this.cancelResultTimeout(eventID);
-    this.eventState.clearResultIntent(eventID);
-    const completed = this.eventState.markCompleted(eventID, result);
-    this.stopComposingKeepalive(eventID, event);
-    return completed;
-  }
-
   async finalizeEventSafely(eventID, result, context) {
-    try {
-      await this.sendTerminalResult(eventID, result);
-      return true;
-    } catch (error) {
-      this.logger.error(`${context} event=${eventID}: ${String(error)}`);
-      return false;
-    }
+    return this.eventLifecycle.finalizeEventSafely(eventID, result, context);
   }
 
   async dispatchChannelNotification(event) {
-    this.startComposingKeepalive(event.event_id);
+    this.eventLifecycle.startComposingKeepalive(event.event_id);
     await this.mcp.notification({
       method: "notifications/claude/channel",
       params: buildChannelNotificationParams(event),
@@ -335,7 +173,7 @@ export class WorkerInteractionService {
       return;
     }
 
-    this.startComposingKeepalive(event.event_id);
+    this.eventLifecycle.startComposingKeepalive(event.event_id);
 
     if (event.pairing_sent_at && this.eventState.canResendPairing(event.event_id)) {
       try {
@@ -413,7 +251,7 @@ export class WorkerInteractionService {
       sender_id: event.sender_id,
       policy,
     });
-    this.armResultTimeout(event.event_id);
+    this.eventLifecycle.armResultTimeout(event.event_id);
 
     if (policy === "disabled") {
       this.logger.debug(`event disabled-policy event=${event.event_id}`);
@@ -598,7 +436,7 @@ export class WorkerInteractionService {
     }
 
     if (!existing || existing.completed) {
-      this.stopComposingKeepalive(eventID, existing);
+      this.eventLifecycle.stopComposingKeepalive(eventID, existing);
       try {
         await this.bridge.sendEventStopResult({
           event_id: eventID,
@@ -655,7 +493,7 @@ export class WorkerInteractionService {
       session_id: rawPayload.session_id,
       msg_id: rawPayload.msg_id,
     });
-    this.stopComposingKeepalive(eventID);
+    this.eventLifecycle.stopComposingKeepalive(eventID);
     await this.bridge.ackEvent(eventID, {
       sessionID: normalizeOptionalString(rawPayload.session_id),
       msgID: normalizeOptionalString(rawPayload.msg_id),
@@ -677,19 +515,7 @@ export class WorkerInteractionService {
       if (entry.completed || entry.stopped) {
         continue;
       }
-
-      const persistedDeadline = Number(entry.result_deadline_at);
-      let remaining = 0;
-      if (persistedDeadline > 0) {
-        remaining = Math.max(0, persistedDeadline - now);
-      } else if (entry.result_intent) {
-        remaining = resultTimeoutRetryMs;
-      } else {
-        remaining = defaultResultTimeoutMs;
-      }
-
-      const deadlineAt = this.resultTimeouts.arm(entry.event_id, { timeoutMs: remaining });
-      this.eventState.setResultDeadline(entry.event_id, { deadlineAt });
+      this.eventLifecycle.armRestoredEventTimeout(entry, { now });
     }
     if (restored > 0) {
       this.logger.info(`restored ${restored} event state entries`);
@@ -699,10 +525,7 @@ export class WorkerInteractionService {
 
   async shutdown() {
     this.stopDispatchPumps();
-    this.resultTimeouts.close();
-    for (const eventID of this.composingKeepaliveTimers.keys()) {
-      this.clearComposingKeepaliveTimer(eventID);
-    }
+    await this.eventLifecycle.shutdown();
     await this.permissionRelayService?.shutdown?.();
     await this.elicitationRelayService?.shutdown?.();
   }
