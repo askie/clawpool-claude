@@ -1,7 +1,8 @@
-import { mkdir } from "node:fs/promises";
+import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { readJSONFile, writeJSONFileAtomic } from "./json-file.js";
+import { formatTraceLine } from "./logging.js";
 import { resolvePluginDataDir } from "./paths.js";
 
 const schemaVersion = 1;
@@ -94,6 +95,18 @@ export function resolveHookSignalsPathFromDataDir(pluginDataDir, pluginID) {
   return resolveHookSignalsPath(pluginID);
 }
 
+export function resolveHookSignalsLogPath(pluginID) {
+  return path.join(resolvePluginDataDir(pluginID), "hook-signals.log");
+}
+
+export function resolveHookSignalsLogPathFromDataDir(pluginDataDir, pluginID) {
+  const normalizedDir = normalizeString(pluginDataDir);
+  if (normalizedDir) {
+    return path.join(normalizedDir, "hook-signals.log");
+  }
+  return resolveHookSignalsLogPath(pluginID);
+}
+
 export function buildHookSignalEvent(input, { recordedAt = Date.now() } = {}) {
   const hookEventName = normalizeString(input?.hook_event_name);
   if (!hookEventName) {
@@ -124,8 +137,12 @@ export function summarizeHookSignalEvent(event) {
 }
 
 export class HookSignalStore {
-  constructor(filePath = resolveHookSignalsPath()) {
+  constructor(
+    filePath = resolveHookSignalsPath(),
+    { logPath = path.join(path.dirname(filePath), "hook-signals.log") } = {},
+  ) {
     this.filePath = filePath;
+    this.logPath = logPath;
   }
 
   async readState() {
@@ -141,6 +158,26 @@ export class HookSignalStore {
   async reset() {
     await this.writeState(normalizeState(null));
     return this.readState();
+  }
+
+  async appendEventLog(event) {
+    const normalized = normalizeHookSignalEvent(event);
+    if (!normalized) {
+      return false;
+    }
+    await mkdir(path.dirname(this.logPath), { recursive: true });
+    await appendFile(this.logPath, `${formatTraceLine({
+      stage: "hook_signal_recorded",
+      event_id: normalized.event_id,
+      hook_event_name: normalized.hook_event_name,
+      hook_detail: normalized.detail,
+      event_at: normalized.event_at,
+      tool_name: normalized.tool_name,
+      session_id: normalized.session_id,
+      cwd: normalized.cwd,
+      transcript_path: normalized.transcript_path,
+    })}\n`, "utf8");
+    return true;
   }
 
   async recordHookEvent(input, {
@@ -163,6 +200,7 @@ export class HookSignalStore {
       ].slice(-Math.max(1, Number(recentEventLimit) || defaultRecentEventLimit)),
     };
     await this.writeState(nextState);
+    await this.appendEventLog(nextEvent);
     return normalizeState(nextState);
   }
 }

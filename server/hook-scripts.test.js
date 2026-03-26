@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { resolveHookSignalsLogPathFromDataDir } from "./hook-signal-store.js";
 
 test("user prompt submit hook records signal without writing Claude context output", async () => {
   const pluginDataDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-user-prompt-hook-"));
@@ -31,4 +32,9 @@ test("user prompt submit hook records signal without writing Claude context outp
   );
   assert.equal(state.latest_event?.hook_event_name, "UserPromptSubmit");
   assert.equal(state.recent_events?.length, 1);
+  const logContent = await readFile(
+    resolveHookSignalsLogPathFromDataDir(pluginDataDir),
+    "utf8",
+  );
+  assert.match(logContent, /hook_event_name=UserPromptSubmit/u);
 });

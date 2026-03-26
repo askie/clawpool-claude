@@ -2,10 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import {
   buildHookSignalEvent,
   HookSignalStore,
+  resolveHookSignalsLogPathFromDataDir,
   summarizeHookSignalEvent,
 } from "./hook-signal-store.js";
 
@@ -72,6 +73,13 @@ test("hook signal store records latest event and recent ring", async () => {
     state.recent_events.map((item) => item.hook_event_name),
     ["PostToolUse", "PostToolUseFailure"],
   );
+  const logContent = await readFile(
+    resolveHookSignalsLogPathFromDataDir(dir),
+    "utf8",
+  );
+  assert.match(logContent, /stage=hook_signal_recorded/u);
+  assert.match(logContent, /hook_event_name=PostToolUseFailure/u);
+  assert.match(logContent, /hook_detail=Bash/u);
 
   const reset = await store.reset();
   assert.equal(reset.latest_event, null);

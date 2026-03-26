@@ -10,6 +10,7 @@ import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { WorkerProcessManager } from "./daemon/worker-process.js";
 import { WorkerBridgeServer } from "./daemon/worker-bridge-server.js";
+import { resolveHookSignalsLogPathFromDataDir } from "./hook-signal-store.js";
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -103,6 +104,18 @@ async function readTextFile(filePath) {
   return readFile(filePath, "utf8").catch(() => "");
 }
 
+async function readJSONFile(filePath) {
+  const content = await readTextFile(filePath);
+  if (!content.trim()) {
+    return null;
+  }
+  try {
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
+}
+
 function traceLineIndex(content, { stage, includes = [] } = {}) {
   const expectedStage = normalizeString(stage);
   if (!expectedStage) {
@@ -113,6 +126,26 @@ function traceLineIndex(content, { stage, includes = [] } = {}) {
     line.includes(`stage=${expectedStage}`)
     && includes.every((item) => line.includes(item))
   ));
+}
+
+function hookLineIndex(content, { hookEventName, includes = [] } = {}) {
+  const expectedName = normalizeString(hookEventName);
+  if (!expectedName) {
+    return -1;
+  }
+  const lines = stripTerminalControlSequences(content).split("\n");
+  return lines.findIndex((line) => (
+    line.includes("stage=hook_signal_recorded")
+    && line.includes(`hook_event_name=${expectedName}`)
+    && includes.every((item) => line.includes(item))
+  ));
+}
+
+function listHookEventNames(payload = {}) {
+  const events = Array.isArray(payload?.hook_recent_events) ? payload.hook_recent_events : [];
+  return events
+    .map((event) => normalizeString(event?.hook_event_name))
+    .filter((eventName) => eventName);
 }
 
 function emitDiagnostic(label, payload) {
@@ -142,6 +175,8 @@ test("e2e: real Claude ready ping is weaker than an active probe", async () => {
   const workspaceDir = path.join(tempRoot, "workspace");
   const pluginDataDir = path.join(tempRoot, "plugin-data");
   const debugLogPath = path.join(tempRoot, "worker-debug.log");
+  const hookSignalLogPath = resolveHookSignalsLogPathFromDataDir(pluginDataDir);
+  const hookSignalStatePath = path.join(pluginDataDir, "hook-signals.json");
   const pauseMs = parseOptionalPauseMs(process.env.CLAWPOOL_CLAUDE_E2E_PAUSE_MS);
   await mkdir(workspaceDir, { recursive: true });
   await mkdir(pluginDataDir, { recursive: true });
@@ -317,6 +352,19 @@ test("e2e: real Claude ready ping is weaker than an active probe", async () => {
       payload: readyPingResult.body,
     });
     assert.equal(readyPingResult.body?.mcp_ready, true);
+    const readyHookState = await readJSONFile(hookSignalStatePath);
+    const readyHookEventNames = Array.isArray(readyHookState?.recent_events)
+      ? readyHookState.recent_events
+        .map((event) => normalizeString(event?.hook_event_name))
+        .filter((eventName) => eventName)
+      : [];
+    timeline.push({
+      type: "hook_after_ready",
+      at: Date.now(),
+      latest_event: readyHookState?.latest_event ?? null,
+      event_names: readyHookEventNames,
+      hook_last_activity_at: Number(readyPingResult.body?.hook_last_activity_at ?? 0),
+    });
 
     const eventID = `evt-real-mcp-probe-${randomUUID()}`;
     const delivered = await postJSON(
@@ -418,6 +466,83 @@ test("e2e: real Claude ready ping is weaker than an active probe", async () => {
         payload: probePingResult.body,
       });
       assert.equal(probePingResult.body?.mcp_ready, true);
+      assert.ok(
+        Number(probePingResult.body?.hook_last_activity_at ?? 0)
+          >= Number(readyPingResult.body?.hook_last_activity_at ?? 0),
+      );
+
+      const probeHookState = await waitFor(async () => {
+        const state = await readJSONFile(hookSignalStatePath);
+        const eventNames = Array.isArray(state?.recent_events)
+          ? state.recent_events
+            .map((event) => normalizeString(event?.hook_event_name))
+            .filter((eventName) => eventName)
+          : [];
+        return eventNames.includes("PostToolUse") ? state : null;
+      }, {
+        timeoutMs: 30_000,
+        intervalMs: 200,
+      });
+      assert.ok(probeHookState, "hook signal state did not capture probe tool execution");
+      const probeHookEventNames = probeHookState.recent_events
+        .map((event) => normalizeString(event?.hook_event_name))
+        .filter((eventName) => eventName);
+      assert.ok(probeHookEventNames.includes("PostToolUse"));
+
+      const probeHookLog = await waitFor(async () => {
+        const content = await readTextFile(hookSignalLogPath);
+        return hookLineIndex(content, { hookEventName: "PostToolUse" }) >= 0 ? content : "";
+      }, {
+        timeoutMs: 30_000,
+        intervalMs: 200,
+      });
+      assert.ok(probeHookLog, "hook signal log did not capture probe tool use");
+      const userPromptHookLine = hookLineIndex(probeHookLog, { hookEventName: "UserPromptSubmit" });
+      const postToolHookLine = hookLineIndex(probeHookLog, { hookEventName: "PostToolUse" });
+      assert.ok(postToolHookLine >= 0);
+      if (userPromptHookLine >= 0) {
+        assert.ok(
+          userPromptHookLine < postToolHookLine,
+          "hook log did not show prompt submission before probe tool execution",
+        );
+      }
+      const hookAwarePingResult = await waitFor(async () => {
+        const ping = await postJSON(
+          `${currentWorkerControlURL}/v1/worker/ping`,
+          currentWorkerControlToken,
+          {},
+        );
+        if (ping.response.status !== 200 || ping.body?.mcp_ready !== true) {
+          return null;
+        }
+        if (
+          Number(ping.body?.hook_last_activity_at ?? 0)
+          < Number(probeHookState.latest_event?.event_at ?? 0)
+        ) {
+          return null;
+        }
+        if (!listHookEventNames(ping.body).some((eventName) => (
+          eventName === "PostToolUse" || eventName === "UserPromptSubmit"
+        ))) {
+          return null;
+        }
+        return ping;
+      }, {
+        timeoutMs: 30_000,
+        intervalMs: 200,
+      });
+      assert.ok(hookAwarePingResult, "worker ping did not surface hook activity after probe");
+      timeline.push({
+        type: "hook_after_probe",
+        at: Date.now(),
+        latest_event: probeHookState.latest_event,
+        event_names: probeHookEventNames,
+      });
+      timeline.push({
+        type: "ping_after_probe_hook",
+        at: Date.now(),
+        payload: hookAwarePingResult.body,
+      });
 
       if (statusCallLine >= 0 && completeCallLine >= 0) {
         assert.ok(readyLine < statusCallLine, "active probe tool call happened before ready was reported");
@@ -455,16 +580,19 @@ test("e2e: real Claude ready ping is weaker than an active probe", async () => {
         .split("\n")
         .filter((line) => (
           (line.includes("stage=worker_status_requested") && line.includes("status=ready"))
+          || line.includes("stage=worker_hook_signal_observed")
           || line.includes("stage=deliver_event_received")
           || line.includes("stage=channel_notification_dispatched")
           || line.includes("stage=mcp_call_tool_received")
           || line.includes("stage=mcp_call_tool_completed")
         )),
     );
+    emitDiagnostic("hook_signal_log", await readTextFile(hookSignalLogPath));
     emitDiagnostic("worker_logs", {
       stdout_log_path: runtime.stdout_log_path,
       stderr_log_path: runtime.stderr_log_path,
       debug_log_path: debugLogPath,
+      hook_signal_log_path: hookSignalLogPath,
     });
     if (pauseMs > 0) {
       emitDiagnostic("pause_before_cleanup_ms", pauseMs);
