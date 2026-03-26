@@ -89,8 +89,7 @@ export function shouldNotifyWorkerReady(previousBinding, nextBinding, { pendingE
 }
 
 export function shouldIgnoreWorkerStatusUpdate(previousBinding, payload) {
-  const status = normalizeString(payload?.status);
-  if (!previousBinding || (status !== "stopped" && status !== "failed")) {
+  if (!previousBinding) {
     return false;
   }
 

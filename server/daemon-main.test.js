@@ -67,7 +67,7 @@ test("notifyWorkerReady sends a visible ready message to the bound aibot session
   ]);
 });
 
-test("shouldIgnoreWorkerStatusUpdate ignores stale stopped/failed status updates", () => {
+test("shouldIgnoreWorkerStatusUpdate ignores stale updates for old worker identity", () => {
   const previousBinding = {
     worker_id: "worker-current",
     claude_session_id: "claude-current",
@@ -89,9 +89,25 @@ test("shouldIgnoreWorkerStatusUpdate ignores stale stopped/failed status updates
     }),
     true,
   );
+  assert.equal(
+    shouldIgnoreWorkerStatusUpdate(previousBinding, {
+      status: "connected",
+      worker_id: "worker-old",
+      claude_session_id: "claude-current",
+    }),
+    true,
+  );
+  assert.equal(
+    shouldIgnoreWorkerStatusUpdate(previousBinding, {
+      status: "ready",
+      worker_id: "worker-current",
+      claude_session_id: "claude-old",
+    }),
+    true,
+  );
 });
 
-test("shouldIgnoreWorkerStatusUpdate keeps non-terminal or matching updates", () => {
+test("shouldIgnoreWorkerStatusUpdate keeps matching updates or empty baseline", () => {
   const previousBinding = {
     worker_id: "worker-current",
     claude_session_id: "claude-current",
@@ -100,8 +116,8 @@ test("shouldIgnoreWorkerStatusUpdate keeps non-terminal or matching updates", ()
   assert.equal(
     shouldIgnoreWorkerStatusUpdate(previousBinding, {
       status: "connected",
-      worker_id: "worker-old",
-      claude_session_id: "claude-old",
+      worker_id: "worker-current",
+      claude_session_id: "claude-current",
     }),
     false,
   );
