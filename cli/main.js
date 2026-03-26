@@ -119,6 +119,44 @@ function printError(message) {
   process.stderr.write(`${message}\n`);
 }
 
+function shellQuoteForDisplay(value) {
+  const text = String(value ?? "");
+  if (!text) {
+    return "''";
+  }
+  if (/^[A-Za-z0-9_./:=@-]+$/u.test(text)) {
+    return text;
+  }
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
+
+function redactSensitiveArgs(argv) {
+  const args = Array.isArray(argv) ? argv.map((item) => String(item ?? "")) : [];
+  const redacted = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const current = args[index];
+    if (current === "--api-key") {
+      redacted.push("--api-key");
+      if (index + 1 < args.length) {
+        redacted.push("******");
+        index += 1;
+      }
+      continue;
+    }
+    if (current.startsWith("--api-key=")) {
+      redacted.push("--api-key=******");
+      continue;
+    }
+    redacted.push(current);
+  }
+  return redacted;
+}
+
+function formatRunningCommand(argv) {
+  const command = ["clawpool-claude", ...redactSensitiveArgs(argv)];
+  return command.map((item) => shellQuoteForDisplay(item)).join(" ");
+}
+
 function createServiceManager(env = process.env) {
   return new ServiceManager({ env });
 }
@@ -292,6 +330,7 @@ export async function run(argv, env = process.env, deps = {}) {
 
 export async function main(argv = process.argv.slice(2), env = process.env) {
   try {
+    print(`运行命令: ${formatRunningCommand(argv)}`);
     const exitCode = await run(argv, env);
     process.exitCode = exitCode;
   } catch (error) {

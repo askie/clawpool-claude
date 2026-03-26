@@ -3,7 +3,31 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { mkdtemp, readFile } from "node:fs/promises";
-import { run } from "./main.js";
+import { main, run } from "./main.js";
+
+test("cli main prints the running command and redacts api key", async () => {
+  const outputs = [];
+  const originalStdoutWrite = process.stdout.write;
+  process.stdout.write = (chunk) => {
+    outputs.push(String(chunk));
+    return true;
+  };
+
+  try {
+    await main([
+      "--help",
+      "--api-key",
+      "secret-value",
+      "--data-dir",
+      "/tmp/demo dir",
+    ], {});
+    const content = outputs.join("");
+    assert.match(content, /运行命令:\s+clawpool-claude --help --api-key '\*\*\*\*\*\*' --data-dir '\/tmp\/demo dir'/u);
+    assert.doesNotMatch(content, /secret-value/u);
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+  }
+});
 
 test("cli run routes daemon subcommand", async () => {
   const outputs = [];
