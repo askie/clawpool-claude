@@ -23,6 +23,7 @@ test("cli main prints the running command and redacts api key", async () => {
     ], {});
     const content = outputs.join("");
     assert.match(content, /运行命令:\s+clawpool-claude --help --api-key '\*\*\*\*\*\*' --data-dir '\/tmp\/demo dir'/u);
+    assert.match(content, /实际入口:\s+.*clawpool-claude\.js --help --api-key '\*\*\*\*\*\*' --data-dir '\/tmp\/demo dir'/u);
     assert.doesNotMatch(content, /secret-value/u);
   } finally {
     process.stdout.write = originalStdoutWrite;
@@ -322,6 +323,57 @@ test("cli status subcommand prints service manager status", async () => {
     });
     assert.equal(exitCode, 0);
     assert.match(outputs.join(""), /进程 PID: 1234/u);
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+  }
+});
+
+test("cli start subcommand persists environment config before starting service", async () => {
+  const outputs = [];
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-start-env-cli-"));
+  const originalStdoutWrite = process.stdout.write;
+  const calls = [];
+  process.stdout.write = (chunk) => {
+    outputs.push(String(chunk));
+    return true;
+  };
+
+  try {
+    const exitCode = await run([
+      "start",
+      "--data-dir",
+      tempDir,
+    ], {
+      CLAWPOOL_CLAUDE_ENDPOINT: "ws://127.0.0.1:9020/ws",
+      CLAWPOOL_CLAUDE_AGENT_ID: "agent-start-env",
+      CLAWPOOL_CLAUDE_API_KEY: "key-start-env",
+    }, {
+      serviceManager: {
+        start: async ({ dataDir }) => {
+          calls.push({ kind: "start", dataDir });
+          return {
+            installed: true,
+            service_kind: "launchd",
+            data_dir: dataDir,
+            install_state: "current",
+            daemon_state: "running",
+            pid: 4567,
+          };
+        },
+      },
+    });
+    assert.equal(exitCode, 0);
+    assert.deepEqual(calls, [{
+      kind: "start",
+      dataDir: tempDir,
+    }]);
+    const config = JSON.parse(
+      await readFile(path.join(tempDir, "daemon-config.json"), "utf8"),
+    );
+    assert.equal(config.ws_url, "ws://127.0.0.1:9020/ws");
+    assert.equal(config.agent_id, "agent-start-env");
+    assert.equal(config.api_key, "key-start-env");
+    assert.match(outputs.join(""), /Agent ID: agent-start-env/u);
   } finally {
     process.stdout.write = originalStdoutWrite;
   }

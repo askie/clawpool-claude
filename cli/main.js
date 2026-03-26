@@ -1,6 +1,7 @@
 import process from "node:process";
 import {
   maskApiKey,
+  resolvePackageBinPath,
   validateConfig,
 } from "./config.js";
 import { ConfigStore } from "../server/config-store.js";
@@ -157,6 +158,11 @@ function formatRunningCommand(argv) {
   return command.map((item) => shellQuoteForDisplay(item)).join(" ");
 }
 
+function formatRuntimeEntryCommand(argv) {
+  const command = [process.execPath, resolvePackageBinPath(), ...redactSensitiveArgs(argv)];
+  return command.map((item) => shellQuoteForDisplay(item)).join(" ");
+}
+
 function createServiceManager(env = process.env) {
   return new ServiceManager({ env });
 }
@@ -178,19 +184,27 @@ function buildDaemonStatus(configStore) {
   };
 }
 
-async function prepareDaemonConfig(options, env = process.env) {
+async function prepareDaemonConfig(options, env = process.env, { persistResolvedConfig = false } = {}) {
   const runtimeEnv = buildRuntimeEnv(options, env);
   const configStore = new ConfigStore(resolveDaemonConfigPath(runtimeEnv), {
     env: runtimeEnv,
   });
   await configStore.load();
-  if (options.wsUrl || options.agentId || options.apiKey || options.chunkLimit) {
+  const hasCliOverrides = Boolean(
+    options.wsUrl
+    || options.agentId
+    || options.apiKey
+    || options.chunkLimit,
+  );
+  if (hasCliOverrides) {
     await configStore.update({
       ...(options.wsUrl ? { ws_url: options.wsUrl } : {}),
       ...(options.agentId ? { agent_id: options.agentId } : {}),
       ...(options.apiKey ? { api_key: options.apiKey } : {}),
       ...(options.chunkLimit ? { outbound_text_chunk_limit: Number(options.chunkLimit) } : {}),
     });
+  } else if (persistResolvedConfig) {
+    await configStore.update(configStore.get());
   }
   return {
     runtimeEnv,
@@ -259,8 +273,12 @@ async function runServiceSubcommand(name, argv, env, deps = {}) {
   const runtimeEnv = buildRuntimeEnv(options, env);
   const dataDir = resolveDaemonDataDir(runtimeEnv);
   const manager = deps.serviceManager || createServiceManager(runtimeEnv);
+  const shouldPrepareConfig = ["install", "start", "restart"].includes(name);
+  const prepared = shouldPrepareConfig
+    ? await prepareDaemonConfig(options, env, { persistResolvedConfig: true })
+    : null;
   if (name === "install") {
-    const { config, configPath } = await prepareDaemonConfig(options, env);
+    const { config, configPath } = prepared;
     const status = await manager.install({ dataDir });
     print(`配置文件: ${configPath}`);
     print(`Agent ID: ${config.agent_id}`);
@@ -269,7 +287,11 @@ async function runServiceSubcommand(name, argv, env, deps = {}) {
     return 0;
   }
   if (name === "start") {
+    const { config, configPath } = prepared;
     const status = await manager.start({ dataDir });
+    print(`配置文件: ${configPath}`);
+    print(`Agent ID: ${config.agent_id}`);
+    print(`API Key: ${maskApiKey(config.api_key)}`);
     print(formatServiceStatus(status));
     return 0;
   }
@@ -279,7 +301,11 @@ async function runServiceSubcommand(name, argv, env, deps = {}) {
     return 0;
   }
   if (name === "restart") {
+    const { config, configPath } = prepared;
     const status = await manager.restart({ dataDir });
+    print(`配置文件: ${configPath}`);
+    print(`Agent ID: ${config.agent_id}`);
+    print(`API Key: ${maskApiKey(config.api_key)}`);
     print(formatServiceStatus(status));
     return 0;
   }
@@ -331,6 +357,7 @@ export async function run(argv, env = process.env, deps = {}) {
 export async function main(argv = process.argv.slice(2), env = process.env) {
   try {
     print(`运行命令: ${formatRunningCommand(argv)}`);
+    print(`实际入口: ${formatRuntimeEntryCommand(argv)}`);
     const exitCode = await run(argv, env);
     process.exitCode = exitCode;
   } catch (error) {
