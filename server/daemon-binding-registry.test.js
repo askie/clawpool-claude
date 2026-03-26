@@ -45,12 +45,23 @@ test("binding registry creates and updates fixed bindings", async () => {
   assert.equal(connected.worker_control_url, "http://127.0.0.1:9000");
   assert.equal(connected.worker_pid, 103);
 
+  const hookObserved = await registry.markWorkerHookObserved("chat-1", {
+    eventID: "hook-1",
+    eventName: "PostToolUse",
+    eventDetail: "Edit",
+    eventAt: 14,
+  });
+  assert.equal(hookObserved.worker_last_hook_event_id, "hook-1");
+  assert.equal(hookObserved.worker_last_hook_event_name, "PostToolUse");
+  assert.equal(hookObserved.worker_last_hook_event_detail, "Edit");
+  assert.equal(hookObserved.worker_last_hook_event_at, 14);
+
   const failed = await registry.markWorkerFailed("chat-1", {
-    lastStoppedAt: 14,
-    updatedAt: 15,
+    lastStoppedAt: 15,
+    updatedAt: 16,
   });
   assert.equal(failed.worker_status, "failed");
-  assert.equal(failed.last_stopped_at, 14);
+  assert.equal(failed.last_stopped_at, 15);
   assert.equal(failed.worker_pid, 0);
 
   const loaded = new BindingRegistry(path.join(dir, "binding-registry.json"));

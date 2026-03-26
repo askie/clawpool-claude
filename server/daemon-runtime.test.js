@@ -4156,6 +4156,131 @@ test("daemon runtime keeps worker alive when ping reports fresh MCP activity", a
   assert.notEqual(deliveryStore.getPendingEvent("evt-mcp-ping-fresh"), null);
 });
 
+test("daemon runtime does not force MCP timeout on fresh hook activity from worker ping", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-mcp-hook-fresh",
+    claude_session_id: "claude-mcp-hook-fresh",
+    cwd: tempDir,
+    worker_id: "worker-mcp-hook-fresh",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-mcp-hook-fresh",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-mcp-hook-fresh",
+    session_id: "chat-mcp-hook-fresh",
+    msg_id: "msg-mcp-hook-fresh",
+    sender_id: "sender-mcp-hook-fresh",
+    content: "probe",
+  });
+  await deliveryStore.markPendingEventDelivered("evt-mcp-hook-fresh", "worker-mcp-hook-fresh");
+  await sleep(40);
+
+  const workerProcessManager = {
+    getWorkerRuntime() {
+      return {
+        worker_id: "worker-mcp-hook-fresh",
+        aibot_session_id: "chat-mcp-hook-fresh",
+        pid: 50013,
+        status: "ready",
+      };
+    },
+    markWorkerRuntimeStopped(workerID, { exitSignal = "" } = {}) {
+      workerCalls.push({ kind: "mark_stopped", workerID, exitSignal });
+      return {
+        worker_id: workerID,
+        status: "stopped",
+        exit_signal: exitSignal,
+      };
+    },
+  };
+
+  const hookActivityAt = Date.now();
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager,
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+    workerControlProbeFailureThreshold: 3,
+    mcpInteractionIdleMs: 0,
+    mcpResultTimeoutMs: 30,
+    isProcessRunning() {
+      return true;
+    },
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async ping() {
+          return {
+            ok: true,
+            worker_id: "worker-mcp-hook-fresh",
+            aibot_session_id: "chat-mcp-hook-fresh",
+            claude_session_id: "claude-mcp-hook-fresh",
+            pid: 50013,
+            mcp_ready: true,
+            mcp_last_activity_at: 0,
+            hook_last_activity_at: hookActivityAt,
+            hook_latest_event: {
+              event_id: "hook-evt-2",
+              hook_event_name: "PostToolUse",
+              event_at: hookActivityAt,
+              detail: "Read",
+            },
+            hook_recent_events: [
+              {
+                event_id: "hook-evt-1",
+                hook_event_name: "SessionStart",
+                event_at: hookActivityAt - 1,
+                detail: "startup",
+              },
+              {
+                event_id: "hook-evt-2",
+                hook_event_name: "PostToolUse",
+                event_at: hookActivityAt,
+                detail: "Read",
+              },
+            ],
+          };
+        },
+      };
+    },
+  });
+
+  assert.equal(runtime.listTimedOutMcpResultRecords("chat-mcp-hook-fresh").length, 1);
+
+  const changed = await runtime.reconcileWorkerProcess(
+    registry.getByAibotSessionID("chat-mcp-hook-fresh"),
+  );
+  assert.equal(changed, false);
+  assert.equal(registry.getByAibotSessionID("chat-mcp-hook-fresh")?.worker_status, "ready");
+  assert.equal(registry.getByAibotSessionID("chat-mcp-hook-fresh")?.worker_last_hook_event_id, "hook-evt-2");
+  assert.equal(registry.getByAibotSessionID("chat-mcp-hook-fresh")?.worker_last_hook_event_name, "PostToolUse");
+  assert.equal(registry.getByAibotSessionID("chat-mcp-hook-fresh")?.worker_last_hook_event_detail, "Read");
+  assert.equal(workerCalls.length, 0);
+  assert.notEqual(deliveryStore.getPendingEvent("evt-mcp-hook-fresh"), null);
+});
+
 test("daemon runtime does not force MCP timeout on transient worker control probe failure", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];

@@ -26,6 +26,20 @@ function resolveRecordInteractionAt(record) {
   return Math.max(normalizedUpdatedAt, normalizedComposingAt);
 }
 
+function resolveHookActivityAt(pingPayload) {
+  const hookEventName = normalizeString(
+    pingPayload?.hook_latest_event?.hook_event_name,
+  );
+  if (hookEventName === "Stop") {
+    return 0;
+  }
+  const hookActivityAt = Number(pingPayload?.hook_last_activity_at ?? 0);
+  if (!Number.isFinite(hookActivityAt) || hookActivityAt <= 0) {
+    return 0;
+  }
+  return hookActivityAt;
+}
+
 export class WorkerHealthInspector {
   constructor({
     getPendingEventsForSession,
@@ -159,7 +173,10 @@ export class WorkerHealthInspector {
       };
     };
 
-    const activityAt = Number(pingPayload?.mcp_last_activity_at ?? 0);
+    const activityAt = Math.max(
+      Number(pingPayload?.mcp_last_activity_at ?? 0),
+      resolveHookActivityAt(pingPayload),
+    );
     if (!Number.isFinite(activityAt) || activityAt <= 0) {
       return graceFromPendingActivity("mcp_activity_missing");
     }

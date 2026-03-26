@@ -38,6 +38,10 @@ function buildWorkerResponsePatch(workerStatus, { observedAt = Date.now() } = {}
       worker_last_reply_at: 0,
       worker_last_failure_at: 0,
       worker_last_failure_code: "",
+      worker_last_hook_event_id: "",
+      worker_last_hook_event_name: "",
+      worker_last_hook_event_detail: "",
+      worker_last_hook_event_at: 0,
     };
   }
   if (normalizedStatus === "connected") {
@@ -48,6 +52,10 @@ function buildWorkerResponsePatch(workerStatus, { observedAt = Date.now() } = {}
       worker_last_reply_at: 0,
       worker_last_failure_at: 0,
       worker_last_failure_code: "",
+      worker_last_hook_event_id: "",
+      worker_last_hook_event_name: "",
+      worker_last_hook_event_detail: "",
+      worker_last_hook_event_at: 0,
     };
   }
   if (normalizedStatus === "ready") {
@@ -58,6 +66,10 @@ function buildWorkerResponsePatch(workerStatus, { observedAt = Date.now() } = {}
       worker_last_reply_at: 0,
       worker_last_failure_at: 0,
       worker_last_failure_code: "",
+      worker_last_hook_event_id: "",
+      worker_last_hook_event_name: "",
+      worker_last_hook_event_detail: "",
+      worker_last_hook_event_at: 0,
     };
   }
   return {};
@@ -81,6 +93,10 @@ function mergeBindingWithRuntime(binding, runtime) {
     worker_last_reply_at: normalizeTimestamp(runtime?.worker_last_reply_at, 0),
     worker_last_failure_at: normalizeTimestamp(runtime?.worker_last_failure_at, 0),
     worker_last_failure_code: normalizeString(runtime?.worker_last_failure_code),
+    worker_last_hook_event_id: normalizeString(runtime?.worker_last_hook_event_id),
+    worker_last_hook_event_name: normalizeString(runtime?.worker_last_hook_event_name),
+    worker_last_hook_event_detail: normalizeString(runtime?.worker_last_hook_event_detail),
+    worker_last_hook_event_at: normalizeTimestamp(runtime?.worker_last_hook_event_at, 0),
     updated_at: Math.max(
       normalizeTimestamp(binding.updated_at),
       normalizeTimestamp(runtime?.updated_at),
@@ -321,6 +337,25 @@ export class BindingRegistry {
       worker_response_updated_at: observedAt,
       worker_last_failure_at: observedAt,
       worker_last_failure_code: failureCode,
+    });
+    return mergeBindingWithRuntime(binding, runtime);
+  }
+
+  async markWorkerHookObserved(aibotSessionID, {
+    eventID = "",
+    eventName = "",
+    eventDetail = "",
+    eventAt = Date.now(),
+  } = {}) {
+    const binding = this.bindingStore.get(aibotSessionID);
+    if (!binding) {
+      throw new Error("binding not found");
+    }
+    const runtime = await this.workerRuntimeStore.createOrUpdate(aibotSessionID, {
+      worker_last_hook_event_id: eventID,
+      worker_last_hook_event_name: eventName,
+      worker_last_hook_event_detail: eventDetail,
+      worker_last_hook_event_at: eventAt,
     });
     return mergeBindingWithRuntime(binding, runtime);
   }

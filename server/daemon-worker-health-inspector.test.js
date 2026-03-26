@@ -234,3 +234,82 @@ test("worker health inspector ignores composing heartbeat for result timeout", (
   );
   assert.equal(timedOut.length, 1);
 });
+
+test("worker health inspector accepts recent hook activity as interaction progress", () => {
+  const baseTime = Date.now();
+  const inspector = new WorkerHealthInspector({
+    mcpInteractionIdleMs: 50,
+    getPendingEventsForSession() {
+      return [
+        {
+          eventID: "evt-hook-1",
+          delivery_state: "delivered",
+          updated_at: baseTime - 10,
+        },
+      ];
+    },
+  });
+
+  const healthy = inspector.inspectMcpInteractionHealth(
+    { worker_status: "ready", aibot_session_id: "chat-hook" },
+    {
+      ok: true,
+      mcp_ready: true,
+      mcp_last_activity_at: 0,
+      hook_last_activity_at: baseTime,
+      hook_latest_event: {
+        hook_event_name: "PostToolUse",
+      },
+    },
+    { now: baseTime + 20 },
+  );
+  assert.equal(healthy.ok, true);
+
+  const stale = inspector.inspectMcpInteractionHealth(
+    { worker_status: "ready", aibot_session_id: "chat-hook" },
+    {
+      ok: true,
+      mcp_ready: true,
+      mcp_last_activity_at: 0,
+      hook_last_activity_at: baseTime,
+      hook_latest_event: {
+        hook_event_name: "PostToolUse",
+      },
+    },
+    { now: baseTime + 120 },
+  );
+  assert.equal(stale.ok, false);
+  assert.equal(stale.reason, "mcp_activity_stale");
+});
+
+test("worker health inspector ignores stop hook as interaction progress", () => {
+  const baseTime = Date.now();
+  const inspector = new WorkerHealthInspector({
+    mcpInteractionIdleMs: 50,
+    getPendingEventsForSession() {
+      return [
+        {
+          eventID: "evt-hook-stop",
+          delivery_state: "delivered",
+          updated_at: baseTime - 100,
+        },
+      ];
+    },
+  });
+
+  const result = inspector.inspectMcpInteractionHealth(
+    { worker_status: "ready", aibot_session_id: "chat-hook-stop" },
+    {
+      ok: true,
+      mcp_ready: true,
+      mcp_last_activity_at: 0,
+      hook_last_activity_at: baseTime,
+      hook_latest_event: {
+        hook_event_name: "Stop",
+      },
+    },
+    { now: baseTime + 120 },
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "mcp_activity_missing");
+});

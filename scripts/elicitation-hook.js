@@ -3,6 +3,7 @@ import process from "node:process";
 import { resolveHookChannelContext } from "../server/channel-context-resolution.js";
 import { ChannelContextStore } from "../server/channel-context-store.js";
 import { ElicitationStore } from "../server/elicitation-store.js";
+import { HookSignalStore } from "../server/hook-signal-store.js";
 import {
   buildQuestionPromptsFromFields,
   deriveSupportedElicitationFields,
@@ -72,6 +73,8 @@ async function main() {
     writeResult({});
     return;
   }
+  const hookSignalStore = new HookSignalStore();
+  await hookSignalStore.recordHookEvent(input);
 
   if (normalizeString(input.mode || "form") !== "form") {
     trace({

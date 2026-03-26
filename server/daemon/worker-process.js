@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { resolvePackageRoot, resolveServerEntryPath } from "../../cli/config.js";
 import { ensureUserMcpServer as defaultEnsureUserMcpServer } from "../../cli/mcp.js";
 import { resolveWorkerLogsDir } from "./daemon-paths.js";
+import { HookSignalStore } from "../hook-signal-store.js";
 import {
   terminateProcessTree as defaultTerminateProcessTree,
   waitForProcessExit as defaultWaitForProcessExit,
@@ -553,6 +554,7 @@ export class WorkerProcessManager {
     return this.enqueueSpawnForSession(normalizedSessionID, async () => {
       const logsDir = resolveWorkerLogsDir(normalizedSessionID, this.env);
       await mkdir(logsDir, { recursive: true });
+      await new HookSignalStore(path.join(normalizedPluginDataDir, "hook-signals.json")).reset();
       const workerEnv = buildWorkerEnvironment({
         baseEnv: this.env,
         pluginDataDir: normalizedPluginDataDir,

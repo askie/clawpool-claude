@@ -1,5 +1,6 @@
 import process from "node:process";
 import { ChannelContextStore } from "../server/channel-context-store.js";
+import { HookSignalStore } from "../server/hook-signal-store.js";
 import { resolveSessionContextsDir } from "../server/paths.js";
 import { extractLatestClawpoolChannelTag } from "../server/transcript-channel-context.js";
 
@@ -21,15 +22,16 @@ async function readStdinJSON() {
 
 async function main() {
   const input = await readStdinJSON();
+  const hookSignalStore = new HookSignalStore();
   if (input?.hook_event_name !== "UserPromptSubmit") {
-    process.stdout.write("{}\n");
     return;
   }
+
+  await hookSignalStore.recordHookEvent(input);
 
   const context = extractLatestClawpoolChannelTag(input.prompt);
   if (!context?.chat_id) {
     logDebug(`no channel tag session=${String(input.session_id ?? "")}`);
-    process.stdout.write("{}\n");
     return;
   }
 
@@ -44,10 +46,8 @@ async function main() {
   logDebug(
     `stored session=${String(input.session_id ?? "")} cwd=${String(input.cwd ?? "")} chat_id=${context.chat_id}`,
   );
-  process.stdout.write("{}\n");
 }
 
 main().catch((error) => {
   process.stderr.write(`user-prompt-submit-hook failed: ${String(error)}\n`);
-  process.stdout.write("{}\n");
 });

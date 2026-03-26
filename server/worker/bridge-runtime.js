@@ -1,4 +1,8 @@
 import { createSessionActivityDispatcher } from "../session-activity-dispatcher.js";
+import {
+  HookSignalStore,
+  resolveHookSignalsPathFromDataDir,
+} from "../hook-signal-store.js";
 import { WorkerBridgeClient } from "./worker-bridge-client.js";
 import { WorkerInboundBridgeServer } from "./inbound-bridge-server.js";
 
@@ -33,6 +37,9 @@ export class DaemonBridgeRuntime {
       bridgeURL: this.daemonBridgeURL,
       token: this.daemonBridgeToken,
     });
+    this.hookSignalStore = new HookSignalStore(
+      resolveHookSignalsPathFromDataDir(this.env.CLAUDE_PLUGIN_DATA),
+    );
     this.workerControlServer = this.daemonModeEnabled
       ? new WorkerInboundBridgeServer({
           onDeliverEvent: async (input) => {
@@ -78,16 +85,22 @@ export class DaemonBridgeRuntime {
             this.markMcpActivity();
             return { ok: true };
           },
-          onPing: async () => ({
-            ok: true,
-            ts: Date.now(),
-            mcp_ready: this.workerReadyReported,
-            mcp_last_activity_at: this.lastMcpActivityAt,
-            worker_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_WORKER_ID),
-            aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
-            claude_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_SESSION_ID),
-            pid: process.pid,
-          }),
+          onPing: async () => {
+            const hookSignalState = await this.hookSignalStore.readState();
+            return {
+              ok: true,
+              ts: Date.now(),
+              mcp_ready: this.workerReadyReported,
+              mcp_last_activity_at: this.lastMcpActivityAt,
+              worker_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_WORKER_ID),
+              aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
+              claude_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_SESSION_ID),
+              pid: process.pid,
+              hook_last_activity_at: Number(hookSignalState.latest_event?.event_at ?? 0),
+              hook_latest_event: hookSignalState.latest_event,
+              hook_recent_events: hookSignalState.recent_events,
+            };
+          },
         })
       : null;
     this.workerReadyReported = false;

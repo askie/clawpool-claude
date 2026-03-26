@@ -10,6 +10,7 @@ import { DaemonControlCommandHandler } from "./control-command-handler.js";
 import { WorkerHealthInspector } from "./worker-health-inspector.js";
 import { PendingEventOrchestrator } from "./pending-event-orchestrator.js";
 import { isProcessRunning as defaultIsProcessRunning } from "../process-control.js";
+import { summarizeHookSignalEvent } from "../hook-signal-store.js";
 import {
   canDeliverToWorker,
   formatWorkerResponseAssessment,
@@ -74,6 +75,18 @@ function formatBindingSummary(binding) {
     const failureCode = normalizeString(binding?.worker_last_failure_code);
     lines.push(`最近失败: ${lastFailureAt}${failureCode ? ` (${failureCode})` : ""}`);
   }
+  const lastHookAt = formatStatusTimestamp(binding?.worker_last_hook_event_at);
+  if (lastHookAt) {
+    const lastHookSummary = summarizeHookSignalEvent({
+      event_id: binding?.worker_last_hook_event_id,
+      hook_event_name: binding?.worker_last_hook_event_name,
+      event_at: binding?.worker_last_hook_event_at,
+      detail: binding?.worker_last_hook_event_detail,
+    });
+    if (lastHookSummary) {
+      lines.push(`最近 Hook: ${lastHookSummary} @ ${lastHookAt}`);
+    }
+  }
   return lines.join("\n");
 }
 
@@ -114,6 +127,45 @@ function formatStatusTimestamp(value) {
     return "";
   }
   return new Date(numeric).toISOString();
+}
+
+function normalizeHookSignalRecord(input) {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+  const eventID = normalizeString(input.event_id);
+  const eventName = normalizeString(input.hook_event_name);
+  const eventAt = Number(input.event_at ?? 0);
+  if (!eventID || !eventName || !Number.isFinite(eventAt) || eventAt <= 0) {
+    return null;
+  }
+  return {
+    event_id: eventID,
+    hook_event_name: eventName,
+    event_at: Math.floor(eventAt),
+    detail: normalizeString(input.detail),
+  };
+}
+
+function listHookSignalRecords(pingPayload) {
+  const recentEvents = Array.isArray(pingPayload?.hook_recent_events)
+    ? pingPayload.hook_recent_events
+    : [];
+  const latestEvent = pingPayload?.hook_latest_event;
+  const deduped = new Map();
+  for (const event of [...recentEvents, latestEvent]) {
+    const normalized = normalizeHookSignalRecord(event);
+    if (!normalized) {
+      continue;
+    }
+    deduped.set(normalized.event_id, normalized);
+  }
+  return Array.from(deduped.values()).sort((left, right) => {
+    if (left.event_at !== right.event_at) {
+      return left.event_at - right.event_at;
+    }
+    return left.event_id.localeCompare(right.event_id);
+  });
 }
 
 const defaultDeliveredInFlightMaxAgeMs = 60 * 1000;
@@ -1155,6 +1207,43 @@ export class DaemonRuntime {
     return nextBinding;
   }
 
+  async recordWorkerHookSignalsObserved(binding, pingPayload) {
+    const sessionID = normalizeString(binding?.aibot_session_id);
+    if (!sessionID) {
+      return binding;
+    }
+
+    let nextBinding = binding;
+    let lastEventAt = Number(binding?.worker_last_hook_event_at ?? 0);
+    let lastEventID = normalizeString(binding?.worker_last_hook_event_id);
+    for (const event of listHookSignalRecords(pingPayload)) {
+      const isNewer = event.event_at > lastEventAt
+        || (event.event_at === lastEventAt && event.event_id !== lastEventID);
+      if (!isNewer) {
+        continue;
+      }
+      nextBinding = await this.bindingRegistry.markWorkerHookObserved(sessionID, {
+        eventID: event.event_id,
+        eventName: event.hook_event_name,
+        eventDetail: event.detail,
+        eventAt: event.event_at,
+      });
+      lastEventAt = event.event_at;
+      lastEventID = event.event_id;
+      this.trace({
+        stage: "worker_hook_signal_observed",
+        session_id: sessionID,
+        worker_id: nextBinding?.worker_id,
+        hook_event_id: event.event_id,
+        hook_event_name: event.hook_event_name,
+        hook_detail: event.detail,
+        hook_event_at: event.event_at,
+      });
+    }
+
+    return nextBinding;
+  }
+
   async probeWorkerControl(binding, runtime) {
     if (this.workerControlProbeFailureThreshold <= 0) {
       return { ok: true };
@@ -1181,6 +1270,7 @@ export class DaemonRuntime {
     }
     try {
       const pingPayload = await client.ping();
+      await this.recordWorkerHookSignalsObserved(binding, pingPayload);
       const identityHealth = this.inspectWorkerIdentityHealth(binding, runtime, pingPayload);
       if (!identityHealth.ok) {
         const details = [
@@ -1746,7 +1836,10 @@ export class DaemonRuntime {
       return false;
     }
 
-    const latestMcpActivityAt = Number(probe?.pingPayload?.mcp_last_activity_at ?? 0);
+    const latestMcpActivityAt = Math.max(
+      Number(probe?.pingPayload?.mcp_last_activity_at ?? 0),
+      Number(probe?.pingPayload?.hook_last_activity_at ?? 0),
+    );
     const timedOutMcpResults = this.listTimedOutMcpResultRecords(sessionID, Date.now(), {
       latestMcpActivityAt,
     });
