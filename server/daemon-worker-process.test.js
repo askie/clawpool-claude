@@ -194,6 +194,41 @@ await writeFile(process.env.TEST_OUTPUT_PATH, process.stdout.isTTY ? "tty" : "no
   assert.equal(actual, "tty");
 });
 
+test("spawnWorker hidden tty reports expect spawn errors without crashing the daemon", async () => {
+  if (process.platform !== "darwin") {
+    return;
+  }
+
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-hidden-tty-error-"));
+  const serverDir = path.join(tempDir, "server");
+  const missingCwd = path.join(tempDir, "missing-cwd");
+
+  await mkdir(serverDir, { recursive: true });
+  await writeFile(path.join(serverDir, "main.js"), "process.exit(0);\n", "utf8");
+
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAUDE_BIN: "/usr/bin/false",
+      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+    },
+    packageRoot: tempDir,
+    async ensureUserMcpServer() {},
+  });
+
+  await assert.rejects(
+    () => manager.spawnWorker({
+      aibotSessionID: "chat-hidden-tty-error",
+      cwd: missingCwd,
+      pluginDataDir: path.join(tempDir, "plugin-data"),
+      claudeSessionID: "claude-hidden-tty-error",
+      workerID: "worker-hidden-tty-error",
+    }),
+    /ENOENT/u,
+  );
+});
+
 test("spawnWorker hidden tty does not emit a fake spawn_id error when Claude exits immediately", async () => {
   if (process.platform !== "darwin") {
     return;

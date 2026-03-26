@@ -357,8 +357,35 @@ async function launchClaudeInHiddenPty({
     detached: true,
     windowsHide: true,
   });
-  child.unref();
-  const pid = await waitForPidFile(pidPath);
+  const pid = await new Promise((resolve, reject) => {
+    let settled = false;
+    const onError = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(error);
+    };
+    child.once("error", onError);
+    child.unref();
+    waitForPidFile(pidPath)
+      .then((nextPID) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        child.off("error", onError);
+        resolve(nextPID);
+      })
+      .catch((error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        child.off("error", onError);
+        reject(error);
+      });
+  });
   return {
     pid: Number(pid || child.pid || 0),
     wrapperPID: Number(child.pid || 0),
@@ -523,11 +550,13 @@ export class WorkerProcessManager {
     const queued = previous
       .catch(() => {})
       .then(task);
-    const tracked = queued.finally(() => {
-      if (this.spawnQueues.get(normalizedSessionID) === tracked) {
-        this.spawnQueues.delete(normalizedSessionID);
-      }
-    });
+    const tracked = queued
+      .catch(() => {})
+      .finally(() => {
+        if (this.spawnQueues.get(normalizedSessionID) === tracked) {
+          this.spawnQueues.delete(normalizedSessionID);
+        }
+      });
     this.spawnQueues.set(normalizedSessionID, tracked);
     return queued;
   }

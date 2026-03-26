@@ -1973,45 +1973,64 @@ export class DaemonRuntime {
 
   async recoverPersistedDeliveryState() {
     for (const record of this.listPendingEvents()) {
-      this.trace({
-        stage: "delivery_state_recovered",
-        event_id: record.eventID,
-        session_id: record.sessionID,
-        delivery_state: record.delivery_state,
-      });
-      const binding = this.bindingRegistry.getByAibotSessionID(record.sessionID);
-      if (!binding) {
-        await this.clearPendingEvent(record.eventID);
+      try {
         this.trace({
-          stage: "delivery_state_cleared_missing_binding",
+          stage: "delivery_state_recovered",
           event_id: record.eventID,
           session_id: record.sessionID,
-        }, "error");
-        continue;
-      }
-
-      if (record.delivery_state === "pending") {
-        let recoveredBinding = binding;
-        if (!canDeliverToWorker(recoveredBinding)) {
-          recoveredBinding = await this.ensureReadyBinding(record.sessionID);
-        }
-        if (canDeliverToWorker(recoveredBinding)) {
-          await this.flushPendingSessionEvents(record.sessionID, recoveredBinding);
-        } else {
+          delivery_state: record.delivery_state,
+        });
+        const binding = this.bindingRegistry.getByAibotSessionID(record.sessionID);
+        if (!binding) {
+          await this.clearPendingEvent(record.eventID);
           this.trace({
-            stage: "delivery_state_pending_worker_unavailable",
+            stage: "delivery_state_cleared_missing_binding",
             event_id: record.eventID,
             session_id: record.sessionID,
-            worker_id: recoveredBinding?.worker_id,
-            status: recoveredBinding?.worker_status,
           }, "error");
+          continue;
         }
-        continue;
-      }
 
-      await this.markPendingEventInterrupted(record.eventID);
-      const currentRecord = this.getPendingEvent(record.eventID) ?? record;
-      await this.failPendingEvent(currentRecord, { notifyText: false });
+        if (record.delivery_state === "pending") {
+          let recoveredBinding = binding;
+          if (!canDeliverToWorker(recoveredBinding)) {
+            recoveredBinding = await this.ensureReadyBinding(record.sessionID);
+          }
+          if (canDeliverToWorker(recoveredBinding)) {
+            await this.flushPendingSessionEvents(record.sessionID, recoveredBinding);
+          } else {
+            this.trace({
+              stage: "delivery_state_pending_worker_unavailable",
+              event_id: record.eventID,
+              session_id: record.sessionID,
+              worker_id: recoveredBinding?.worker_id,
+              status: recoveredBinding?.worker_status,
+            }, "error");
+          }
+          continue;
+        }
+
+        await this.markPendingEventInterrupted(record.eventID);
+        const currentRecord = this.getPendingEvent(record.eventID) ?? record;
+        await this.failPendingEvent(currentRecord, { notifyText: false });
+      } catch (error) {
+        const message = formatRuntimeError(error, "delivery state recovery failed");
+        this.trace({
+          stage: "delivery_state_recover_failed",
+          event_id: record.eventID,
+          session_id: record.sessionID,
+          delivery_state: record.delivery_state,
+          error: message,
+        }, "error");
+        await this.markPendingEventInterrupted(record.eventID);
+        const currentRecord = this.getPendingEvent(record.eventID) ?? record;
+        await this.failPendingEvent(currentRecord, {
+          notifyText: false,
+          replySource: "daemon_recover_failed",
+          resultCode: "worker_recover_failed",
+          resultMessage: message,
+        });
+      }
     }
   }
 

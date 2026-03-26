@@ -2928,6 +2928,82 @@ test("daemon runtime recoverPersistedDeliveryState respawns and flushes pending 
   assert.equal(deliveryStore.getPendingEvent("evt-7d")?.delivery_state, "delivered");
 });
 
+test("daemon runtime recoverPersistedDeliveryState fails pending event when worker recovery throws", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const workerCalls = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const messageDeliveryStateFile = path.join(tempDir, "message-delivery-state.json");
+
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-7d-fail",
+    claude_session_id: "claude-7d-fail",
+    cwd: tempDir,
+    worker_id: "worker-7d-fail",
+    worker_status: "stopped",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(messageDeliveryStateFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-7d-fail",
+    session_id: "chat-7d-fail",
+    msg_id: "msg-7d-fail",
+    sender_id: "sender-7d-fail",
+    content: "pending event should be failed on recovery error",
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: {
+      getWorkerRuntime() {
+        return null;
+      },
+      async spawnWorker(input) {
+        workerCalls.push({ kind: "spawn", input });
+        throw new Error("spawn hidden pty failed");
+      },
+      async stopWorker() {
+        return true;
+      },
+    },
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    async claudeSessionExists() {
+      return true;
+    },
+  });
+
+  await runtime.recoverPersistedDeliveryState();
+
+  assert.equal(workerCalls.length, 1);
+  assert.equal(deliveryStore.getPendingEvent("evt-7d-fail"), null);
+  assert.equal(deliveryStore.getRememberedSessionID("evt-7d-fail"), "");
+  assert.deepEqual(
+    sent.find((item) => item.kind === "event_result" && item.payload.event_id === "evt-7d-fail")?.payload,
+    {
+      event_id: "evt-7d-fail",
+      status: "failed",
+      code: "worker_recover_failed",
+      msg: "spawn hidden pty failed",
+    },
+  );
+  assert.equal(
+    sent.some((item) => item.kind === "text" && item.payload.eventID === "evt-7d-fail"),
+    false,
+  );
+});
+
 test("daemon runtime fails an unfinished event when worker stops mid-processing", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
