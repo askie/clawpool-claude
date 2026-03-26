@@ -1,3 +1,5 @@
+import { canDeliverToWorker, hasWorkerControl } from "./worker-state.js";
+
 function normalizeString(value) {
   return String(value ?? "").trim();
 }
@@ -8,15 +10,6 @@ function resolveRecordInFlightActivityAt(record) {
   const normalizedUpdatedAt = Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : 0;
   const normalizedComposingAt = Number.isFinite(composingAt) && composingAt > 0 ? composingAt : 0;
   return Math.max(normalizedUpdatedAt, normalizedComposingAt);
-}
-
-function hasWorkerControl(binding) {
-  return Boolean(binding?.worker_control_url && binding?.worker_control_token);
-}
-
-function canDeliverToWorker(binding) {
-  const status = normalizeString(binding?.worker_status);
-  return hasWorkerControl(binding) && status === "ready";
 }
 
 function sleep(ms) {

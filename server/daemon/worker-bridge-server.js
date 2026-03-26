@@ -190,6 +190,7 @@ export class WorkerBridgeServer {
         event_id: payload?.event_id,
         session_id: payload?.session_id,
         client_msg_id: payload?.client_msg_id,
+        worker_id: payload?.worker_id,
       });
       const result = this.onSendText
         ? await this.onSendText(payload)
@@ -204,6 +205,7 @@ export class WorkerBridgeServer {
         event_id: payload?.event_id,
         session_id: payload?.session_id,
         client_msg_id: payload?.client_msg_id,
+        worker_id: payload?.worker_id,
       });
       const result = this.onSendMedia
         ? await this.onSendMedia(payload)
@@ -243,6 +245,8 @@ export class WorkerBridgeServer {
       this.trace({
         stage: "worker_event_result_received",
         event_id: payload?.event_id,
+        session_id: payload?.session_id,
+        worker_id: payload?.worker_id,
         status: payload?.status,
         code: payload?.code,
       });

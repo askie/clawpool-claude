@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { readJSONFile, writeJSONFileAtomic } from "../json-file.js";
+import { normalizeWorkerResponseState } from "./worker-state.js";
 
 const schemaVersion = 1;
 
@@ -38,6 +39,14 @@ function normalizeWorkerPid(value) {
   return Math.floor(numeric);
 }
 
+function normalizeOptionalTimestamp(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 0;
+  }
+  return Math.floor(numeric);
+}
+
 function normalizeRuntime(input) {
   if (!input || typeof input !== "object") {
     return null;
@@ -56,6 +65,12 @@ function normalizeRuntime(input) {
     worker_status: normalizeWorkerStatus(input.worker_status),
     worker_control_url: normalizeString(input.worker_control_url),
     worker_control_token: normalizeString(input.worker_control_token),
+    worker_response_state: normalizeWorkerResponseState(input.worker_response_state),
+    worker_response_reason: normalizeString(input.worker_response_reason),
+    worker_response_updated_at: normalizeOptionalTimestamp(input.worker_response_updated_at),
+    worker_last_reply_at: normalizeOptionalTimestamp(input.worker_last_reply_at),
+    worker_last_failure_at: normalizeOptionalTimestamp(input.worker_last_failure_at),
+    worker_last_failure_code: normalizeString(input.worker_last_failure_code),
     updated_at: normalizeTimestamp(input.updated_at),
     last_started_at: normalizeTimestamp(input.last_started_at, 0),
     last_stopped_at: normalizeTimestamp(input.last_stopped_at, 0),
@@ -124,6 +139,12 @@ export class WorkerRuntimeStore {
         aibot_session_id: normalizedSessionID,
         worker_status: "stopped",
         worker_pid: 0,
+        worker_response_state: "unknown",
+        worker_response_reason: "",
+        worker_response_updated_at: 0,
+        worker_last_reply_at: 0,
+        worker_last_failure_at: 0,
+        worker_last_failure_code: "",
         updated_at: Date.now(),
         last_started_at: 0,
         last_stopped_at: 0,

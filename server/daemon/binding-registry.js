@@ -1,6 +1,7 @@
 import path from "node:path";
 import { SessionBindingStore } from "./session-binding-store.js";
 import { WorkerRuntimeStore } from "./worker-runtime-store.js";
+import { normalizeWorkerResponseState } from "./worker-state.js";
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -27,6 +28,41 @@ function resolveWorkerRuntimeStorePath(bindingFilePath) {
   return path.join(parsed.dir, `${parsed.name}.worker-runtimes${parsed.ext || ".json"}`);
 }
 
+function buildWorkerResponsePatch(workerStatus, { observedAt = Date.now() } = {}) {
+  const normalizedStatus = normalizeString(workerStatus);
+  if (normalizedStatus === "starting") {
+    return {
+      worker_response_state: "unknown",
+      worker_response_reason: "worker_starting",
+      worker_response_updated_at: observedAt,
+      worker_last_reply_at: 0,
+      worker_last_failure_at: 0,
+      worker_last_failure_code: "",
+    };
+  }
+  if (normalizedStatus === "connected") {
+    return {
+      worker_response_state: "unverified",
+      worker_response_reason: "worker_connected",
+      worker_response_updated_at: observedAt,
+      worker_last_reply_at: 0,
+      worker_last_failure_at: 0,
+      worker_last_failure_code: "",
+    };
+  }
+  if (normalizedStatus === "ready") {
+    return {
+      worker_response_state: "unverified",
+      worker_response_reason: "worker_ready",
+      worker_response_updated_at: observedAt,
+      worker_last_reply_at: 0,
+      worker_last_failure_at: 0,
+      worker_last_failure_code: "",
+    };
+  }
+  return {};
+}
+
 function mergeBindingWithRuntime(binding, runtime) {
   if (!binding) {
     return null;
@@ -39,6 +75,12 @@ function mergeBindingWithRuntime(binding, runtime) {
     worker_status: normalizeString(runtime?.worker_status) || "stopped",
     worker_control_url: normalizeString(runtime?.worker_control_url),
     worker_control_token: normalizeString(runtime?.worker_control_token),
+    worker_response_state: normalizeWorkerResponseState(runtime?.worker_response_state),
+    worker_response_reason: normalizeString(runtime?.worker_response_reason),
+    worker_response_updated_at: normalizeTimestamp(runtime?.worker_response_updated_at, 0),
+    worker_last_reply_at: normalizeTimestamp(runtime?.worker_last_reply_at, 0),
+    worker_last_failure_at: normalizeTimestamp(runtime?.worker_last_failure_at, 0),
+    worker_last_failure_code: normalizeString(runtime?.worker_last_failure_code),
     updated_at: Math.max(
       normalizeTimestamp(binding.updated_at),
       normalizeTimestamp(runtime?.updated_at),
@@ -98,6 +140,9 @@ export class BindingRegistry {
       worker_status: input.worker_status || "starting",
       worker_control_url: input.worker_control_url,
       worker_control_token: input.worker_control_token,
+      ...buildWorkerResponsePatch(input.worker_status || "starting", {
+        observedAt: input.updated_at ?? Date.now(),
+      }),
       updated_at: input.updated_at ?? Date.now(),
       last_started_at: input.last_started_at ?? 0,
       last_stopped_at: input.last_stopped_at ?? 0,
@@ -138,6 +183,7 @@ export class BindingRegistry {
       worker_status: "starting",
       worker_control_url: workerControlURL,
       worker_control_token: workerControlToken,
+      ...buildWorkerResponsePatch("starting", { observedAt: updatedAt }),
       updated_at: updatedAt,
       last_started_at: lastStartedAt,
     });
@@ -162,6 +208,7 @@ export class BindingRegistry {
       worker_status: "connected",
       worker_control_url: workerControlURL,
       worker_control_token: workerControlToken,
+      ...buildWorkerResponsePatch("connected", { observedAt: updatedAt }),
       updated_at: updatedAt,
       last_started_at: lastStartedAt,
     });
@@ -186,6 +233,7 @@ export class BindingRegistry {
       worker_status: "ready",
       worker_control_url: workerControlURL,
       worker_control_token: workerControlToken,
+      ...buildWorkerResponsePatch("ready", { observedAt: updatedAt }),
       updated_at: updatedAt,
       last_started_at: lastStartedAt,
     });
@@ -220,6 +268,43 @@ export class BindingRegistry {
       worker_control_token: "",
       updated_at: updatedAt,
       last_stopped_at: lastStoppedAt,
+    });
+    return mergeBindingWithRuntime(binding, runtime);
+  }
+
+  async markWorkerHealthy(aibotSessionID, {
+    observedAt = Date.now(),
+    reason = "worker_reply_observed",
+    lastReplyAt = 0,
+  } = {}) {
+    const binding = this.bindingStore.get(aibotSessionID);
+    if (!binding) {
+      throw new Error("binding not found");
+    }
+    const runtime = await this.workerRuntimeStore.createOrUpdate(aibotSessionID, {
+      worker_response_state: "healthy",
+      worker_response_reason: reason,
+      worker_response_updated_at: observedAt,
+      worker_last_reply_at: lastReplyAt || observedAt,
+    });
+    return mergeBindingWithRuntime(binding, runtime);
+  }
+
+  async markWorkerResponseFailed(aibotSessionID, {
+    observedAt = Date.now(),
+    reason = "worker_response_failed",
+    failureCode = "",
+  } = {}) {
+    const binding = this.bindingStore.get(aibotSessionID);
+    if (!binding) {
+      throw new Error("binding not found");
+    }
+    const runtime = await this.workerRuntimeStore.createOrUpdate(aibotSessionID, {
+      worker_response_state: "failed",
+      worker_response_reason: reason,
+      worker_response_updated_at: observedAt,
+      worker_last_failure_at: observedAt,
+      worker_last_failure_code: failureCode,
     });
     return mergeBindingWithRuntime(binding, runtime);
   }

@@ -169,6 +169,15 @@ export class DaemonBridgeRuntime {
     return this.workerControlServer?.token ?? "";
   }
 
+  buildWorkerIdentityPayload() {
+    return {
+      worker_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_WORKER_ID),
+      aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
+      claude_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_SESSION_ID),
+      pid: process.pid,
+    };
+  }
+
   async startControlServer() {
     if (this.workerControlServer) {
       await this.workerControlServer.start();
@@ -191,6 +200,7 @@ export class DaemonBridgeRuntime {
       client_msg_id: payload.clientMsgID,
     });
     const response = await this.workerBridgeClient.sendText({
+      ...this.buildWorkerIdentityPayload(),
       event_id: payload.eventID,
       session_id: payload.sessionID,
       text: payload.text,
@@ -212,6 +222,7 @@ export class DaemonBridgeRuntime {
       client_msg_id: payload.clientMsgID,
     });
     const response = await this.workerBridgeClient.sendMedia({
+      ...this.buildWorkerIdentityPayload(),
       event_id: payload.eventID,
       session_id: payload.sessionID,
       media_url: payload.mediaURL,
@@ -233,6 +244,7 @@ export class DaemonBridgeRuntime {
       msg_id: messageID,
     });
     const response = await this.workerBridgeClient.deleteMessage({
+      ...this.buildWorkerIdentityPayload(),
       session_id: sessionID,
       msg_id: messageID,
     });
@@ -250,6 +262,7 @@ export class DaemonBridgeRuntime {
       msg_id: msgID,
     });
     const response = await this.workerBridgeClient.ackEvent({
+      ...this.buildWorkerIdentityPayload(),
       event_id: eventID,
       session_id: sessionID,
       msg_id: msgID,
@@ -268,7 +281,11 @@ export class DaemonBridgeRuntime {
       status: payload?.status,
       code: payload?.code,
     });
-    const response = await this.workerBridgeClient.sendEventResult(payload);
+    const response = await this.workerBridgeClient.sendEventResult({
+      ...this.buildWorkerIdentityPayload(),
+      session_id: normalizeOptionalString(payload?.session_id),
+      ...payload,
+    });
     this.markMcpActivity();
     return response;
   }
@@ -282,7 +299,10 @@ export class DaemonBridgeRuntime {
       stop_id: payload?.stop_id,
       accepted: payload?.accepted,
     });
-    const response = await this.workerBridgeClient.sendEventStopAck(payload);
+    const response = await this.workerBridgeClient.sendEventStopAck({
+      ...this.buildWorkerIdentityPayload(),
+      ...payload,
+    });
     this.markMcpActivity();
     return response;
   }
@@ -297,7 +317,10 @@ export class DaemonBridgeRuntime {
       status: payload?.status,
       code: payload?.code,
     });
-    const response = await this.workerBridgeClient.sendEventStopResult(payload);
+    const response = await this.workerBridgeClient.sendEventStopResult({
+      ...this.buildWorkerIdentityPayload(),
+      ...payload,
+    });
     this.markMcpActivity();
     return response;
   }
@@ -330,9 +353,7 @@ export class DaemonBridgeRuntime {
       pid,
     });
     const response = await this.workerBridgeClient.registerWorker({
-      worker_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_WORKER_ID),
-      aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
-      claude_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_SESSION_ID),
+      ...this.buildWorkerIdentityPayload(),
       cwd,
       plugin_data_dir: normalizeOptionalString(pluginDataDir),
       worker_control_url: this.getWorkerControlURL(),
@@ -358,10 +379,7 @@ export class DaemonBridgeRuntime {
         status: "connected",
       });
       const response = await this.workerBridgeClient.sendStatusUpdate({
-        worker_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_WORKER_ID),
-        aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
-        claude_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_SESSION_ID),
-        pid: process.pid,
+        ...this.buildWorkerIdentityPayload(),
         worker_control_url: this.getWorkerControlURL(),
         worker_control_token: this.getWorkerControlToken(),
         status: "connected",
@@ -396,10 +414,7 @@ export class DaemonBridgeRuntime {
         status: "ready",
       });
       await this.workerBridgeClient.sendStatusUpdate({
-        worker_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_WORKER_ID),
-        aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
-        claude_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_SESSION_ID),
-        pid: process.pid,
+        ...this.buildWorkerIdentityPayload(),
         worker_control_url: this.getWorkerControlURL(),
         worker_control_token: this.getWorkerControlToken(),
         status: "ready",
@@ -424,10 +439,7 @@ export class DaemonBridgeRuntime {
     try {
       await this.stopControlServer();
       await this.workerBridgeClient.sendStatusUpdate({
-        worker_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_WORKER_ID),
-        aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
-        claude_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_SESSION_ID),
-        pid: process.pid,
+        ...this.buildWorkerIdentityPayload(),
         status: "stopped",
       });
       this.markMcpActivity();

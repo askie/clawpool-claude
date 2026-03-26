@@ -1136,6 +1136,135 @@ test("daemon runtime waits for ready before delivering to a connected worker bri
   assert.equal(sent.filter((item) => item.kind === "text").length, 0);
 });
 
+test("daemon runtime does not reuse a ready worker after a real response failure", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const workerCalls = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-ready-failed",
+    claude_session_id: "claude-ready-failed",
+    cwd: tempDir,
+    worker_id: "worker-ready-failed",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9992",
+    worker_control_token: "token-ready-failed",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+  await registry.markWorkerResponseFailed("chat-ready-failed", {
+    observedAt: 101,
+    reason: "claude_result_timeout",
+    failureCode: "claude_result_timeout",
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: {
+      getWorkerRuntime() {
+        return null;
+      },
+      async spawnWorker(input) {
+        workerCalls.push(input);
+        return {
+          worker_id: input.workerID,
+          status: "starting",
+        };
+      },
+    },
+    aibotClient: makeAibotClient([]),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    workerRuntimeHealthCheckMs: 0,
+    async claudeSessionExists() {
+      return true;
+    },
+  });
+
+  const binding = registry.getByAibotSessionID("chat-ready-failed");
+  const ensured = await runtime.ensureWorker(binding);
+
+  assert.equal(workerCalls.length, 1);
+  assert.equal(workerCalls[0].workerID, "worker-ready-failed");
+  assert.equal(workerCalls[0].resumeSession, true);
+  assert.equal(ensured?.worker_id, "worker-ready-failed");
+});
+
+test("daemon runtime records real worker responses and ignores stale worker results", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-observe",
+    claude_session_id: "claude-observe",
+    cwd: tempDir,
+    worker_id: "worker-current",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9993",
+    worker_control_token: "token-observe",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager([]),
+    aibotClient: makeAibotClient([]),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    workerRuntimeHealthCheckMs: 0,
+  });
+
+  await runtime.recordWorkerReplyObserved({
+    session_id: "chat-observe",
+    worker_id: "worker-current",
+    event_id: "evt-observe-1",
+  });
+  let current = registry.getByAibotSessionID("chat-observe");
+  assert.equal(current?.worker_response_state, "healthy");
+  assert.equal(current?.worker_response_reason, "worker_text_reply_observed");
+
+  await runtime.recordWorkerEventResultObserved({
+    session_id: "chat-observe",
+    worker_id: "worker-current",
+    event_id: "evt-observe-2",
+    status: "failed",
+    code: "claude_result_timeout",
+  });
+  current = registry.getByAibotSessionID("chat-observe");
+  assert.equal(current?.worker_response_state, "failed");
+  assert.equal(current?.worker_last_failure_code, "claude_result_timeout");
+
+  await registry.markWorkerReady("chat-observe", {
+    workerID: "worker-next",
+    workerPid: 20001,
+    workerControlURL: "http://127.0.0.1:9994",
+    workerControlToken: "token-next",
+    updatedAt: 300,
+    lastStartedAt: 300,
+  });
+  await runtime.recordWorkerEventResultObserved({
+    session_id: "chat-observe",
+    worker_id: "worker-current",
+    claude_session_id: "claude-observe",
+    event_id: "evt-observe-3",
+    status: "failed",
+    code: "claude_result_timeout",
+  });
+  current = registry.getByAibotSessionID("chat-observe");
+  assert.equal(current?.worker_id, "worker-next");
+  assert.equal(current?.worker_response_state, "unverified");
+  assert.equal(current?.worker_response_reason, "worker_ready");
+});
+
 test("daemon runtime fails fast when worker startup stays unready", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];

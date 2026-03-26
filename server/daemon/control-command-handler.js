@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveWorkerPluginDataDir } from "./daemon-paths.js";
+import { formatWorkerResponseAssessment } from "./worker-state.js";
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -9,12 +10,17 @@ function defaultFormatBindingSummary(binding) {
   if (!binding) {
     return "当前会话还没有绑定目录。";
   }
-  return [
+  const lines = [
     `Aibot 会话: ${binding.aibot_session_id}`,
     `Claude 会话: ${binding.claude_session_id}`,
     `目录: ${binding.cwd}`,
     `Worker 状态: ${binding.worker_status}`,
-  ].join("\n");
+    `可用性评估: ${formatWorkerResponseAssessment(binding)}`,
+  ];
+  if (normalizeString(binding.worker_response_reason)) {
+    lines.push(`评估原因: ${normalizeString(binding.worker_response_reason)}`);
+  }
+  return lines.join("\n");
 }
 
 function defaultBuildMissingBindingCardOptions() {

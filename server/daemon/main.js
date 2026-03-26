@@ -303,23 +303,31 @@ export async function run(argv = [], env = process.env) {
       }
       return { ok: true };
     },
-    onSendText: async (payload) => aibotClient.sendText({
-      eventID: payload.event_id,
-      sessionID: payload.session_id,
-      text: payload.text,
-      quotedMessageID: payload.quoted_message_id,
-      clientMsgID: payload.client_msg_id,
-      extra: payload.extra,
-    }),
-    onSendMedia: async (payload) => aibotClient.sendMedia({
-      eventID: payload.event_id,
-      sessionID: payload.session_id,
-      mediaURL: payload.media_url,
-      caption: payload.caption,
-      quotedMessageID: payload.quoted_message_id,
-      clientMsgID: payload.client_msg_id,
-      extra: payload.extra,
-    }),
+    onSendText: async (payload) => {
+      const ack = await aibotClient.sendText({
+        eventID: payload.event_id,
+        sessionID: payload.session_id,
+        text: payload.text,
+        quotedMessageID: payload.quoted_message_id,
+        clientMsgID: payload.client_msg_id,
+        extra: payload.extra,
+      });
+      await runtime?.recordWorkerReplyObserved?.(payload, { kind: "text" });
+      return ack;
+    },
+    onSendMedia: async (payload) => {
+      const ack = await aibotClient.sendMedia({
+        eventID: payload.event_id,
+        sessionID: payload.session_id,
+        mediaURL: payload.media_url,
+        caption: payload.caption,
+        quotedMessageID: payload.quoted_message_id,
+        clientMsgID: payload.client_msg_id,
+        extra: payload.extra,
+      });
+      await runtime?.recordWorkerReplyObserved?.(payload, { kind: "media" });
+      return ack;
+    },
     onDeleteMessage: async (payload) => aibotClient.deleteMessage(
       payload.session_id,
       payload.msg_id,
@@ -333,6 +341,7 @@ export async function run(argv = [], env = process.env) {
       return { ok: true };
     },
     onSendEventResult: async (payload) => {
+      await runtime?.recordWorkerEventResultObserved?.(payload);
       aibotClient.sendEventResult(payload);
       await runtime?.handleEventCompleted?.(payload?.event_id);
       return { ok: true };

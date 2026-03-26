@@ -10,6 +10,7 @@ import { DaemonControlCommandHandler } from "./control-command-handler.js";
 import { WorkerHealthInspector } from "./worker-health-inspector.js";
 import { PendingEventOrchestrator } from "./pending-event-orchestrator.js";
 import { isProcessRunning as defaultIsProcessRunning } from "../process-control.js";
+import { canDeliverToWorker, formatWorkerResponseAssessment } from "./worker-state.js";
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -42,12 +43,27 @@ function formatBindingSummary(binding) {
   if (!binding) {
     return "当前会话还没有绑定目录。";
   }
-  return [
+  const lines = [
     `Aibot 会话: ${binding.aibot_session_id}`,
     `Claude 会话: ${binding.claude_session_id}`,
     `目录: ${binding.cwd}`,
     `Worker 状态: ${binding.worker_status}`,
-  ].join("\n");
+    `可用性评估: ${formatWorkerResponseAssessment(binding)}`,
+  ];
+  const responseReason = normalizeString(binding?.worker_response_reason);
+  if (responseReason) {
+    lines.push(`评估原因: ${responseReason}`);
+  }
+  const lastReplyAt = formatStatusTimestamp(binding?.worker_last_reply_at);
+  if (lastReplyAt) {
+    lines.push(`最近成功: ${lastReplyAt}`);
+  }
+  const lastFailureAt = formatStatusTimestamp(binding?.worker_last_failure_at);
+  if (lastFailureAt) {
+    const failureCode = normalizeString(binding?.worker_last_failure_code);
+    lines.push(`最近失败: ${lastFailureAt}${failureCode ? ` (${failureCode})` : ""}`);
+  }
+  return lines.join("\n");
 }
 
 function buildInterruptedEventNotice() {
@@ -69,15 +85,6 @@ function buildMissingBindingCardOptions() {
   };
 }
 
-function hasWorkerControl(binding) {
-  return Boolean(binding?.worker_control_url && binding?.worker_control_token);
-}
-
-function canDeliverToWorker(binding) {
-  const status = normalizeString(binding?.worker_status);
-  return hasWorkerControl(binding) && status === "ready";
-}
-
 function withWorkerLaunchFailure(binding, code) {
   return {
     ...(binding ?? {}),
@@ -90,12 +97,24 @@ function formatRuntimeError(error, fallback = "处理失败。") {
   return message || fallback;
 }
 
+function formatStatusTimestamp(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return "";
+  }
+  return new Date(numeric).toISOString();
+}
+
 const defaultDeliveredInFlightMaxAgeMs = 60 * 1000;
 const defaultWorkerControlProbeFailureThreshold = 3;
 const defaultMcpInteractionIdleMs = 5 * 60 * 1000;
 const defaultMcpResultTimeoutMs = 12 * 60 * 1000;
 const defaultRecentRevokeRetentionMs = 24 * 60 * 60 * 1000;
 const defaultAuthFailureCooldownMs = 60 * 1000;
+const workerResponseFailureCodes = new Set([
+  "claude_result_timeout",
+  "channel_notification_failed",
+]);
 
 function normalizeNonNegativeInt(value, fallbackValue) {
   const numeric = Number(value);
@@ -132,6 +151,22 @@ function buildRevokeDedupKey({ eventID = "", sessionID = "", msgID = "" } = {}) 
     return `${normalizedSessionID}:${normalizedMsgID}`;
   }
   return normalizeString(eventID);
+}
+
+function classifyWorkerEventResult(payload) {
+  const code = normalizeString(payload?.code);
+  if (workerResponseFailureCodes.has(code)) {
+    return {
+      state: "failed",
+      reason: code,
+      failureCode: code,
+    };
+  }
+  return {
+    state: "healthy",
+    reason: code || normalizeString(payload?.status) || "worker_event_result_observed",
+    failureCode: "",
+  };
 }
 
 export class DaemonRuntime {
@@ -671,6 +706,118 @@ export class DaemonRuntime {
     });
   }
 
+  resolveObservedSessionID(payload = {}) {
+    const explicitSessionID = normalizeString(payload?.session_id);
+    if (explicitSessionID) {
+      return explicitSessionID;
+    }
+    return normalizeString(this.messageDeliveryStore.getRememberedSessionID(payload?.event_id));
+  }
+
+  shouldIgnoreObservedWorker(binding, payload = {}) {
+    if (!binding) {
+      return false;
+    }
+    const observedWorkerID = normalizeString(payload?.worker_id);
+    if (
+      observedWorkerID
+      && normalizeString(binding?.worker_id)
+      && observedWorkerID !== normalizeString(binding.worker_id)
+    ) {
+      return true;
+    }
+    const observedClaudeSessionID = normalizeString(payload?.claude_session_id);
+    if (
+      observedClaudeSessionID
+      && normalizeString(binding?.claude_session_id)
+      && observedClaudeSessionID !== normalizeString(binding.claude_session_id)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  traceWorkerObservationIgnored(stage, binding, payload = {}) {
+    this.trace({
+      stage,
+      event_id: payload?.event_id,
+      session_id: this.resolveObservedSessionID(payload),
+      worker_id: normalizeString(payload?.worker_id),
+      expected_worker_id: normalizeString(binding?.worker_id),
+      claude_session_id: normalizeString(payload?.claude_session_id),
+      expected_claude_session_id: normalizeString(binding?.claude_session_id),
+    }, "error");
+  }
+
+  async recordWorkerReplyObserved(payload, { kind = "text" } = {}) {
+    const sessionID = this.resolveObservedSessionID(payload);
+    if (!sessionID) {
+      return null;
+    }
+    const binding = this.bindingRegistry.getByAibotSessionID(sessionID);
+    if (!binding) {
+      return null;
+    }
+    if (this.shouldIgnoreObservedWorker(binding, payload)) {
+      this.traceWorkerObservationIgnored("worker_reply_observation_ignored_stale", binding, payload);
+      return binding;
+    }
+    const observedAt = Date.now();
+    const nextBinding = await this.bindingRegistry.markWorkerHealthy(sessionID, {
+      observedAt,
+      reason: kind === "media" ? "worker_media_reply_observed" : "worker_text_reply_observed",
+      lastReplyAt: observedAt,
+    });
+    this.trace({
+      stage: "worker_response_state_updated",
+      session_id: sessionID,
+      worker_id: nextBinding?.worker_id,
+      response_state: nextBinding?.worker_response_state,
+      response_reason: nextBinding?.worker_response_reason,
+      event_id: payload?.event_id,
+      response_kind: kind,
+    });
+    return nextBinding;
+  }
+
+  async recordWorkerEventResultObserved(payload) {
+    const sessionID = this.resolveObservedSessionID(payload);
+    if (!sessionID) {
+      return null;
+    }
+    const binding = this.bindingRegistry.getByAibotSessionID(sessionID);
+    if (!binding) {
+      return null;
+    }
+    if (this.shouldIgnoreObservedWorker(binding, payload)) {
+      this.traceWorkerObservationIgnored("worker_event_result_ignored_stale", binding, payload);
+      return binding;
+    }
+    const observedAt = Date.now();
+    const classification = classifyWorkerEventResult(payload);
+    const nextBinding = classification.state === "failed"
+      ? await this.bindingRegistry.markWorkerResponseFailed(sessionID, {
+          observedAt,
+          reason: classification.reason,
+          failureCode: classification.failureCode,
+        })
+      : await this.bindingRegistry.markWorkerHealthy(sessionID, {
+          observedAt,
+          reason: classification.reason,
+        });
+    this.trace({
+      stage: "worker_response_state_updated",
+      session_id: sessionID,
+      worker_id: nextBinding?.worker_id,
+      response_state: nextBinding?.worker_response_state,
+      response_reason: nextBinding?.worker_response_reason,
+      event_id: payload?.event_id,
+      terminal_status: normalizeString(payload?.status),
+      terminal_code: normalizeString(payload?.code),
+    }, classification.state === "failed" ? "error" : "info");
+    return nextBinding;
+  }
+
   async probeWorkerControl(binding, runtime) {
     if (this.workerControlProbeFailureThreshold <= 0) {
       return { ok: true };
@@ -1166,6 +1313,11 @@ export class DaemonRuntime {
         resume_session: Boolean(authRuntime?.resume_session),
       }, "error");
       await this.workerProcessManager?.stopWorker?.(workerID);
+      await this.bindingRegistry.markWorkerResponseFailed(sessionID, {
+        observedAt: Date.now(),
+        reason: authExitSignal,
+        failureCode: authExitSignal,
+      });
 
       const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
         updatedAt: Date.now(),
@@ -1194,9 +1346,10 @@ export class DaemonRuntime {
 
     const pid = resolveExpectedWorkerPid(previousBinding, runtime);
     if (Number.isFinite(pid) && pid > 0 && !this.isProcessRunning(pid)) {
+      const exitSignal = normalizeString(runtime.exit_signal) || "worker_exited";
       this.workerProcessManager?.markWorkerRuntimeStopped?.(workerID, {
         exitCode: Number(runtime.exit_code ?? 0),
-        exitSignal: normalizeString(runtime.exit_signal) || "worker_exited",
+        exitSignal,
       });
 
       this.trace({
@@ -1206,6 +1359,11 @@ export class DaemonRuntime {
         pid,
         previous_status: workerStatus,
       }, "error");
+      await this.bindingRegistry.markWorkerResponseFailed(sessionID, {
+        observedAt: Date.now(),
+        reason: exitSignal,
+        failureCode: exitSignal,
+      });
 
       const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
         updatedAt: Date.now(),
@@ -1233,6 +1391,11 @@ export class DaemonRuntime {
         expected_pid: probe.expectedPid,
         reported_pid: probe.reportedPid,
       }, "error");
+      await this.bindingRegistry.markWorkerResponseFailed(sessionID, {
+        observedAt: Date.now(),
+        reason: normalizeString(probe.reason) || "worker_control_unreachable",
+        failureCode: "worker_control_unreachable",
+      });
 
       const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
         updatedAt: Date.now(),
@@ -1266,6 +1429,11 @@ export class DaemonRuntime {
         timed_out_count: timedOutMcpResults.length,
         event_ids: timedOutMcpResults.map((record) => record.eventID).slice(0, 5),
       }, "error");
+      await this.bindingRegistry.markWorkerResponseFailed(sessionID, {
+        observedAt: Date.now(),
+        reason: "mcp_result_timeout",
+        failureCode: "mcp_result_timeout",
+      });
       const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
         updatedAt: Date.now(),
         lastStoppedAt: Date.now(),
@@ -1716,6 +1884,11 @@ export class DaemonRuntime {
               // best effort
             }
             try {
+              await this.bindingRegistry.markWorkerResponseFailed(event.session_id, {
+                observedAt: Date.now(),
+                reason: launchFailure,
+                failureCode: launchFailure,
+              });
               await this.bindingRegistry.markWorkerStopped(event.session_id, {
                 updatedAt: Date.now(),
                 lastStoppedAt: Date.now(),
