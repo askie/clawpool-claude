@@ -531,6 +531,7 @@ export class DaemonRuntime {
       resolve: null,
       timeoutTimer: null,
       cleanupTimer: null,
+      timeoutRecovering: false,
       binding: probingBinding,
     };
     const probeResult = new Promise((resolve) => {
@@ -607,6 +608,9 @@ export class DaemonRuntime {
       }, "error");
       return null;
     }
+    if (record?.settled) {
+      return this.bindingRegistry.getByAibotSessionID(record?.sessionID);
+    }
 
     const runtime = this.workerProcessManager?.getWorkerRuntime?.(currentWorkerID);
     const identityHealth = this.inspectWorkerIdentityHealth(currentBinding, runtime, pingPayload);
@@ -644,8 +648,11 @@ export class DaemonRuntime {
     if (record?.settled) {
       return null;
     }
-
-    const recoveredBinding = await this.recoverWorkerPingProbeTimeout(record, client);
+    record.timeoutRecovering = true;
+    const recoveredBinding = await this.recoverWorkerPingProbeTimeout(record, client)
+      .finally(() => {
+        record.timeoutRecovering = false;
+      });
     if (canDeliverToWorker(recoveredBinding)) {
       return recoveredBinding;
     }
@@ -695,12 +702,25 @@ export class DaemonRuntime {
 
     if (!record.settled) {
       const status = normalizeString(payload?.status);
+      const code = normalizeString(payload?.code);
+      if (record.timeoutRecovering && status !== "responded" && code === "claude_result_timeout") {
+        this.trace({
+          stage: "worker_ping_probe_event_result_ignored_timeout_during_recovery",
+          session_id: record.sessionID,
+          worker_id: record.workerID,
+          claude_session_id: record.claudeSessionID,
+          event_id: record.eventID,
+          terminal_status: status,
+          terminal_code: code,
+        });
+        return { handled: true };
+      }
       await this.updateWorkerPingProbeOutcome(record, {
         state: "failed",
         reason: status === "responded"
           ? "worker_ping_probe_missing_pong"
-          : normalizeString(payload?.code) || "worker_ping_probe_failed",
-        failureCode: normalizeString(payload?.code) || (
+          : code || "worker_ping_probe_failed",
+        failureCode: code || (
           status === "responded"
             ? "worker_ping_probe_missing_pong"
             : "worker_ping_probe_failed"
