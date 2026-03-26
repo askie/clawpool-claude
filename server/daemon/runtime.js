@@ -10,7 +10,18 @@ import { DaemonControlCommandHandler } from "./control-command-handler.js";
 import { WorkerHealthInspector } from "./worker-health-inspector.js";
 import { PendingEventOrchestrator } from "./pending-event-orchestrator.js";
 import { isProcessRunning as defaultIsProcessRunning } from "../process-control.js";
-import { canDeliverToWorker, formatWorkerResponseAssessment } from "./worker-state.js";
+import {
+  canDeliverToWorker,
+  formatWorkerResponseAssessment,
+  hasReadyWorkerBridge,
+  needsWorkerProbe,
+  normalizeWorkerResponseState,
+} from "./worker-state.js";
+import {
+  buildWorkerPingProbePayload,
+  defaultWorkerPingProbeTimeoutMs,
+  isExpectedWorkerProbeReply,
+} from "../worker-probe.js";
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -111,6 +122,7 @@ const defaultMcpInteractionIdleMs = 5 * 60 * 1000;
 const defaultMcpResultTimeoutMs = 12 * 60 * 1000;
 const defaultRecentRevokeRetentionMs = 24 * 60 * 60 * 1000;
 const defaultAuthFailureCooldownMs = 60 * 1000;
+const defaultWorkerPingProbeRetentionMs = 60 * 1000;
 const workerResponseFailureCodes = new Set([
   "claude_result_timeout",
   "channel_notification_failed",
@@ -188,6 +200,8 @@ export class DaemonRuntime {
     mcpResultTimeoutMs = defaultMcpResultTimeoutMs,
     recentRevokeRetentionMs = defaultRecentRevokeRetentionMs,
     authFailureCooldownMs = defaultAuthFailureCooldownMs,
+    workerPingProbeTimeoutMs = defaultWorkerPingProbeTimeoutMs,
+    workerPingProbeRetentionMs = defaultWorkerPingProbeRetentionMs,
   }) {
     this.env = env;
     this.bindingRegistry = bindingRegistry;
@@ -234,6 +248,14 @@ export class DaemonRuntime {
       authFailureCooldownMs ?? env.CLAWPOOL_CLAUDE_AUTH_FAILURE_COOLDOWN_MS,
       defaultAuthFailureCooldownMs,
     );
+    this.workerPingProbeTimeoutMs = normalizeNonNegativeInt(
+      workerPingProbeTimeoutMs ?? env.CLAWPOOL_CLAUDE_WORKER_PING_PROBE_TIMEOUT_MS,
+      defaultWorkerPingProbeTimeoutMs,
+    );
+    this.workerPingProbeRetentionMs = normalizeNonNegativeInt(
+      workerPingProbeRetentionMs ?? env.CLAWPOOL_CLAUDE_WORKER_PING_PROBE_RETENTION_MS,
+      defaultWorkerPingProbeRetentionMs,
+    );
     this.workerHealthInspector = new WorkerHealthInspector({
       getPendingEventsForSession: (sessionID) => this.messageDeliveryStore.listPendingEventsForSession(sessionID),
       mcpInteractionIdleMs: this.mcpInteractionIdleMs,
@@ -243,6 +265,8 @@ export class DaemonRuntime {
       ? isProcessRunning
       : defaultIsProcessRunning;
     this.workerControlProbeFailures = new Map();
+    this.workerPingProbeRecords = new Map();
+    this.workerPingProbeInFlight = new Map();
     this.ensureWorkerInFlight = new Map();
     this.resumeAuthRecoveryInFlight = new Map();
     this.controlCommandHandler = new DaemonControlCommandHandler({
@@ -283,12 +307,284 @@ export class DaemonRuntime {
     }, { level });
   }
 
+  getWorkerPingProbeRecord(eventID) {
+    const normalizedEventID = normalizeString(eventID);
+    if (!normalizedEventID) {
+      return null;
+    }
+    return this.workerPingProbeRecords.get(normalizedEventID) ?? null;
+  }
+
+  clearWorkerPingProbeRecord(eventID) {
+    const normalizedEventID = normalizeString(eventID);
+    if (!normalizedEventID) {
+      return;
+    }
+    const record = this.workerPingProbeRecords.get(normalizedEventID);
+    if (!record) {
+      return;
+    }
+    if (record.timeoutTimer) {
+      clearTimeout(record.timeoutTimer);
+    }
+    if (record.cleanupTimer) {
+      clearTimeout(record.cleanupTimer);
+    }
+    this.workerPingProbeRecords.delete(normalizedEventID);
+  }
+
+  scheduleWorkerPingProbeRecordCleanup(eventID, retentionMs = this.workerPingProbeRetentionMs) {
+    const record = this.getWorkerPingProbeRecord(eventID);
+    if (!record) {
+      return;
+    }
+    if (record.cleanupTimer) {
+      clearTimeout(record.cleanupTimer);
+    }
+    if (retentionMs <= 0) {
+      this.clearWorkerPingProbeRecord(eventID);
+      return;
+    }
+    record.cleanupTimer = setTimeout(() => {
+      this.clearWorkerPingProbeRecord(eventID);
+    }, retentionMs);
+    record.cleanupTimer.unref?.();
+  }
+
+  async updateWorkerPingProbeOutcome(record, {
+    state,
+    reason,
+    failureCode = "",
+    payload = {},
+    level = "info",
+  } = {}) {
+    if (!record || record.settled) {
+      return this.bindingRegistry.getByAibotSessionID(record?.sessionID);
+    }
+    record.settled = true;
+    if (record.timeoutTimer) {
+      clearTimeout(record.timeoutTimer);
+      record.timeoutTimer = null;
+    }
+
+    const observedAt = Date.now();
+    const nextBinding = state === "healthy"
+      ? await this.bindingRegistry.markWorkerHealthy(record.sessionID, {
+          observedAt,
+          reason,
+          lastReplyAt: observedAt,
+        })
+      : await this.bindingRegistry.markWorkerResponseFailed(record.sessionID, {
+          observedAt,
+          reason,
+          failureCode,
+        });
+
+    record.state = state;
+    record.binding = nextBinding;
+    record.completedAt = observedAt;
+
+    this.trace({
+      stage: state === "healthy" ? "worker_ping_probe_succeeded" : "worker_ping_probe_failed",
+      session_id: record.sessionID,
+      worker_id: record.workerID,
+      claude_session_id: record.claudeSessionID,
+      event_id: record.eventID,
+      response_state: nextBinding?.worker_response_state,
+      response_reason: nextBinding?.worker_response_reason,
+      terminal_status: normalizeString(payload?.status),
+      terminal_code: normalizeString(payload?.code),
+      probe_text: normalizeString(payload?.text),
+    }, level);
+
+    this.scheduleWorkerPingProbeRecordCleanup(record.eventID);
+    record.resolve?.(nextBinding);
+    record.resolve = null;
+    return nextBinding;
+  }
+
+  async ensureWorkerPingProbe(binding) {
+    const sessionID = normalizeString(binding?.aibot_session_id);
+    if (!sessionID) {
+      return binding;
+    }
+    if (canDeliverToWorker(binding) || !needsWorkerProbe(binding)) {
+      return binding;
+    }
+    const inFlight = this.workerPingProbeInFlight.get(sessionID);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const probePromise = this.runWorkerPingProbe(binding);
+    this.workerPingProbeInFlight.set(sessionID, probePromise);
+    try {
+      return await probePromise;
+    } finally {
+      if (this.workerPingProbeInFlight.get(sessionID) === probePromise) {
+        this.workerPingProbeInFlight.delete(sessionID);
+      }
+    }
+  }
+
+  async runWorkerPingProbe(binding) {
+    const sessionID = normalizeString(binding?.aibot_session_id);
+    if (!sessionID || !hasReadyWorkerBridge(binding)) {
+      return binding;
+    }
+
+    let client = null;
+    try {
+      client = this.workerControlClientFactory(binding);
+    } catch (error) {
+      this.trace({
+        stage: "worker_ping_probe_client_failed",
+        session_id: sessionID,
+        worker_id: binding?.worker_id,
+        error: error instanceof Error ? error.message : String(error),
+      }, "error");
+      return this.bindingRegistry.markWorkerResponseFailed(sessionID, {
+        observedAt: Date.now(),
+        reason: "worker_ping_probe_client_failed",
+        failureCode: "worker_ping_probe_client_failed",
+      });
+    }
+
+    if (!client?.isConfigured?.() || typeof client.deliverEvent !== "function") {
+      return this.bindingRegistry.markWorkerResponseFailed(sessionID, {
+        observedAt: Date.now(),
+        reason: "worker_ping_probe_unavailable",
+        failureCode: "worker_ping_probe_unavailable",
+      });
+    }
+
+    const probingBinding = await this.bindingRegistry.markWorkerProbing(sessionID, {
+      observedAt: Date.now(),
+      reason: "worker_ping_probe_requested",
+    });
+    const probePayload = buildWorkerPingProbePayload({
+      sessionID,
+      workerID: probingBinding?.worker_id,
+      claudeSessionID: probingBinding?.claude_session_id,
+    });
+
+    const record = {
+      eventID: probePayload.event_id,
+      sessionID,
+      workerID: normalizeString(probingBinding?.worker_id),
+      claudeSessionID: normalizeString(probingBinding?.claude_session_id),
+      expectedReply: "pong",
+      state: "probing",
+      settled: false,
+      resolve: null,
+      timeoutTimer: null,
+      cleanupTimer: null,
+      binding: probingBinding,
+    };
+    const probeResult = new Promise((resolve) => {
+      record.resolve = resolve;
+    });
+    record.timeoutTimer = setTimeout(() => {
+      void this.updateWorkerPingProbeOutcome(record, {
+        state: "failed",
+        reason: "worker_ping_probe_timeout",
+        failureCode: "worker_ping_probe_timeout",
+        level: "error",
+      });
+    }, this.workerPingProbeTimeoutMs);
+    record.timeoutTimer.unref?.();
+    this.workerPingProbeRecords.set(record.eventID, record);
+
+    this.trace({
+      stage: "worker_ping_probe_requested",
+      session_id: sessionID,
+      worker_id: record.workerID,
+      claude_session_id: record.claudeSessionID,
+      event_id: record.eventID,
+      timeout_ms: this.workerPingProbeTimeoutMs,
+    });
+
+    try {
+      await client.deliverEvent(probePayload);
+    } catch (error) {
+      return this.updateWorkerPingProbeOutcome(record, {
+        state: "failed",
+        reason: "worker_ping_probe_delivery_failed",
+        failureCode: "worker_ping_probe_delivery_failed",
+        level: "error",
+      });
+    }
+
+    return probeResult;
+  }
+
+  async observeWorkerPingProbeReply(payload) {
+    const record = this.getWorkerPingProbeRecord(payload?.event_id);
+    if (!record) {
+      return { handled: false, ack: null };
+    }
+    if (record.settled) {
+      return { handled: true, ack: { msg_id: `probe_${record.eventID}` } };
+    }
+
+    const replyText = normalizeString(payload?.text);
+    if (isExpectedWorkerProbeReply(replyText, record.expectedReply)) {
+      await this.updateWorkerPingProbeOutcome(record, {
+        state: "healthy",
+        reason: "worker_ping_pong_observed",
+        payload,
+      });
+    } else {
+      await this.updateWorkerPingProbeOutcome(record, {
+        state: "failed",
+        reason: "worker_ping_probe_wrong_reply",
+        failureCode: "worker_ping_probe_wrong_reply",
+        payload,
+        level: "error",
+      });
+    }
+
+    return { handled: true, ack: { msg_id: `probe_${record.eventID}` } };
+  }
+
+  async observeWorkerPingProbeEventResult(payload) {
+    const record = this.getWorkerPingProbeRecord(payload?.event_id);
+    if (!record) {
+      return { handled: false };
+    }
+
+    if (!record.settled) {
+      const status = normalizeString(payload?.status);
+      await this.updateWorkerPingProbeOutcome(record, {
+        state: "failed",
+        reason: status === "responded"
+          ? "worker_ping_probe_missing_pong"
+          : normalizeString(payload?.code) || "worker_ping_probe_failed",
+        failureCode: normalizeString(payload?.code) || (
+          status === "responded"
+            ? "worker_ping_probe_missing_pong"
+            : "worker_ping_probe_failed"
+        ),
+        payload,
+        level: "error",
+      });
+    } else {
+      this.scheduleWorkerPingProbeRecordCleanup(record.eventID);
+    }
+
+    return { handled: true };
+  }
+
   async close() {
     if (this.workerRuntimeHealthCheckTimer) {
       clearInterval(this.workerRuntimeHealthCheckTimer);
       this.workerRuntimeHealthCheckTimer = null;
     }
     this.workerControlProbeFailures.clear();
+    for (const eventID of this.workerPingProbeRecords.keys()) {
+      this.clearWorkerPingProbeRecord(eventID);
+    }
+    this.workerPingProbeInFlight.clear();
     this.ensureWorkerInFlight.clear();
     this.resumeAuthRecoveryInFlight.clear();
   }
@@ -495,6 +791,24 @@ export class DaemonRuntime {
       };
     }
 
+    if (
+      hasReadyWorkerBridge(binding)
+      && normalizeWorkerResponseState(binding?.worker_response_state) !== "failed"
+    ) {
+      this.trace({
+        stage: "worker_reused_pending_probe",
+        session_id: binding.aibot_session_id,
+        worker_id: binding.worker_id,
+        worker_pid: binding.worker_pid,
+        status: binding.worker_status,
+        response_state: binding.worker_response_state,
+      });
+      return {
+        worker_id: binding.worker_id,
+        status: binding.worker_status,
+      };
+    }
+
     if (binding.worker_status === "starting" || binding.worker_status === "connected") {
       const current = await this.waitForWorkerBridgeState(binding.aibot_session_id);
       if (canDeliverToWorker(current)) {
@@ -510,8 +824,29 @@ export class DaemonRuntime {
           status: current.worker_status,
         };
       }
+      if (
+        hasReadyWorkerBridge(current)
+        && normalizeWorkerResponseState(current?.worker_response_state) !== "failed"
+      ) {
+        this.trace({
+          stage: "worker_reused_after_wait_pending_probe",
+          session_id: binding.aibot_session_id,
+          worker_id: current.worker_id,
+          worker_pid: current.worker_pid,
+          status: current.worker_status,
+          response_state: current.worker_response_state,
+        });
+        return {
+          worker_id: current.worker_id,
+          status: current.worker_status,
+        };
+      }
+      const currentReadyFailed = (
+        hasReadyWorkerBridge(current)
+        && normalizeWorkerResponseState(current?.worker_response_state) === "failed"
+      );
       const workerID = normalizeString(binding.worker_id);
-      if (workerID) {
+      if (!currentReadyFailed && workerID) {
         const existingRuntime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
         const existingPid = Number(existingRuntime?.pid ?? 0);
         if (existingPid > 0 && this.isProcessRunning(existingPid)) {
@@ -545,7 +880,9 @@ export class DaemonRuntime {
       };
     }
 
-    const workerID = binding.worker_id || randomUUID();
+    const workerID = normalizeWorkerResponseState(binding?.worker_response_state) === "failed"
+      ? randomUUID()
+      : (binding.worker_id || randomUUID());
     const resumeSession = await this.shouldResumeClaudeSession(binding);
     let launchBinding = binding;
     if (!resumeSession) {
@@ -628,7 +965,7 @@ export class DaemonRuntime {
       if (!current) {
         return null;
       }
-      if (canDeliverToWorker(current)) {
+      if (hasReadyWorkerBridge(current)) {
         const launchFailure = await this.resolveWorkerLaunchFailure(current);
         if (launchFailure) {
           return withWorkerLaunchFailure(current, launchFailure);
@@ -1472,8 +1809,13 @@ export class DaemonRuntime {
       }
     }
 
-    if (canDeliverToWorker(nextBinding)) {
-      await this.flushPendingSessionEvents(sessionID, nextBinding);
+    let effectiveBinding = nextBinding;
+    if (needsWorkerProbe(nextBinding)) {
+      effectiveBinding = await this.ensureWorkerPingProbe(nextBinding);
+    }
+
+    if (canDeliverToWorker(effectiveBinding)) {
+      await this.flushPendingSessionEvents(sessionID, effectiveBinding);
     }
 
     if (nextStatus !== "stopped" && nextStatus !== "failed") {
@@ -1704,55 +2046,86 @@ export class DaemonRuntime {
     }
 
     let readyBinding = binding;
-    if (canDeliverToWorker(binding)) {
-      return binding;
-    }
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (canDeliverToWorker(readyBinding)) {
+        return readyBinding;
+      }
 
-    const nextRuntime = await this.ensureWorker(binding);
-    if (!readyBinding.worker_control_url || !readyBinding.worker_control_token || nextRuntime?.status === "starting") {
-      readyBinding = await this.waitForWorkerBridgeState(aibotSessionID, {
-        timeoutMs: 15000,
-      });
-    } else {
-      readyBinding = this.bindingRegistry.getByAibotSessionID(aibotSessionID) ?? readyBinding;
-    }
+      const nextRuntime = await this.ensureWorker(readyBinding);
+      if (
+        !readyBinding.worker_control_url
+        || !readyBinding.worker_control_token
+        || nextRuntime?.status === "starting"
+      ) {
+        readyBinding = await this.waitForWorkerBridgeState(aibotSessionID, {
+          timeoutMs: 15000,
+        });
+      } else {
+        readyBinding = this.bindingRegistry.getByAibotSessionID(aibotSessionID) ?? readyBinding;
+      }
 
-    if (
-      readyBinding?.worker_launch_failure === "resume_session_missing" &&
-      normalizeString(binding.claude_session_id)
-    ) {
-      this.trace({
-        stage: "worker_resume_missing_recovering",
-        session_id: binding.aibot_session_id,
-        worker_id: binding.worker_id,
-        claude_session_id: binding.claude_session_id,
-      }, "error");
-      const fallbackBinding = await this.rotateClaudeSession(binding);
-      const workerID = fallbackBinding.worker_id || randomUUID();
-      await this.bindingRegistry.markWorkerStarting(fallbackBinding.aibot_session_id, {
-        workerID,
-        updatedAt: Date.now(),
-        lastStartedAt: Date.now(),
-      });
-      await this.workerProcessManager.spawnWorker({
-        aibotSessionID: fallbackBinding.aibot_session_id,
-        cwd: fallbackBinding.cwd,
-        pluginDataDir: fallbackBinding.plugin_data_dir,
-        claudeSessionID: fallbackBinding.claude_session_id,
-        workerID,
-        bridgeURL: this.bridgeServer.getURL(),
-        bridgeToken: this.bridgeServer.token,
-        resumeSession: false,
-      });
-      this.trace({
-        stage: "worker_resume_missing_spawned_fresh",
-        session_id: fallbackBinding.aibot_session_id,
-        worker_id: workerID,
-        claude_session_id: fallbackBinding.claude_session_id,
-      }, "error");
-      readyBinding = await this.waitForWorkerBridgeState(aibotSessionID, {
-        timeoutMs: 15000,
-      });
+      if (
+        readyBinding?.worker_launch_failure === "resume_session_missing" &&
+        normalizeString(binding.claude_session_id)
+      ) {
+        this.trace({
+          stage: "worker_resume_missing_recovering",
+          session_id: binding.aibot_session_id,
+          worker_id: binding.worker_id,
+          claude_session_id: binding.claude_session_id,
+        }, "error");
+        const fallbackBinding = await this.rotateClaudeSession(binding);
+        const workerID = fallbackBinding.worker_id || randomUUID();
+        await this.bindingRegistry.markWorkerStarting(fallbackBinding.aibot_session_id, {
+          workerID,
+          updatedAt: Date.now(),
+          lastStartedAt: Date.now(),
+        });
+        await this.workerProcessManager.spawnWorker({
+          aibotSessionID: fallbackBinding.aibot_session_id,
+          cwd: fallbackBinding.cwd,
+          pluginDataDir: fallbackBinding.plugin_data_dir,
+          claudeSessionID: fallbackBinding.claude_session_id,
+          workerID,
+          bridgeURL: this.bridgeServer.getURL(),
+          bridgeToken: this.bridgeServer.token,
+          resumeSession: false,
+        });
+        this.trace({
+          stage: "worker_resume_missing_spawned_fresh",
+          session_id: fallbackBinding.aibot_session_id,
+          worker_id: workerID,
+          claude_session_id: fallbackBinding.claude_session_id,
+        }, "error");
+        readyBinding = await this.waitForWorkerBridgeState(aibotSessionID, {
+          timeoutMs: 15000,
+        });
+      }
+
+      if (needsWorkerProbe(readyBinding)) {
+        readyBinding = await this.ensureWorkerPingProbe(readyBinding);
+      }
+
+      if (canDeliverToWorker(readyBinding)) {
+        return readyBinding;
+      }
+
+      if (
+        attempt === 0
+        && hasReadyWorkerBridge(readyBinding)
+        && normalizeWorkerResponseState(readyBinding?.worker_response_state) === "failed"
+      ) {
+        this.trace({
+          stage: "worker_ready_probe_retrying",
+          session_id: aibotSessionID,
+          worker_id: readyBinding?.worker_id,
+          claude_session_id: readyBinding?.claude_session_id,
+          response_reason: readyBinding?.worker_response_reason,
+        }, "error");
+        continue;
+      }
+
+      break;
     }
 
     return readyBinding ?? binding;

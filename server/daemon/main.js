@@ -16,6 +16,7 @@ import { createSessionActivityDispatcher } from "../session-activity-dispatcher.
 import { createProcessLogger } from "../logging.js";
 import { DaemonProcessState } from "./process-state.js";
 import { SessionLogWriter } from "./session-log-writer.js";
+import { canDeliverToWorker } from "./worker-state.js";
 
 const workerReadySettleDelayMs = 3000;
 
@@ -79,13 +80,13 @@ function normalizePid(value) {
 }
 
 export function shouldNotifyWorkerReady(previousBinding, nextBinding, { pendingEventCount = 0 } = {}) {
-  if (!nextBinding || normalizeString(nextBinding.worker_status) !== "ready") {
+  if (!canDeliverToWorker(nextBinding)) {
     return false;
   }
   if (Number(pendingEventCount) > 0) {
     return false;
   }
-  return normalizeString(previousBinding?.worker_status) !== "ready";
+  return !canDeliverToWorker(previousBinding);
 }
 
 export function shouldIgnoreWorkerStatusUpdate(previousBinding, payload) {
@@ -289,9 +290,10 @@ export async function run(argv = [], env = process.env) {
               return;
             }
             await runtime?.handleWorkerStatusUpdate?.(previousBinding, currentBinding);
+            const verifiedBinding = bindingRegistry.getByAibotSessionID(aibotSessionID);
             const pendingEventCount = runtime?.listPendingEventsForSession?.(aibotSessionID)?.length ?? 0;
-            if (shouldNotifyWorkerReady(previousBinding, currentBinding, { pendingEventCount })) {
-              await notifyWorkerReady(aibotClient, currentBinding);
+            if (shouldNotifyWorkerReady(previousBinding, verifiedBinding, { pendingEventCount })) {
+              await notifyWorkerReady(aibotClient, verifiedBinding);
             }
           })().catch((error) => {
             logger.error(`ready status follow-up failed session=${aibotSessionID}: ${String(error)}`);
@@ -304,6 +306,10 @@ export async function run(argv = [], env = process.env) {
       return { ok: true };
     },
     onSendText: async (payload) => {
+      const probeReply = await runtime?.observeWorkerPingProbeReply?.(payload);
+      if (probeReply?.handled) {
+        return probeReply.ack ?? { msg_id: `probe_${String(payload?.event_id ?? "")}` };
+      }
       const ack = await aibotClient.sendText({
         eventID: payload.event_id,
         sessionID: payload.session_id,
@@ -341,6 +347,10 @@ export async function run(argv = [], env = process.env) {
       return { ok: true };
     },
     onSendEventResult: async (payload) => {
+      const probeResult = await runtime?.observeWorkerPingProbeEventResult?.(payload);
+      if (probeResult?.handled) {
+        return { ok: true };
+      }
       await runtime?.recordWorkerEventResultObserved?.(payload);
       aibotClient.sendEventResult(payload);
       await runtime?.handleEventCompleted?.(payload?.event_id);

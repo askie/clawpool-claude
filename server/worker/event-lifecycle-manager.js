@@ -103,8 +103,12 @@ export class WorkerEventLifecycleManager {
     this.composingKeepaliveTimers.delete(normalizedEventID);
   }
 
+  shouldSuppressComposing(event) {
+    return event?.suppress_composing === true;
+  }
+
   sendComposingState(event, active) {
-    if (!event || !normalizeString(event.session_id)) {
+    if (!event || !normalizeString(event.session_id) || this.shouldSuppressComposing(event)) {
       return false;
     }
     void this.bridge.setSessionComposing({
@@ -148,6 +152,9 @@ export class WorkerEventLifecycleManager {
     this.clearComposingKeepaliveTimer(normalizedEventID);
     const current = this.eventState.get(normalizedEventID) ?? fallbackEvent;
     if (!current) {
+      return;
+    }
+    if (this.shouldSuppressComposing(current)) {
       return;
     }
     this.sendComposingState(current, false);

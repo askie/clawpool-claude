@@ -7,6 +7,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { BindingRegistry } from "./daemon/binding-registry.js";
 import { MessageDeliveryStore } from "./daemon/message-delivery-store.js";
 import { DaemonRuntime } from "./daemon/runtime.js";
+import { canDeliverToWorker } from "./daemon/worker-state.js";
 
 function makeAibotClient(sent) {
   return {
@@ -94,6 +95,15 @@ function assertUUID(value) {
   assert.match(String(value ?? ""), uuidPattern);
 }
 
+async function markBindingHealthy(registry, sessionID, reason = "test_ready_worker") {
+  await registry.markWorkerHealthy(sessionID, {
+    observedAt: Date.now(),
+    reason,
+    lastReplyAt: Date.now(),
+  });
+  return registry.getByAibotSessionID(sessionID);
+}
+
 test("daemon runtime open creates a fixed binding and spawns worker", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
@@ -165,6 +175,7 @@ test("daemon runtime restores persisted binding and does not require open again"
           updatedAt: Date.now(),
           lastStartedAt: Date.now(),
         });
+        await markBindingHealthy(registry, input.aibotSessionID);
         return {
           worker_id: input.workerID,
           status: "starting",
@@ -462,6 +473,7 @@ test("daemon runtime delivers normal message to ready worker control", async () 
     worker_control_url: "http://127.0.0.1:9999",
     worker_control_token: "token-4",
   });
+  await markBindingHealthy(registry, "chat-4");
 
   const runtime = new DaemonRuntime({
     env: { HOME: os.homedir() },
@@ -520,6 +532,7 @@ test("daemon runtime queues a second session event until the first one completes
     worker_control_url: "http://127.0.0.1:9998",
     worker_control_token: "token-serial",
   });
+  await markBindingHealthy(registry, "chat-serial");
 
   const runtime = new DaemonRuntime({
     env: { HOME: os.homedir() },
@@ -606,6 +619,7 @@ test("daemon runtime skips recovered dispatch when event is completed during sta
           updatedAt: Date.now(),
           lastStartedAt: Date.now(),
         });
+        await markBindingHealthy(registry, input.aibotSessionID);
         return {
           worker_id: input.workerID,
           status: "starting",
@@ -657,7 +671,7 @@ test("daemon runtime does not flush a queued event while another session event i
   const delivered = [];
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
   await registry.load();
-  const binding = await registry.createBinding({
+  await registry.createBinding({
     aibot_session_id: "chat-serial-ready",
     claude_session_id: "claude-serial-ready",
     cwd: tempDir,
@@ -667,6 +681,7 @@ test("daemon runtime does not flush a queued event while another session event i
     worker_control_url: "http://127.0.0.1:9997",
     worker_control_token: "token-serial-ready",
   });
+  const binding = await markBindingHealthy(registry, "chat-serial-ready");
 
   const runtime = new DaemonRuntime({
     env: { HOME: os.homedir() },
@@ -738,6 +753,7 @@ test("daemon runtime can release queued events when delivered in-flight blocking
     worker_control_url: "http://127.0.0.1:99971",
     worker_control_token: "token-serial-free",
   });
+  await markBindingHealthy(registry, "chat-serial-free");
 
   const runtime = new DaemonRuntime({
     env: { HOME: os.homedir() },
@@ -793,7 +809,7 @@ test("daemon runtime retries one time when flushing a queued event fails transie
   let attempts = 0;
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
   await registry.load();
-  const binding = await registry.createBinding({
+  await registry.createBinding({
     aibot_session_id: "chat-flush-retry",
     claude_session_id: "claude-flush-retry",
     cwd: tempDir,
@@ -803,6 +819,7 @@ test("daemon runtime retries one time when flushing a queued event fails transie
     worker_control_url: "http://127.0.0.1:99972",
     worker_control_token: "token-flush-retry",
   });
+  const binding = await markBindingHealthy(registry, "chat-flush-retry");
 
   const runtime = new DaemonRuntime({
     env: { HOME: os.homedir() },
@@ -888,6 +905,7 @@ test("daemon runtime resumes the bound Claude session when restarting a stopped 
           updatedAt: Date.now(),
           lastStartedAt: Date.now(),
         });
+        await markBindingHealthy(registry, input.aibotSessionID);
         return {
           worker_id: input.workerID,
           status: "starting",
@@ -967,6 +985,7 @@ test("daemon runtime respawns when binding is stopped even if local runtime is s
       updatedAt: Date.now(),
       lastStartedAt: Date.now(),
     });
+    await markBindingHealthy(registry, input.aibotSessionID);
     return {
       worker_id: input.workerID,
       status: "starting",
@@ -1119,7 +1138,7 @@ test("daemon runtime waits for ready before delivering to a connected worker bri
       updatedAt: Date.now(),
       lastStartedAt: Date.now(),
     });
-    return registry.getByAibotSessionID("chat-4d");
+    return markBindingHealthy(registry, "chat-4d");
   };
 
   await runtime.handleEvent({
@@ -1189,9 +1208,148 @@ test("daemon runtime does not reuse a ready worker after a real response failure
   const ensured = await runtime.ensureWorker(binding);
 
   assert.equal(workerCalls.length, 1);
-  assert.equal(workerCalls[0].workerID, "worker-ready-failed");
+  assert.notEqual(workerCalls[0].workerID, "worker-ready-failed");
+  assertUUID(workerCalls[0].workerID);
   assert.equal(workerCalls[0].resumeSession, true);
-  assert.equal(ensured?.worker_id, "worker-ready-failed");
+  assert.equal(ensured?.worker_id, workerCalls[0].workerID);
+});
+
+test("daemon runtime treats ready worker as healthy only after internal ping/pong succeeds", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-probe-ready",
+    claude_session_id: "claude-probe-ready",
+    cwd: tempDir,
+    worker_id: "worker-probe-ready",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9995",
+    worker_control_token: "token-probe-ready",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const delivered = [];
+  let runtime = null;
+  runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager([]),
+    aibotClient: makeAibotClient([]),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    workerRuntimeHealthCheckMs: 0,
+    workerPingProbeTimeoutMs: 500,
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          delivered.push(payload);
+          queueMicrotask(() => {
+            void runtime.observeWorkerPingProbeReply({
+              event_id: payload.event_id,
+              session_id: payload.session_id,
+              worker_id: "worker-probe-ready",
+              claude_session_id: "claude-probe-ready",
+              text: "pong",
+            });
+            void runtime.observeWorkerPingProbeEventResult({
+              event_id: payload.event_id,
+              session_id: payload.session_id,
+              worker_id: "worker-probe-ready",
+              claude_session_id: "claude-probe-ready",
+              status: "responded",
+            });
+          });
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  const ensured = await runtime.ensureReadyBinding("chat-probe-ready");
+
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].content, "ping");
+  assert.equal(ensured?.worker_response_state, "healthy");
+  assert.equal(ensured?.worker_response_reason, "worker_ping_pong_observed");
+  assert.equal(canDeliverToWorker(ensured), true);
+});
+
+test("daemon runtime sends user event only after internal ping/pong probe succeeds", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-probe-delivery",
+    claude_session_id: "claude-probe-delivery",
+    cwd: tempDir,
+    worker_id: "worker-probe-delivery",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9996",
+    worker_control_token: "token-probe-delivery",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const delivered = [];
+  let runtime = null;
+  runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager([]),
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    workerRuntimeHealthCheckMs: 0,
+    workerPingProbeTimeoutMs: 500,
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          delivered.push(payload);
+          if (payload.content === "ping") {
+            queueMicrotask(() => {
+              void runtime.observeWorkerPingProbeReply({
+                event_id: payload.event_id,
+                session_id: payload.session_id,
+                worker_id: "worker-probe-delivery",
+                claude_session_id: "claude-probe-delivery",
+                text: "pong",
+              });
+            });
+          }
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await runtime.handleEvent({
+    event_id: "evt-probe-delivery",
+    session_id: "chat-probe-delivery",
+    msg_id: "msg-probe-delivery",
+    sender_id: "sender-probe-delivery",
+    content: "hello after probe",
+  });
+
+  assert.equal(delivered.length, 2);
+  assert.equal(delivered[0].content, "ping");
+  assert.equal(delivered[1].event_id, "evt-probe-delivery");
+  assert.equal(delivered[1].content, "hello after probe");
+  assert.equal(sent.some((item) => item.kind === "text"), false);
 });
 
 test("daemon runtime records real worker responses and ignores stale worker results", async () => {
@@ -1506,13 +1664,14 @@ test("daemon runtime avoids redelivering the first event when ready recovery alr
     if (!readyHandled) {
       readyHandled = true;
       const previousBinding = registry.getByAibotSessionID("chat-4d-race");
-      const nextBinding = await registry.markWorkerReady("chat-4d-race", {
+      await registry.markWorkerReady("chat-4d-race", {
         workerID: "worker-4d-race",
         workerControlURL: "http://127.0.0.1:9995",
         workerControlToken: "token-4d-race",
         updatedAt: Date.now(),
         lastStartedAt: Date.now(),
       });
+      const nextBinding = await markBindingHealthy(registry, "chat-4d-race");
       await runtime.handleWorkerStatusUpdate(previousBinding, nextBinding);
       return nextBinding;
     }
@@ -1616,13 +1775,14 @@ test("daemon runtime flushes the first pending event after worker bridge becomes
 
   assert.equal(delivered.length, 0);
 
-  const readyBinding = await registry.markWorkerReady("chat-4d2", {
+  await registry.markWorkerReady("chat-4d2", {
     workerID: "worker-4d2",
     workerControlURL: "http://127.0.0.1:99921",
     workerControlToken: "token-4d2",
     updatedAt: Date.now(),
     lastStartedAt: Date.now(),
   });
+  const readyBinding = await markBindingHealthy(registry, "chat-4d2");
   await runtime.handleWorkerStatusUpdate(connectedBinding, readyBinding);
 
   assert.equal(delivered.length, 1);
@@ -1671,6 +1831,7 @@ test("daemon runtime falls back to a fresh Claude session when resume target is 
           updatedAt: Date.now(),
           lastStartedAt: Date.now(),
         });
+        await markBindingHealthy(registry, input.aibotSessionID);
       }
       return {
         worker_id: input.workerID,
@@ -1770,6 +1931,7 @@ test("daemon runtime skips resume and starts fresh when Claude session file is m
           updatedAt: Date.now(),
           lastStartedAt: Date.now(),
         });
+        await markBindingHealthy(registry, input.aibotSessionID);
         return {
           worker_id: input.workerID,
           status: "starting",
@@ -1844,6 +2006,7 @@ test("daemon runtime delivers to a ready worker even when local runtime snapshot
     worker_control_url: "http://127.0.0.1:9990",
     worker_control_token: "token-4e",
   });
+  await markBindingHealthy(registry, "chat-4e");
 
   const workerProcessManager = {
     getWorkerRuntime() {
@@ -1861,6 +2024,7 @@ test("daemon runtime delivers to a ready worker even when local runtime snapshot
         updatedAt: Date.now(),
         lastStartedAt: Date.now(),
       });
+      await markBindingHealthy(registry, input.aibotSessionID);
       return {
         worker_id: input.workerID,
         status: "starting",
@@ -1931,6 +2095,7 @@ test("daemon runtime forwards stop and revoke to ready worker control", async ()
     worker_control_url: "http://127.0.0.1:9998",
     worker_control_token: "token-5",
   });
+  await markBindingHealthy(registry, "chat-5");
 
   const runtime = new DaemonRuntime({
     env: { HOME: os.homedir() },
@@ -2012,6 +2177,7 @@ test("daemon runtime acknowledges revoke immediately and skips duplicate forward
     worker_control_url: "http://127.0.0.1:9994",
     worker_control_token: "token-revoke",
   });
+  await markBindingHealthy(registry, "chat-revoke");
 
   const runtime = new DaemonRuntime({
     env: { HOME: os.homedir() },
@@ -2081,6 +2247,7 @@ test("daemon runtime skips duplicate revoke forwards for the same message with a
     worker_control_url: "http://127.0.0.1:9993",
     worker_control_token: "token-revoke-2",
   });
+  await markBindingHealthy(registry, "chat-revoke-2");
 
   const runtime = new DaemonRuntime({
     env: { HOME: os.homedir() },
@@ -2152,6 +2319,7 @@ test("daemon runtime skips duplicate revoke forwards after runtime restart", asy
     worker_control_url: "http://127.0.0.1:9992",
     worker_control_token: "token-revoke-restart",
   });
+  await markBindingHealthy(registry, "chat-revoke-restart");
 
   const firstStore = new MessageDeliveryStore(messageDeliveryStateFile);
   await firstStore.load();
@@ -2260,6 +2428,7 @@ test("daemon runtime recovers stale worker control before forwarding stop", asyn
     worker_control_url: "http://127.0.0.1:9997",
     worker_control_token: "token-6",
   });
+  await markBindingHealthy(registry, "chat-6");
 
   const workerProcessManager = {
     getWorkerRuntime() {
@@ -2274,6 +2443,7 @@ test("daemon runtime recovers stale worker control before forwarding stop", asyn
         updatedAt: Date.now(),
         lastStartedAt: Date.now(),
       });
+      await markBindingHealthy(registry, input.aibotSessionID);
       return {
         worker_id: input.workerID,
         status: "starting",
@@ -2315,6 +2485,7 @@ test("daemon runtime recovers stale worker control before forwarding stop", asyn
               updatedAt: Date.now(),
               lastStartedAt: Date.now(),
             });
+            await markBindingHealthy(registry, binding.aibot_session_id);
             throw new Error("stale control");
           }
           deliveredStops.push(payload);
@@ -2362,6 +2533,7 @@ test("daemon runtime can forward stop and revoke by remembered event route", asy
     worker_control_url: "http://127.0.0.1:9995",
     worker_control_token: "token-7",
   });
+  await markBindingHealthy(registry, "chat-7");
 
   const runtime = new DaemonRuntime({
     env: { HOME: os.homedir() },
@@ -2445,6 +2617,7 @@ test("daemon runtime keeps remembered event routes across runtime restart", asyn
     worker_control_url: "http://127.0.0.1:9995",
     worker_control_token: "token-7b",
   });
+  await markBindingHealthy(registry, "chat-7b");
 
   const firstStore = new MessageDeliveryStore(messageDeliveryStateFile);
   await firstStore.load();
@@ -2648,13 +2821,14 @@ test("daemon runtime keeps pending events across runtime restart and flushes aft
   });
 
   const previousBinding = restartedRegistry.getByAibotSessionID("chat-7c");
-  const readyBinding = await restartedRegistry.markWorkerReady("chat-7c", {
+  await restartedRegistry.markWorkerReady("chat-7c", {
     workerID: "worker-7c",
     workerControlURL: "http://127.0.0.1:99951",
     workerControlToken: "token-7c",
     updatedAt: Date.now(),
     lastStartedAt: Date.now(),
   });
+  const readyBinding = await markBindingHealthy(restartedRegistry, "chat-7c");
   await restartedRuntime.handleWorkerStatusUpdate(previousBinding, readyBinding);
 
   assert.equal(delivered.length, 1);
@@ -2707,6 +2881,7 @@ test("daemon runtime recoverPersistedDeliveryState respawns and flushes pending 
           updatedAt: Date.now(),
           lastStartedAt: Date.now(),
         });
+        await markBindingHealthy(registry, input.aibotSessionID);
         return {
           worker_id: input.workerID,
           status: "starting",
@@ -2770,6 +2945,7 @@ test("daemon runtime fails an unfinished event when worker stops mid-processing"
     worker_control_url: "http://127.0.0.1:9988",
     worker_control_token: "token-8",
   });
+  await markBindingHealthy(registry, "chat-8");
 
   const runtime = new DaemonRuntime({
     env: { HOME: os.homedir() },
@@ -2850,6 +3026,7 @@ test("daemon runtime fails persisted in-flight events after restart recovery", a
     worker_control_url: "http://127.0.0.1:9987",
     worker_control_token: "token-8b",
   });
+  await markBindingHealthy(registry, "chat-8b");
 
   const firstStore = new MessageDeliveryStore(messageDeliveryStateFile);
   await firstStore.load();
@@ -4947,6 +5124,7 @@ test("daemon runtime retries worker spawn after auth cooldown expires", async ()
           updatedAt: Date.now(),
           lastStartedAt: Date.now(),
         });
+        await markBindingHealthy(registry, input.aibotSessionID);
         return {
           worker_id: input.workerID,
           pid: 65432,

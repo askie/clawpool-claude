@@ -2,6 +2,10 @@ import { loadEventEntries } from "../event-state-persistence.js";
 import { normalizeInboundEventPayload } from "../inbound-event-meta.js";
 import { buildChannelNotificationParams } from "../channel-notification.js";
 import {
+  defaultWorkerPingProbeTimeoutMs,
+  extractWorkerProbeMeta,
+} from "../worker-probe.js";
+import {
   buildAccessStatusBizCard,
   buildPairingBizCard,
 } from "../claude-card-payload.js";
@@ -98,8 +102,10 @@ export class WorkerInteractionService {
     return this.eventLifecycle.finalizeEventSafely(eventID, result, context);
   }
 
-  async dispatchChannelNotification(event) {
-    this.eventLifecycle.startComposingKeepalive(event.event_id);
+  async dispatchChannelNotification(event, { suppressComposing = false } = {}) {
+    if (!suppressComposing) {
+      this.eventLifecycle.startComposingKeepalive(event.event_id);
+    }
     await this.mcp.notification({
       method: "notifications/claude/channel",
       params: buildChannelNotificationParams(event),
@@ -214,7 +220,13 @@ export class WorkerInteractionService {
   }
 
   async handleInboundEvent(rawPayload) {
-    const payload = normalizeInboundEventPayload(rawPayload);
+    const probeMeta = extractWorkerProbeMeta(rawPayload);
+    const payload = {
+      ...normalizeInboundEventPayload(rawPayload),
+      transient: Boolean(probeMeta),
+      internal_probe: Boolean(probeMeta),
+      suppress_composing: Boolean(probeMeta),
+    };
 
     if (!payload.event_id || !payload.session_id || !payload.msg_id || !payload.sender_id) {
       this.logger.error(`invalid event_msg payload: ${JSON.stringify(rawPayload)}`);
@@ -243,6 +255,28 @@ export class WorkerInteractionService {
         msg_id: event.msg_id,
       });
       await this.handleDuplicateEvent(event);
+      return;
+    }
+
+    if (probeMeta) {
+      event = this.markEventAccepted(event);
+      this.logger.trace?.({
+        component: "worker.interaction",
+        stage: "internal_probe_accepted",
+        event_id: event.event_id,
+        session_id: event.session_id,
+        probe_id: probeMeta.probeID,
+      });
+      this.eventLifecycle.armResultTimeout(event.event_id, defaultWorkerPingProbeTimeoutMs);
+      try {
+        await this.dispatchChannelNotification(event, { suppressComposing: true });
+      } catch (error) {
+        await this.finalizeEventSafely(event.event_id, {
+          status: "failed",
+          code: "channel_notification_failed",
+          msg: String(error),
+        }, "internal probe channel notification result send failed");
+      }
       return;
     }
 

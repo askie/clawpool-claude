@@ -546,42 +546,91 @@ export class WorkerToolService {
 
   registerHandlers() {
     this.mcp.setRequestHandler(ListToolsRequestSchema, async () => {
+      this.logger.trace?.({
+        component: "worker.tool",
+        stage: "mcp_list_tools_received",
+        tool_count: toolDefinitions.length,
+      });
       await this.bridge.reportWorkerReadyOnce();
+      this.logger.trace?.({
+        component: "worker.tool",
+        stage: "mcp_list_tools_completed",
+        tool_count: toolDefinitions.length,
+      });
       return {
         tools: toolDefinitions,
       };
     });
 
     this.mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
-      await this.bridge.reportWorkerReadyOnce();
       const name = normalizeString(request.params.name);
       const args = request.params.arguments ?? {};
+      this.logger.trace?.({
+        component: "worker.tool",
+        stage: "mcp_call_tool_received",
+        tool_name: name,
+        event_id: normalizeOptionalString(args.event_id),
+        session_id: normalizeOptionalString(args.chat_id),
+      });
+      await this.bridge.reportWorkerReadyOnce();
 
-      switch (name) {
-        case "reply":
-          return this.handleReplyTool(args);
-        case "delete_message":
-          return this.handleDeleteMessageTool(args);
-        case "complete":
-          return this.handleCompleteTool(args);
-        case "status":
-          return this.handleStatusTool();
-        case "access_pair":
-          return this.handleAccessPairTool(args);
-        case "access_deny":
-          return this.handleAccessDenyTool(args);
-        case "allow_sender":
-          return this.handleAllowSenderTool(args);
-        case "remove_sender":
-          return this.handleRemoveSenderTool(args);
-        case "allow_approver":
-          return this.handleAllowApproverTool(args);
-        case "remove_approver":
-          return this.handleRemoveApproverTool(args);
-        case "access_policy":
-          return this.handleAccessPolicyTool(args);
-        default:
-          throw new Error(`unknown tool: ${name}`);
+      try {
+        let result;
+        switch (name) {
+          case "reply":
+            result = await this.handleReplyTool(args);
+            break;
+          case "delete_message":
+            result = await this.handleDeleteMessageTool(args);
+            break;
+          case "complete":
+            result = await this.handleCompleteTool(args);
+            break;
+          case "status":
+            result = await this.handleStatusTool();
+            break;
+          case "access_pair":
+            result = await this.handleAccessPairTool(args);
+            break;
+          case "access_deny":
+            result = await this.handleAccessDenyTool(args);
+            break;
+          case "allow_sender":
+            result = await this.handleAllowSenderTool(args);
+            break;
+          case "remove_sender":
+            result = await this.handleRemoveSenderTool(args);
+            break;
+          case "allow_approver":
+            result = await this.handleAllowApproverTool(args);
+            break;
+          case "remove_approver":
+            result = await this.handleRemoveApproverTool(args);
+            break;
+          case "access_policy":
+            result = await this.handleAccessPolicyTool(args);
+            break;
+          default:
+            throw new Error(`unknown tool: ${name}`);
+        }
+        this.logger.trace?.({
+          component: "worker.tool",
+          stage: "mcp_call_tool_completed",
+          tool_name: name,
+          event_id: normalizeOptionalString(args.event_id),
+          session_id: normalizeOptionalString(args.chat_id),
+        });
+        return result;
+      } catch (error) {
+        this.logger.trace?.({
+          component: "worker.tool",
+          stage: "mcp_call_tool_failed",
+          tool_name: name,
+          event_id: normalizeOptionalString(args.event_id),
+          session_id: normalizeOptionalString(args.chat_id),
+          error: error instanceof Error ? error.message : String(error),
+        }, { level: "error" });
+        throw error;
       }
     });
   }

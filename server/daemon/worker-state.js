@@ -11,6 +11,7 @@ export function normalizeWorkerResponseState(value) {
   if (
     normalized === "unknown"
     || normalized === "unverified"
+    || normalized === "probing"
     || normalized === "healthy"
     || normalized === "failed"
   ) {
@@ -19,10 +20,22 @@ export function normalizeWorkerResponseState(value) {
   return "unknown";
 }
 
-export function canDeliverToWorker(binding) {
+export function hasReadyWorkerBridge(binding) {
   const status = normalizeString(binding?.worker_status);
+  return hasWorkerControl(binding) && status === "ready";
+}
+
+export function needsWorkerProbe(binding) {
+  if (!hasReadyWorkerBridge(binding)) {
+    return false;
+  }
   const responseState = normalizeWorkerResponseState(binding?.worker_response_state);
-  return hasWorkerControl(binding) && status === "ready" && responseState !== "failed";
+  return responseState === "unverified" || responseState === "probing";
+}
+
+export function canDeliverToWorker(binding) {
+  const responseState = normalizeWorkerResponseState(binding?.worker_response_state);
+  return hasReadyWorkerBridge(binding) && responseState === "healthy";
 }
 
 export function formatWorkerResponseAssessment(binding) {
@@ -32,6 +45,9 @@ export function formatWorkerResponseAssessment(binding) {
   if (workerStatus === "ready") {
     if (responseState === "healthy") {
       return "可用（最近一次真实交互已验证）";
+    }
+    if (responseState === "probing") {
+      return "探测中（正在等待 ping/pong）";
     }
     if (responseState === "failed") {
       return "异常（最近一次真实交互失败）";

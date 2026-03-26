@@ -45,6 +45,7 @@ function buildInstructions() {
   return [
     'Messages arrive as <channel source="clawpool-claude" chat_id="..." event_id="..." message_id="..." user_id="...">text</channel>.',
     "When present, channel metadata includes msg_type plus JSON strings in attachments_json, biz_card_json, channel_data_json, and extra_json. Use those structured fields directly instead of guessing attachment or card semantics from text.",
+    'If channel_data_json marks {"clawpool-claude":{"internal_probe":{"kind":"ping_pong"}}}, reply with exactly pong and nothing else.',
     "If you want to send a visible reply back to the same chat, call the reply tool with chat_id, event_id, and text. You may also pass reply_to when you want to quote a specific message_id.",
     "The reply tool also accepts files as absolute local paths. Files are uploaded through the Agent API media presign endpoint before they are sent back to the chat.",
     "If you need to remove a previously sent message, call delete_message with chat_id and message_id.",
@@ -68,6 +69,9 @@ export function createWorkerApp({ env = process.env } = {}) {
   const sessionContextStore = new ChannelContextStore(resolveSessionContextsDir());
   const eventState = new EventState({
     onChange(entry) {
+      if (entry?.transient === true) {
+        return;
+      }
       void saveEventEntry(eventStatesDir, entry).catch((error) => {
         logger.error(`event state persist failed event=${entry.event_id}: ${String(error)}`);
       });

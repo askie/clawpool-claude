@@ -290,6 +290,22 @@ export class BindingRegistry {
     return mergeBindingWithRuntime(binding, runtime);
   }
 
+  async markWorkerProbing(aibotSessionID, {
+    observedAt = Date.now(),
+    reason = "worker_ping_probe_requested",
+  } = {}) {
+    const binding = this.bindingStore.get(aibotSessionID);
+    if (!binding) {
+      throw new Error("binding not found");
+    }
+    const runtime = await this.workerRuntimeStore.createOrUpdate(aibotSessionID, {
+      worker_response_state: "probing",
+      worker_response_reason: reason,
+      worker_response_updated_at: observedAt,
+    });
+    return mergeBindingWithRuntime(binding, runtime);
+  }
+
   async markWorkerResponseFailed(aibotSessionID, {
     observedAt = Date.now(),
     reason = "worker_response_failed",

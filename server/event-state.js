@@ -92,6 +92,9 @@ export class EventState {
       result_intent: null,
       completed: null,
       stopped: null,
+      transient: payload.transient === true,
+      internal_probe: payload.internal_probe === true,
+      suppress_composing: payload.suppress_composing === true,
       created_at: now,
       last_seen_at: now,
     };
@@ -121,6 +124,9 @@ export class EventState {
     let latest = null;
     for (const entry of this.events.values()) {
       if (normalizeString(entry.session_id) !== normalizedSessionID) {
+        continue;
+      }
+      if (entry.internal_probe === true) {
         continue;
       }
       if (entry.completed || entry.stopped) {

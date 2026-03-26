@@ -186,6 +186,65 @@ test("worker inbound handling records local acceptance without sending a second 
   await service.shutdown();
 });
 
+test("worker inbound handling routes internal ping probe without access flow or composing", async () => {
+  const bridgeCalls = [];
+  const notifications = [];
+  const { service, eventState } = createService({
+    accessStore: {
+      getPolicy: () => "disabled",
+      isSenderAllowlisted: () => false,
+      isSenderAllowed: () => false,
+      hasAllowedSenders: () => false,
+    },
+    bridge: {
+      async sendText(payload) {
+        bridgeCalls.push({ kind: "text", payload });
+        return {};
+      },
+      async sendEventResult(payload) {
+        bridgeCalls.push({ kind: "event_result", payload });
+        return {};
+      },
+      async setSessionComposing(payload) {
+        bridgeCalls.push({ kind: "compose", payload });
+        return {};
+      },
+    },
+    mcp: {
+      async notification(payload) {
+        notifications.push(payload);
+        return {};
+      },
+    },
+  });
+
+  await service.handleInboundEvent({
+    event_id: "evt-probe-1",
+    session_id: "chat-probe-1",
+    msg_id: "msg-probe-1",
+    sender_id: "sender-probe-1",
+    content: "ping",
+    channel_data: {
+      "clawpool-claude": {
+        internal_probe: {
+          kind: "ping_pong",
+          probe_id: "probe-1",
+          expected_reply: "pong",
+        },
+      },
+    },
+  });
+
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].params.content, "ping");
+  assert.deepEqual(bridgeCalls, []);
+  assert.equal(eventState.get("evt-probe-1")?.transient, true);
+  assert.equal(eventState.get("evt-probe-1")?.internal_probe, true);
+  assert.equal(eventState.getLatestActiveBySession("chat-probe-1"), null);
+
+  await service.shutdown();
+});
+
 test("worker revoke handling still acknowledges through bridge", async () => {
   const calls = [];
   const { service } = createService({

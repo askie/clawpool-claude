@@ -8,13 +8,39 @@ import {
 } from "./daemon/main.js";
 
 test("shouldNotifyWorkerReady only notifies on transition into ready", () => {
-  assert.equal(shouldNotifyWorkerReady(null, { worker_status: "ready" }), true);
+  assert.equal(shouldNotifyWorkerReady(null, {
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9000",
+    worker_control_token: "token",
+    worker_response_state: "healthy",
+  }), true);
   assert.equal(
-    shouldNotifyWorkerReady({ worker_status: "connected" }, { worker_status: "ready" }),
+    shouldNotifyWorkerReady(
+      { worker_status: "connected" },
+      {
+        worker_status: "ready",
+        worker_control_url: "http://127.0.0.1:9000",
+        worker_control_token: "token",
+        worker_response_state: "healthy",
+      },
+    ),
     true,
   );
   assert.equal(
-    shouldNotifyWorkerReady({ worker_status: "ready" }, { worker_status: "ready" }),
+    shouldNotifyWorkerReady(
+      {
+        worker_status: "ready",
+        worker_control_url: "http://127.0.0.1:9000",
+        worker_control_token: "token",
+        worker_response_state: "healthy",
+      },
+      {
+        worker_status: "ready",
+        worker_control_url: "http://127.0.0.1:9000",
+        worker_control_token: "token",
+        worker_response_state: "healthy",
+      },
+    ),
     false,
   );
   assert.equal(
@@ -24,8 +50,25 @@ test("shouldNotifyWorkerReady only notifies on transition into ready", () => {
   assert.equal(
     shouldNotifyWorkerReady(
       { worker_status: "connected" },
-      { worker_status: "ready" },
+      {
+        worker_status: "ready",
+        worker_control_url: "http://127.0.0.1:9000",
+        worker_control_token: "token",
+        worker_response_state: "healthy",
+      },
       { pendingEventCount: 1 },
+    ),
+    false,
+  );
+  assert.equal(
+    shouldNotifyWorkerReady(
+      { worker_status: "connected" },
+      {
+        worker_status: "ready",
+        worker_control_url: "http://127.0.0.1:9000",
+        worker_control_token: "token",
+        worker_response_state: "probing",
+      },
     ),
     false,
   );
