@@ -101,6 +101,7 @@ export class DaemonBridgeRuntime {
         ? ""
         : "worker must be started by clawpool-claude daemon",
     };
+    this.connectedStatusPromise = null;
     this.dispatchSessionActivity = createSessionActivityDispatcher(async ({
       sessionID,
       kind = "composing",
@@ -344,24 +345,32 @@ export class DaemonBridgeRuntime {
 
   async sendConnectedStatus() {
     this.requireDaemonBridge();
-    this.logger?.trace?.({
-      component: "worker.bridge",
-      stage: "worker_status_requested",
-      aibot_session_id: this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID,
-      worker_id: this.env.CLAWPOOL_CLAUDE_WORKER_ID,
-      status: "connected",
-    });
-    const response = await this.workerBridgeClient.sendStatusUpdate({
-      worker_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_WORKER_ID),
-      aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
-      claude_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_SESSION_ID),
-      pid: process.pid,
-      worker_control_url: this.getWorkerControlURL(),
-      worker_control_token: this.getWorkerControlToken(),
-      status: "connected",
-    });
-    this.markMcpActivity();
-    return response;
+    if (this.workerReadyReported || this.workerReadyPromise) {
+      return { ok: true };
+    }
+    
+    this.connectedStatusPromise = (async () => {
+      this.logger?.trace?.({
+        component: "worker.bridge",
+        stage: "worker_status_requested",
+        aibot_session_id: this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID,
+        worker_id: this.env.CLAWPOOL_CLAUDE_WORKER_ID,
+        status: "connected",
+      });
+      const response = await this.workerBridgeClient.sendStatusUpdate({
+        worker_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_WORKER_ID),
+        aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
+        claude_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_SESSION_ID),
+        pid: process.pid,
+        worker_control_url: this.getWorkerControlURL(),
+        worker_control_token: this.getWorkerControlToken(),
+        status: "connected",
+      });
+      this.markMcpActivity();
+      return response;
+    })();
+    
+    return this.connectedStatusPromise;
   }
 
   async reportWorkerReadyOnce() {
@@ -375,6 +384,10 @@ export class DaemonBridgeRuntime {
     }
 
     this.workerReadyPromise = (async () => {
+      if (this.connectedStatusPromise) {
+        await this.connectedStatusPromise.catch(() => {});
+      }
+
       this.logger?.trace?.({
         component: "worker.bridge",
         stage: "worker_status_requested",
