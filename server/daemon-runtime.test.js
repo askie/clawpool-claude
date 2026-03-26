@@ -1282,6 +1282,72 @@ test("daemon runtime treats ready worker as healthy only after internal ping/pon
   assert.equal(canDeliverToWorker(ensured), true);
 });
 
+test("daemon runtime recovers ping probe timeout when control ping confirms worker health", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const workerCalls = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-probe-timeout-recover",
+    claude_session_id: "claude-probe-timeout-recover",
+    cwd: tempDir,
+    worker_id: "worker-probe-timeout-recover",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9997",
+    worker_control_token: "token-probe-timeout-recover",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  let pingCalls = 0;
+  const delivered = [];
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient([]),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    workerRuntimeHealthCheckMs: 0,
+    workerPingProbeTimeoutMs: 50,
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          delivered.push(payload);
+          return { ok: true };
+        },
+        async ping() {
+          pingCalls += 1;
+          return {
+            ok: true,
+            worker_id: "worker-probe-timeout-recover",
+            aibot_session_id: "chat-probe-timeout-recover",
+            claude_session_id: "claude-probe-timeout-recover",
+            pid: 12345,
+            ts: Date.now(),
+          };
+        },
+      };
+    },
+  });
+
+  const ensured = await runtime.ensureReadyBinding("chat-probe-timeout-recover");
+
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].content, "ping");
+  assert.equal(pingCalls, 1);
+  assert.equal(workerCalls.length, 0);
+  assert.equal(ensured?.worker_response_state, "healthy");
+  assert.equal(ensured?.worker_response_reason, "worker_ping_probe_timeout_control_ping_ok");
+  assert.equal(canDeliverToWorker(ensured), true);
+});
+
 test("daemon runtime sends user event only after internal ping/pong probe succeeds", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];

@@ -537,12 +537,7 @@ export class DaemonRuntime {
       record.resolve = resolve;
     });
     record.timeoutTimer = setTimeout(() => {
-      void this.updateWorkerPingProbeOutcome(record, {
-        state: "failed",
-        reason: "worker_ping_probe_timeout",
-        failureCode: "worker_ping_probe_timeout",
-        level: "error",
-      });
+      void this.handleWorkerPingProbeTimeout(record, client);
     }, this.workerPingProbeTimeoutMs);
     record.timeoutTimer.unref?.();
     this.workerPingProbeRecords.set(record.eventID, record);
@@ -568,6 +563,99 @@ export class DaemonRuntime {
     }
 
     return probeResult;
+  }
+
+  async recoverWorkerPingProbeTimeout(record, client) {
+    if (record?.settled) {
+      return null;
+    }
+    if (!client?.isConfigured?.() || typeof client.ping !== "function") {
+      return null;
+    }
+
+    const currentBinding = this.bindingRegistry.getByAibotSessionID(record?.sessionID);
+    if (!currentBinding || !hasReadyWorkerBridge(currentBinding)) {
+      return null;
+    }
+
+    const expectedWorkerID = normalizeString(record?.workerID);
+    const expectedClaudeSessionID = normalizeString(record?.claudeSessionID);
+    const currentWorkerID = normalizeString(currentBinding?.worker_id);
+    const currentClaudeSessionID = normalizeString(currentBinding?.claude_session_id);
+    if (expectedWorkerID && currentWorkerID && expectedWorkerID !== currentWorkerID) {
+      return null;
+    }
+    if (
+      expectedClaudeSessionID
+      && currentClaudeSessionID
+      && expectedClaudeSessionID !== currentClaudeSessionID
+    ) {
+      return null;
+    }
+
+    let pingPayload = null;
+    try {
+      pingPayload = await client.ping();
+    } catch (error) {
+      this.trace({
+        stage: "worker_ping_probe_timeout_control_ping_failed",
+        session_id: record?.sessionID,
+        worker_id: currentWorkerID || expectedWorkerID,
+        claude_session_id: currentClaudeSessionID || expectedClaudeSessionID,
+        event_id: record?.eventID,
+        error: error instanceof Error ? error.message : String(error),
+      }, "error");
+      return null;
+    }
+
+    const runtime = this.workerProcessManager?.getWorkerRuntime?.(currentWorkerID);
+    const identityHealth = this.inspectWorkerIdentityHealth(currentBinding, runtime, pingPayload);
+    if (!identityHealth.ok) {
+      this.trace({
+        stage: "worker_ping_probe_timeout_control_ping_identity_mismatch",
+        session_id: record?.sessionID,
+        worker_id: currentWorkerID || expectedWorkerID,
+        claude_session_id: currentClaudeSessionID || expectedClaudeSessionID,
+        event_id: record?.eventID,
+        reason: identityHealth.reason,
+      }, "error");
+      return null;
+    }
+
+    await this.recordWorkerHookSignalsObserved(currentBinding, pingPayload);
+    this.trace({
+      stage: "worker_ping_probe_timeout_recovered",
+      session_id: record?.sessionID,
+      worker_id: currentWorkerID || expectedWorkerID,
+      claude_session_id: currentClaudeSessionID || expectedClaudeSessionID,
+      event_id: record?.eventID,
+    });
+    return this.updateWorkerPingProbeOutcome(record, {
+      state: "healthy",
+      reason: "worker_ping_probe_timeout_control_ping_ok",
+      payload: {
+        status: "responded",
+        code: "worker_ping_probe_timeout_control_ping_ok",
+      },
+    });
+  }
+
+  async handleWorkerPingProbeTimeout(record, client) {
+    if (record?.settled) {
+      return null;
+    }
+
+    const recoveredBinding = await this.recoverWorkerPingProbeTimeout(record, client);
+    if (canDeliverToWorker(recoveredBinding)) {
+      return recoveredBinding;
+    }
+
+    return this.updateWorkerPingProbeOutcome(record, {
+      state: "failed",
+      reason: "worker_ping_probe_timeout",
+      failureCode: "worker_ping_probe_timeout",
+      level: "error",
+    });
   }
 
   async observeWorkerPingProbeReply(payload) {
