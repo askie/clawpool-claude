@@ -1891,6 +1891,52 @@ export class DaemonRuntime {
         worker_status: workerStatus,
         resume_session: Boolean(authRuntime?.resume_session),
       }, "error");
+
+      // Attempt automatic re-login before stopping the worker.
+      if (typeof this.workerProcessManager?.runClaudeAuthLogin === "function") {
+        this.trace({
+          stage: "worker_auth_auto_login_started",
+          session_id: sessionID,
+          worker_id: workerID,
+        }, "error");
+        const loginResult = await this.workerProcessManager.runClaudeAuthLogin();
+        if (loginResult.ok) {
+          this.trace({
+            stage: "worker_auth_auto_login_succeeded",
+            session_id: sessionID,
+            worker_id: workerID,
+          }, "error");
+          // Login refreshed — stop the stale worker and let the next
+          // reconcile / event cycle spawn a fresh one that will pick up
+          // the new credentials.
+          await this.workerProcessManager?.stopWorker?.(workerID);
+          await this.bindingRegistry.markWorkerResponseFailed(sessionID, {
+            observedAt: Date.now(),
+            reason: "auth_auto_login_refreshed",
+            failureCode: "auth_auto_login_refreshed",
+          });
+          const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
+            updatedAt: Date.now(),
+            lastStoppedAt: Date.now(),
+          });
+          this.workerProcessManager?.markWorkerRuntimeStopped?.(workerID, {
+            exitCode: 0,
+            exitSignal: "auth_auto_login_refreshed",
+          });
+          // Re-queue any pending events so they are delivered once the
+          // fresh worker is ready.
+          await this.requeuePendingEventsForWorker(sessionID, workerID);
+          await this.handleWorkerStatusUpdate(binding, nextBinding);
+          return true;
+        }
+        this.trace({
+          stage: "worker_auth_auto_login_failed",
+          session_id: sessionID,
+          worker_id: workerID,
+          reason: loginResult.reason,
+        }, "error");
+      }
+
       await this.workerProcessManager?.stopWorker?.(workerID);
       await this.bindingRegistry.markWorkerResponseFailed(sessionID, {
         observedAt: Date.now(),

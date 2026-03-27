@@ -804,4 +804,54 @@ export class WorkerProcessManager {
     }
     return true;
   }
+
+  /**
+   * Run `claude auth login` in a subprocess and wait for it to succeed.
+   * Returns { ok: true } when "Login successful" appears in stdout/stderr,
+   * or { ok: false, reason } on timeout / error.
+   */
+  async runClaudeAuthLogin({ timeoutMs = 120_000, env = this.env } = {}) {
+    const claudeCommand = resolveClaudeCommand(env);
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        child?.kill?.();
+        resolve(result);
+      };
+
+      const child = spawn(claudeCommand, ["auth", "login"], {
+        env: { ...env, FORCE_COLOR: "0", NO_COLOR: "1" },
+        stdio: ["pipe", "pipe", "pipe"],
+        detached: false,
+      });
+
+      const timeout = setTimeout(() => {
+        finish({ ok: false, reason: `claude auth login timed out after ${timeoutMs}ms` });
+      }, timeoutMs);
+
+      let combined = "";
+      const onData = (chunk) => {
+        combined += String(chunk ?? "");
+        if (/Login\s+successful/iu.test(combined) || /logged\s+in/iu.test(combined)) {
+          clearTimeout(timeout);
+          finish({ ok: true });
+        }
+      };
+      child.stdout?.on("data", onData);
+      child.stderr?.on("data", onData);
+
+      child.on("error", (err) => {
+        clearTimeout(timeout);
+        finish({ ok: false, reason: `claude auth login spawn error: ${err.message}` });
+      });
+      child.on("close", (code) => {
+        clearTimeout(timeout);
+        if (!settled) {
+          finish({ ok: false, reason: `claude auth login exited with code ${code}` });
+        }
+      });
+    });
+  }
 }
