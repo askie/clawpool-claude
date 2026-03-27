@@ -321,6 +321,7 @@ export class DaemonRuntime {
     this.workerPingProbeInFlight = new Map();
     this.ensureWorkerInFlight = new Map();
     this.resumeAuthRecoveryInFlight = new Map();
+    this.lastAuthRecoverySpawnAt = new Map();
     this.controlCommandHandler = new DaemonControlCommandHandler({
       env: this.env,
       bindingRegistry: this.bindingRegistry,
@@ -747,6 +748,7 @@ export class DaemonRuntime {
     this.workerPingProbeInFlight.clear();
     this.ensureWorkerInFlight.clear();
     this.resumeAuthRecoveryInFlight.clear();
+    this.lastAuthRecoverySpawnAt.clear();
   }
 
   purgeExpiredRecentRevokes(now = Date.now()) {
@@ -1759,11 +1761,36 @@ export class DaemonRuntime {
 
     const recoveryPromise = (async () => {
       const runtime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
-      if (!runtime || !runtime.resume_session) {
+      if (!runtime) {
         return false;
       }
       const hasAuthLoginRequiredError = await this.workerProcessManager?.hasAuthLoginRequiredError?.(workerID);
       if (!hasAuthLoginRequiredError) {
+        return false;
+      }
+
+      // For fresh workers (resume_session=false), only attempt recovery if
+      // the worker is very young (< 5s). Older fresh workers that hit auth
+      // errors are expected to be handled by the normal fail path.
+      // Workers without a known started_at timestamp are treated as old.
+      const isResumeWorker = Boolean(runtime?.resume_session);
+      const runtimeStartedAt = Number(runtime?.started_at ?? 0);
+      const workerAgeMs = runtimeStartedAt > 0 ? Date.now() - runtimeStartedAt : Infinity;
+      if (!isResumeWorker && workerAgeMs > 5000) {
+        return false;
+      }
+
+      // Guard: limit repeated recovery spawns for the same session.
+      const lastSpawnAt = this.lastAuthRecoverySpawnAt.get(sessionID) ?? 0;
+      const authCooldownMs = this.authFailureCooldownMs || defaultAuthFailureCooldownMs;
+      if (lastSpawnAt > 0 && (Date.now() - lastSpawnAt) < authCooldownMs) {
+        this.trace({
+          stage: "worker_resume_auth_recovery_cooldown",
+          session_id: sessionID,
+          worker_id: workerID,
+          elapsed_ms: Date.now() - lastSpawnAt,
+          cooldown_ms: authCooldownMs,
+        }, "error");
         return false;
       }
 
@@ -1786,6 +1813,7 @@ export class DaemonRuntime {
         updatedAt: Date.now(),
         lastStartedAt: Date.now(),
       });
+      this.lastAuthRecoverySpawnAt.set(sessionID, Date.now());
       await this.workerProcessManager.spawnWorker({
         aibotSessionID: sessionID,
         cwd: fallbackBinding.cwd,
@@ -1836,7 +1864,23 @@ export class DaemonRuntime {
 
     const hasAuthError = await this.workerProcessManager?.hasAuthLoginRequiredError?.(workerID);
     if (hasAuthError) {
-      const authRuntime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
+      // Skip auth error handling if this worker was recently spawned by a
+      // recovery to avoid killing the fresh process before it stabilises.
+      const lastSpawnAt = this.lastAuthRecoverySpawnAt.get(sessionID) ?? 0;
+      const runtime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
+      const runtimeStartedAt = Number(runtime?.started_at ?? 0);
+      const workerAgeMs = runtimeStartedAt > 0 ? Date.now() - runtimeStartedAt : 0;
+      if (lastSpawnAt > 0 && workerAgeMs < 5000) {
+        this.trace({
+          stage: "worker_auth_error_skipped_recent_spawn",
+          session_id: sessionID,
+          worker_id: workerID,
+          worker_age_ms: workerAgeMs,
+        }, "error");
+        return false;
+      }
+
+      const authRuntime = runtime;
       const authExitSignal = authRuntime?.resume_session
         ? "auth_login_required_resume"
         : "auth_login_required";
@@ -2047,6 +2091,22 @@ export class DaemonRuntime {
     const failureEventOptions = await this.resolveWorkerFailureEventOptions(
       previousWorkerID || nextWorkerID,
     );
+
+    // If a recovery spawn is still within cooldown, preserve pending events
+    // instead of failing them so they can be delivered once the fresh worker
+    // stabilises.
+    const lastSpawnAt = this.lastAuthRecoverySpawnAt.get(sessionID) ?? 0;
+    const authCooldownMs = this.authFailureCooldownMs || defaultAuthFailureCooldownMs;
+    if (lastSpawnAt > 0 && (Date.now() - lastSpawnAt) < authCooldownMs) {
+      this.trace({
+        stage: "pending_events_preserved_auth_cooldown",
+        session_id: sessionID,
+        worker_id: previousWorkerID || nextWorkerID,
+        remaining_cooldown_ms: authCooldownMs - (Date.now() - lastSpawnAt),
+      }, "error");
+      return;
+    }
+
     for (const record of this.listPendingEventsForSession(sessionID)) {
       if (previousWorkerID && normalizeString(record.last_worker_id) !== previousWorkerID) {
         if (normalizeString(record.last_worker_id)) {
