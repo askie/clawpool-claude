@@ -1,18 +1,18 @@
-# @dhf-claude/clawpool
+# @dhfpub/clawpool-claude
 
-Connect [ClawPool.dhf.pub](https://clawpool.dhf.pub) private chats directly into Claude Code.
+This integration connects Claude to ClawPool ([https://clawpool.dhf.pub/](https://clawpool.dhf.pub/)) so you can manage Claude from the website, with mobile PWA support.
 
 ## Quick Start
 
-### 1. Global Installation
+### 1. Install globally
 
 ```bash
-npm install -g @dhf-claude/clawpool
+npm install -g @dhfpub/clawpool-claude
 ```
 
-### 2. Initial Daemon Setup
+### 2. Install the background service (first time)
 
-First, obtain these 3 values from the ClawPool console:
+Get these 3 values from the ClawPool console first:
 
 - `wsUrl`
 - `agentId`
@@ -24,12 +24,12 @@ Then run:
 clawpool-claude install --ws-url <ws_url> --agent-id <agent_id> --api-key <api_key>
 ```
 
-This command automatically performs the following:
+This command will automatically:
 
-- Saves the connection configuration
-- Installs the background service for the current user
-- Immediately starts the local `daemon`
-- Delegates session startup, recovery, and message forwarding to the `daemon`
+- Save connection settings
+- Install a user-level background service
+- Start the local `daemon` immediately
+- Let `daemon` handle session startup, resume, and message relay
 
 Supported background service managers:
 
@@ -37,9 +37,7 @@ Supported background service managers:
 - Linux: `systemd --user`
 - Windows: Task Scheduler
 
-## Common Commands
-
-You will typically only need these commands moving forward:
+## Commands you will usually use
 
 ```bash
 clawpool-claude status
@@ -49,98 +47,98 @@ clawpool-claude start
 clawpool-claude uninstall
 ```
 
-- `status`: Check service and connection status
-- `restart`: Restart the service (e.g., after a config change)
-- `stop`: Temporarily stop the background service
-- `start`: Start the background service
-- `uninstall`: Remove the background startup item
+- `status` checks service and connection status
+- `restart` restarts after config changes
+- `stop` temporarily stops the background service
+- `start` starts the background service again
+- `uninstall` removes the background startup entry
 
-## Running in the Foreground (Optional)
+## If you only want a temporary foreground run
 
-You don't have to install the background service. To run it directly, execute:
+You can run without installing a background service:
 
 ```bash
 clawpool-claude --ws-url <ws_url> --agent-id <agent_id> --api-key <api_key>
 ```
 
-Once the configuration is saved locally, you can simply run:
+If config is already saved locally, you can also just run:
 
 ```bash
 clawpool-claude
 ```
 
-## How to Start a Claude Session
+## How to start a Claude session
 
-First, send the following in the corresponding ClawPool private chat:
+Send this in the related ClawPool private chat:
 
 ```text
 open <your_working_directory>
 ```
 
-The `daemon` will start or resume the Claude session for this directory.
+`daemon` will start or resume the matching Claude session for that directory.
 
-If you are already inside Claude, you can run:
+If you are already inside Claude, run:
 
 ```text
 /clawpool:status
 ```
 
-If you see that the worker is successfully attached to the daemon, the connection is functioning correctly.
+If the worker is attached to daemon, the link is healthy.
 
-## Common Claude Commands
+## Common commands inside Claude
 
 | Command | Purpose |
 | --- | --- |
-| `/clawpool:status` | Check the current connection status |
-| `/clawpool:access` | Check current access controls |
-| `/clawpool:access pair <code>` | Allow a new private chat sender |
-| `/clawpool:access policy <allowlist\|open\|disabled>` | Switch the access policy |
+| `/clawpool:status` | Check current connection status |
+| `/clawpool:access` | Check current access control |
+| `/clawpool:access pair <code>` | Allow a new private-chat sender |
+| `/clawpool:access policy <allowlist\|open\|disabled>` | Switch access policy |
 
-Connection parameters are now modified exclusively via the local CLI and can no longer be changed from within the Claude session.
+Connection parameters are now managed only through local CLI, not from inside Claude sessions.
 
-## Approvals and Questions
+## Approvals and questions
 
-When Claude needs you to confirm an action or provide additional information, the message is routed back to ClawPool.
+When Claude needs your confirmation or more information, messages are sent back to ClawPool.
 
-Interactive cards are prioritized by default:
+Interactive cards are used by default:
 
-- **Approval Cards**: Click 'Approve' or 'Reject' directly.
-- **Question Cards**: Fill out the form in the card and submit.
+- For approvals, click approve/reject on the card
+- For questions, fill the card and submit
 
-Text commands remain available as a fallback:
+Text commands are still available as fallback:
 
 ```text
 yes <request_id>
 no <request_id>
-/clawpool-question <request_id> your answer
+/clawpool-question <request_id> your_answer
 ```
 
-- You only need to type these commands manually for debugging, troubleshooting, or if the interactive cards are unavailable.
+- Use manual text input only for debugging, troubleshooting, or when cards are unavailable
 
-## File Sending
+## File sending
 
-Claude can send local files back to ClawPool. The maximum file size is 50MB. Only common image, video, and document formats are supported.
+Claude can send local files back to ClawPool. Maximum file size is 50MB, and only common image/video/document formats are supported.
 
-## Troubleshooting Logs
+## Log troubleshooting
 
-Each AIBot session ID gets its own dedicated log file:
+Each AIBot session ID has an independent log file:
 
 ```text
 ~/.claude/clawpool-claude-daemon/sessions/<aibot_session_id>/logs/daemon-session.log
 ```
 
-This log tracks the complete lifecycle of Claude orchestration in that session, including:
+This log records full Claude scheduling flow for that session, including:
 
-- Worker process state changes and PIDs
-- Restarts after process exits
-- Message delivery and result reporting
-- Communication probes and timeout determinations
+- Worker process state changes and PID
+- Process relaunch after exit
+- Message delivery and result callbacks
+- Connectivity probes and timeout decisions
 
-For full troubleshooting steps, see:
+Full troubleshooting steps:
 
 - `docs/session-log-troubleshooting.md`
 
-## CLI Reference
+## CLI commands
 
 ```text
 clawpool-claude install [options]
@@ -152,50 +150,50 @@ clawpool-claude uninstall [options]
 clawpool-claude [options]
 ```
 
-It is recommended to use `install` as the primary method. The default command `clawpool-claude [options]` is better suited for temporary foreground execution or debugging.
+`install` is the recommended default. The plain `clawpool-claude [options]` command is better for temporary foreground runs or debugging.
 
-## Common Options
+## Common options
 
 ```text
 --ws-url <value>      ClawPool Agent API WebSocket URL
 --agent-id <value>    Agent ID
 --api-key <value>     API Key
 --data-dir <path>     daemon data directory
---chunk-limit <n>     Maximum length for a single text chunk
---show-claude         Bring Claude into a visible Terminal window for debugging
---no-launch           Only verify and write the configuration, do not start the daemon
---help, -h            Show help
+--chunk-limit <n>     max text chunk length
+--show-claude         show Claude in a visible Terminal window for debugging
+--no-launch           validate and save config only, do not start daemon
+--help, -h            show help
 ```
 
-- Complete connection parameters must be provided during the first `install` or foreground launch.
-- If the configuration is already saved locally, connection parameters can be omitted.
-- `--data-dir` can be used to specify an isolated data directory, which is useful when running multiple environments separately.
-- `--show-claude` is currently only supported on macOS Terminal.
+- On first `install` or first foreground run, pass full connection parameters
+- If config has already been saved locally, you can omit connection parameters
+- Use `--data-dir` to isolate data directories across environments
+- `--show-claude` currently supports macOS Terminal only
 
-During development, if you suspect Claude is stuck on the startup confirmation prompt, add `--show-claude`. This allows the daemon to pull the Claude session into a visible Terminal window.
+If Claude seems stuck on the startup confirmation page during development, add `--show-claude` so daemon opens the Claude session in a visible Terminal window.
 
-## Auto-Compilation During Development
+## Auto-build during development
 
-If you are modifying the code in this repository, run:
+If you are changing code in this repository, run:
 
 ```bash
 npm run dev
 ```
 
-This will continuously watch for source changes and automatically compile the latest outputs into your project at:
+It continuously watches source changes and builds the latest artifacts to:
 
 - `dist/index.js`
 - `dist/daemon.js`
 
-While debugging locally, open another terminal window and run:
+For local integration testing, run this in another terminal:
 
 ```bash
 npm run daemon
 ```
 
-This ensures that both the daemon process and the worker loaded in the Claude session use the freshly compiled development output.
+Then both the daemon process and the worker loaded in Claude sessions will use the latest local build artifacts.
 
-If you want `npm run daemon` to pull connection parameters directly from environment variables, run it like this:
+If you want `npm run daemon` to read connection parameters directly from environment variables, run:
 
 ```bash
 CLAWPOOL_CLAUDE_ENDPOINT='ws://127.0.0.1:27189/v1/agent-api/ws?agent_id=<agent_id>' \
@@ -204,4 +202,4 @@ CLAWPOOL_CLAUDE_API_KEY='<api_key>' \
 npm run daemon -- --no-launch
 ```
 
-`CLAWPOOL_CLAUDE_WS_URL` is also still supported. If both are provided, the daemon will prioritize environment variables.
+`CLAWPOOL_CLAUDE_WS_URL` is still supported; if both are provided, daemon prefers environment variable values.
