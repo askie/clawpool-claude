@@ -2177,7 +2177,8 @@ export class DaemonRuntime {
         worker_id: previousWorkerID || nextWorkerID,
         remaining_cooldown_ms: authCooldownMs - (Date.now() - lastSpawnAt),
       }, "error");
-      return;
+      // Don't block fail — let pending events be failed so the user is
+      // notified. Otherwise reconcile keeps looping on the same stopped worker.
     }
 
     for (const record of this.listPendingEventsForSession(sessionID)) {
