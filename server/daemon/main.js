@@ -289,7 +289,7 @@ export async function run(argv = [], env = process.env) {
             ) {
               return;
             }
-            await runtime?.handleWorkerStatusUpdate?.(previousBinding, currentBinding);
+            await runtime?.handleWorkerStatusUpdateQueued?.(previousBinding, currentBinding);
             const verifiedBinding = bindingRegistry.getByAibotSessionID(aibotSessionID);
             const pendingEventCount = runtime?.listPendingEventsForSession?.(aibotSessionID)?.length ?? 0;
             if (shouldNotifyWorkerReady(previousBinding, verifiedBinding, { pendingEventCount })) {
@@ -301,7 +301,7 @@ export async function run(argv = [], env = process.env) {
         }, workerReadySettleDelayMs);
         timer.unref?.();
       } else {
-        await runtime?.handleWorkerStatusUpdate?.(previousBinding, nextBinding);
+        await runtime?.handleWorkerStatusUpdateQueued?.(previousBinding, nextBinding);
       }
       return { ok: true };
     },
@@ -397,7 +397,7 @@ export async function run(argv = [], env = process.env) {
       logger,
     });
     aibotClient.onEventMessage = async (payload) => {
-      await runtime.handleEvent(payload);
+      await runtime.handleEventQueued(payload);
     };
     aibotClient.onEventStop = async (payload) => {
       await runtime.handleStopEvent(payload);

@@ -9,6 +9,7 @@ import { claudeSessionExists as defaultClaudeSessionExists } from "./claude-sess
 import { DaemonControlCommandHandler } from "./control-command-handler.js";
 import { WorkerHealthInspector } from "./worker-health-inspector.js";
 import { PendingEventOrchestrator } from "./pending-event-orchestrator.js";
+import { SessionQueueRegistry } from "./session-queue.js";
 import { isProcessRunning as defaultIsProcessRunning } from "../process-control.js";
 import { summarizeHookSignalEvent } from "../hook-signal-store.js";
 import {
@@ -322,6 +323,9 @@ export class DaemonRuntime {
     this.ensureWorkerInFlight = new Map();
     this.resumeAuthRecoveryInFlight = new Map();
     this.lastAuthRecoverySpawnAt = new Map();
+    this.sessionQueues = new SessionQueueRegistry(
+      (fields, level) => this.trace(fields, level),
+    );
     this.controlCommandHandler = new DaemonControlCommandHandler({
       env: this.env,
       bindingRegistry: this.bindingRegistry,
@@ -1846,7 +1850,12 @@ export class DaemonRuntime {
   async reconcileWorkerProcesses() {
     const bindings = this.bindingRegistry?.listBindings?.() ?? [];
     for (const binding of bindings) {
-      await this.reconcileWorkerProcess(binding);
+      const sessionID = normalizeString(binding?.aibot_session_id);
+      if (!sessionID) continue;
+      const queue = this.sessionQueues.ensure(sessionID);
+      queue.run(() => this.reconcileWorkerProcess(binding)).catch((err) => {
+        this.trace({ stage: "reconcile_worker_process_error", session_id: sessionID, error: String(err?.message ?? err) }, "error");
+      });
     }
   }
 
@@ -2071,6 +2080,24 @@ export class DaemonRuntime {
     }
 
     return false;
+  }
+
+  /**
+   * Queue-aware wrapper: routes handleWorkerStatusUpdate through the
+   * per-session serial queue to prevent races with reconcile and event
+   * handling.
+   */
+  async handleWorkerStatusUpdateQueued(previousBinding, nextBinding) {
+    const sessionID = normalizeString(
+      nextBinding?.aibot_session_id || previousBinding?.aibot_session_id,
+    );
+    if (!sessionID) {
+      return this.handleWorkerStatusUpdate(previousBinding, nextBinding);
+    }
+    const queue = this.sessionQueues.ensure(sessionID);
+    return queue.run(() =>
+      this.handleWorkerStatusUpdate(previousBinding, nextBinding),
+    );
   }
 
   async handleWorkerStatusUpdate(previousBinding, nextBinding) {
@@ -2459,6 +2486,21 @@ export class DaemonRuntime {
 
   async handleControlCommand(event, parsed) {
     return this.controlCommandHandler.handleControlCommand(event, parsed);
+  }
+
+  /**
+   * Queue-aware wrapper: routes handleEvent through the per-session
+   * serial queue to prevent races with reconcile and worker status updates.
+   */
+  async handleEventQueued(rawPayload) {
+    const event = normalizeInboundEventPayload(rawPayload);
+    if (!event.event_id || !event.session_id || !event.msg_id) {
+      return;
+    }
+    const queue = this.sessionQueues.ensure(event.session_id);
+    queue.run(() => this.handleEvent(rawPayload)).catch((err) => {
+      this.trace({ stage: "handle_event_error", session_id: event.session_id, event_id: event.event_id, error: String(err?.message ?? err) }, "error");
+    });
   }
 
   async handleEvent(rawPayload) {
