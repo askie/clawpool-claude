@@ -171,8 +171,8 @@ function listHookSignalRecords(pingPayload) {
 
 const defaultDeliveredInFlightMaxAgeMs = 60 * 1000;
 const defaultWorkerControlProbeFailureThreshold = 3;
-const defaultMcpInteractionIdleMs = 5 * 60 * 1000;
-const defaultMcpResultTimeoutMs = 12 * 60 * 1000;
+const defaultMcpInteractionIdleMs = 15 * 60 * 1000;
+const defaultMcpResultTimeoutMs = 30 * 60 * 1000;
 const defaultRecentRevokeRetentionMs = 24 * 60 * 60 * 1000;
 const defaultAuthFailureCooldownMs = 60 * 1000;
 const defaultWorkerPingProbeRetentionMs = 60 * 1000;
