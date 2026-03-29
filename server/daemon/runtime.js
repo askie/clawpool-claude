@@ -334,6 +334,7 @@ export class DaemonRuntime {
     this.workerControlProbeFailures = new Map();
     this.workerPingProbeRecords = new Map();
     this.workerPingProbeInFlight = new Map();
+    this.pendingEventWorkerLogCursors = new Map();
     this.ensureWorkerInFlight = new Map();
     this.resumeAuthRecoveryInFlight = new Map();
     this.lastAuthRecoverySpawnAt = new Map();
@@ -1570,7 +1571,47 @@ export class DaemonRuntime {
   }
 
   async clearPendingEvent(eventID) {
+    const normalizedEventID = normalizeString(eventID);
+    if (normalizedEventID) {
+      this.pendingEventWorkerLogCursors.delete(normalizedEventID);
+    }
     return this.pendingEventOrchestrator.clearPendingEvent(eventID);
+  }
+
+  getPendingEventWorkerLogCursor(eventID) {
+    const normalizedEventID = normalizeString(eventID);
+    if (!normalizedEventID) {
+      return null;
+    }
+    return this.pendingEventWorkerLogCursors.get(normalizedEventID) ?? null;
+  }
+
+  async recordPendingEventWorkerLogCursor(eventID, workerID) {
+    const normalizedEventID = normalizeString(eventID);
+    const normalizedWorkerID = normalizeString(workerID);
+    if (!normalizedEventID || !normalizedWorkerID) {
+      return null;
+    }
+    try {
+      const cursor = await this.workerProcessManager?.captureLogCursor?.(normalizedWorkerID);
+      if (!cursor || typeof cursor !== "object") {
+        return null;
+      }
+      const normalizedCursor = {
+        stdoutOffset: normalizeNonNegativeInt(cursor.stdoutOffset, 0),
+        stderrOffset: normalizeNonNegativeInt(cursor.stderrOffset, 0),
+      };
+      this.pendingEventWorkerLogCursors.set(normalizedEventID, normalizedCursor);
+      return normalizedCursor;
+    } catch (error) {
+      this.trace({
+        stage: "pending_event_log_cursor_capture_failed",
+        event_id: normalizedEventID,
+        worker_id: normalizedWorkerID,
+        error: error instanceof Error ? error.message : String(error),
+      }, "error");
+      return null;
+    }
   }
 
   listPendingEventsForSession(sessionID) {
@@ -1850,8 +1891,13 @@ export class DaemonRuntime {
     if (!workerID) {
       return null;
     }
+    const eventID = normalizeString(payload?.event_id);
+    const logCursor = this.getPendingEventWorkerLogCursor(eventID);
     const hasExtraUsageLimitPrompt = await this.workerProcessManager?.hasExtraUsageLimitPrompt?.(
       workerID,
+      {
+        logCursor,
+      },
     );
     if (!hasExtraUsageLimitPrompt) {
       return null;
@@ -2462,6 +2508,7 @@ export class DaemonRuntime {
           path: "ready_worker",
         });
         await this.markPendingEventDispatching(rawPayload?.event_id, binding);
+        await this.recordPendingEventWorkerLogCursor(rawPayload?.event_id, binding?.worker_id);
         await deliverFn.call(this, binding, rawPayload);
         this.trace({
           stage: "event_dispatched",
@@ -2546,6 +2593,7 @@ export class DaemonRuntime {
       });
       return null;
     }
+    await this.recordPendingEventWorkerLogCursor(rawPayload?.event_id, readyBinding?.worker_id);
     await deliverFn.call(this, readyBinding, rawPayload);
     this.trace({
       stage: "event_dispatched",

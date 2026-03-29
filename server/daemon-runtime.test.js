@@ -5417,6 +5417,94 @@ test("daemon runtime forwards extra usage limit timeout as explicit failure", as
   );
 });
 
+test("daemon runtime checks usage limit from event log cursor when available", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-usage-cursor",
+    claude_session_id: "claude-usage-cursor",
+    cwd: tempDir,
+    worker_id: "worker-usage-cursor",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-usage-cursor",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-usage-cursor",
+    session_id: "chat-usage-cursor",
+    msg_id: "msg-usage-cursor",
+    sender_id: "sender-usage-cursor",
+    content: "hello",
+  });
+  await deliveryStore.markPendingEventDelivered("evt-usage-cursor", "worker-usage-cursor");
+
+  const usageLimitCheckCalls = [];
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: {
+      async hasExtraUsageLimitPrompt(workerID, options = {}) {
+        usageLimitCheckCalls.push({
+          workerID,
+          options,
+        });
+        return (
+          workerID === "worker-usage-cursor"
+          && options?.logCursor?.stdoutOffset === 128
+          && options?.logCursor?.stderrOffset === 64
+        );
+      },
+    },
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+  });
+  runtime.pendingEventWorkerLogCursors.set("evt-usage-cursor", {
+    stdoutOffset: 128,
+    stderrOffset: 64,
+  });
+
+  await runtime.forwardWorkerEventResult({
+    event_id: "evt-usage-cursor",
+    aibot_session_id: "chat-usage-cursor",
+    worker_id: "worker-usage-cursor",
+    status: "failed",
+    code: "claude_result_timeout",
+    msg: "Claude did not call reply or complete before timeout.",
+  });
+
+  assert.equal(usageLimitCheckCalls.length, 1);
+  assert.deepEqual(usageLimitCheckCalls[0], {
+    workerID: "worker-usage-cursor",
+    options: {
+      logCursor: {
+        stdoutOffset: 128,
+        stderrOffset: 64,
+      },
+    },
+  });
+  assert.equal(
+    sent.find(
+      (item) => item.kind === "event_result" && item.payload.event_id === "evt-usage-cursor",
+    )?.payload?.code,
+    "claude_usage_limit_reached",
+  );
+});
+
 test("daemon runtime blocks immediate respawn after auth stop and fails fast", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];

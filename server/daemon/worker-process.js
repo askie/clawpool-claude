@@ -1,4 +1,4 @@
-import { chmod, mkdir, open, readdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { execSync, spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
@@ -24,6 +24,8 @@ const extraUsageLimitPatterns = [
   /Stop and wait for limit to reset/iu,
   /Add funds to continue with extra usage/iu,
 ];
+const defaultUsageLimitTailScanBytes = 128 * 1024;
+const defaultUsageLimitCursorScanBytes = 512 * 1024;
 const startupPromptAutoConfirmPattern = /\[clawpool\]\s+startup_prompt_auto_confirm/u;
 const startupChannelListeningPatterns = [
   /\[clawpool\]\s+startup_channel_listening/u,
@@ -52,6 +54,59 @@ function patternMatches(pattern, content) {
 
 function normalizeString(value) {
   return String(value ?? "").trim();
+}
+
+function normalizeNonNegativeOffset(value) {
+  const normalized = Math.floor(Number(value ?? 0));
+  if (!Number.isFinite(normalized) || normalized < 0) {
+    return 0;
+  }
+  return normalized;
+}
+
+function normalizePositiveInt(value, fallback = 0) {
+  const normalized = Math.floor(Number(value ?? 0));
+  if (!Number.isFinite(normalized) || normalized <= 0) {
+    return Math.max(0, Math.floor(Number(fallback ?? 0)));
+  }
+  return normalized;
+}
+
+async function readLogSlice(filePath, {
+  startOffset = 0,
+  maxBytes = 0,
+} = {}) {
+  const normalizedPath = normalizeString(filePath);
+  if (!normalizedPath) {
+    return "";
+  }
+  let fileSize = 0;
+  try {
+    const info = await stat(normalizedPath);
+    fileSize = normalizeNonNegativeOffset(info?.size);
+  } catch {
+    return "";
+  }
+  if (fileSize <= 0) {
+    return "";
+  }
+  let start = Math.min(normalizeNonNegativeOffset(startOffset), fileSize);
+  const normalizedMaxBytes = normalizePositiveInt(maxBytes, 0);
+  if (normalizedMaxBytes > 0 && fileSize - start > normalizedMaxBytes) {
+    start = fileSize - normalizedMaxBytes;
+  }
+  const bytesToRead = fileSize - start;
+  if (bytesToRead <= 0) {
+    return "";
+  }
+  const handle = await open(normalizedPath, "r");
+  try {
+    const buffer = Buffer.alloc(bytesToRead);
+    const { bytesRead = 0 } = await handle.read(buffer, 0, bytesToRead, start);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await handle.close().catch(() => {});
+  }
 }
 
 function resolveClaudeCommand(env = process.env) {
@@ -819,7 +874,10 @@ export class WorkerProcessManager {
     return true;
   }
 
-  async hasLogPatternMatch(workerID, patterns = []) {
+  async hasLogPatternMatch(workerID, patterns = [], {
+    logCursor = null,
+    maxBytes = 0,
+  } = {}) {
     const runtime = this.runtimes.get(normalizeString(workerID));
     if (!runtime) {
       return false;
@@ -828,12 +886,32 @@ export class WorkerProcessManager {
       return false;
     }
 
-    for (const filePath of [runtime.stdout_log_path, runtime.stderr_log_path]) {
-      if (!normalizeString(filePath)) {
+    const cursor = logCursor && typeof logCursor === "object" ? logCursor : null;
+    const normalizedMaxBytes = normalizePositiveInt(maxBytes, 0);
+    const logTargets = [
+      {
+        filePath: runtime.stdout_log_path,
+        startOffset: cursor?.stdoutOffset,
+      },
+      {
+        filePath: runtime.stderr_log_path,
+        startOffset: cursor?.stderrOffset,
+      },
+    ];
+
+    for (const target of logTargets) {
+      const normalizedFilePath = normalizeString(target.filePath);
+      if (!normalizedFilePath) {
         continue;
       }
       try {
-        const content = await readFile(filePath, "utf8");
+        const content = await readLogSlice(normalizedFilePath, {
+          startOffset: target.startOffset,
+          maxBytes: normalizedMaxBytes,
+        });
+        if (!content) {
+          continue;
+        }
         const normalizedContent = stripTerminalControlSequences(content);
         if (patterns.some((pattern) => (
           patternMatches(pattern, content)
@@ -856,8 +934,40 @@ export class WorkerProcessManager {
     return this.hasLogPatternMatch(workerID, authLoginRequiredPatterns);
   }
 
-  async hasExtraUsageLimitPrompt(workerID) {
-    return this.hasLogPatternMatch(workerID, extraUsageLimitPatterns);
+  async hasExtraUsageLimitPrompt(workerID, {
+    logCursor = null,
+  } = {}) {
+    const hasCursor = Boolean(logCursor && typeof logCursor === "object");
+    return this.hasLogPatternMatch(workerID, extraUsageLimitPatterns, {
+      logCursor: hasCursor ? logCursor : null,
+      maxBytes: hasCursor
+        ? defaultUsageLimitCursorScanBytes
+        : defaultUsageLimitTailScanBytes,
+    });
+  }
+
+  async captureLogCursor(workerID) {
+    const runtime = this.runtimes.get(normalizeString(workerID));
+    if (!runtime) {
+      return null;
+    }
+
+    let stdoutOffset = 0;
+    let stderrOffset = 0;
+    try {
+      stdoutOffset = normalizeNonNegativeOffset((await stat(runtime.stdout_log_path)).size);
+    } catch {
+      stdoutOffset = 0;
+    }
+    try {
+      stderrOffset = normalizeNonNegativeOffset((await stat(runtime.stderr_log_path)).size);
+    } catch {
+      stderrOffset = 0;
+    }
+    return {
+      stdoutOffset,
+      stderrOffset,
+    };
   }
 
   async hasStartupPromptAutoConfirm(workerID) {

@@ -708,6 +708,96 @@ test("worker process manager detects Claude extra usage limit prompt from logs",
   assert.equal(await manager.hasExtraUsageLimitPrompt("worker-usage-limit"), true);
 });
 
+test("worker process manager usage limit detection ignores stale prompts outside recent tail", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-usage-limit-tail-"));
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+    },
+    packageRoot: tempDir,
+  });
+
+  manager.runtimes.set("worker-usage-limit-tail", {
+    worker_id: "worker-usage-limit-tail",
+    stdout_log_path: path.join(tempDir, "worker-usage-limit-tail.out.log"),
+    stderr_log_path: path.join(tempDir, "worker-usage-limit-tail.err.log"),
+  });
+  await writeFile(
+    path.join(tempDir, "worker-usage-limit-tail.out.log"),
+    [
+      "You're out of extra usage · resets 10pm (Asia/Shanghai)",
+      "Stop and wait for limit to reset",
+      "x".repeat(140 * 1024),
+    ].join("\n"),
+    "utf8",
+  );
+
+  assert.equal(await manager.hasExtraUsageLimitPrompt("worker-usage-limit-tail"), false);
+
+  await writeFile(
+    path.join(tempDir, "worker-usage-limit-tail.out.log"),
+    "\nAdd funds to continue with extra usage\n",
+    { encoding: "utf8", flag: "a" },
+  );
+
+  assert.equal(await manager.hasExtraUsageLimitPrompt("worker-usage-limit-tail"), true);
+});
+
+test("worker process manager usage limit detection can start at a log cursor", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-usage-limit-cursor-"));
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+    },
+    packageRoot: tempDir,
+  });
+
+  manager.runtimes.set("worker-usage-limit-cursor", {
+    worker_id: "worker-usage-limit-cursor",
+    stdout_log_path: path.join(tempDir, "worker-usage-limit-cursor.out.log"),
+    stderr_log_path: path.join(tempDir, "worker-usage-limit-cursor.err.log"),
+  });
+
+  const initialChunk = [
+    "normal startup line",
+    "Stop and wait for limit to reset",
+    "normal follow-up line",
+  ].join("\n");
+  await writeFile(
+    path.join(tempDir, "worker-usage-limit-cursor.out.log"),
+    `${initialChunk}\n`,
+    "utf8",
+  );
+  const cursor = {
+    stdoutOffset: Buffer.byteLength(`${initialChunk}\n`, "utf8"),
+    stderrOffset: 0,
+  };
+
+  await writeFile(
+    path.join(tempDir, "worker-usage-limit-cursor.out.log"),
+    "still healthy\n",
+    { encoding: "utf8", flag: "a" },
+  );
+  assert.equal(
+    await manager.hasExtraUsageLimitPrompt("worker-usage-limit-cursor", { logCursor: cursor }),
+    false,
+  );
+
+  await writeFile(
+    path.join(tempDir, "worker-usage-limit-cursor.out.log"),
+    "Add funds to continue with extra usage\n",
+    { encoding: "utf8", flag: "a" },
+  );
+  assert.equal(
+    await manager.hasExtraUsageLimitPrompt("worker-usage-limit-cursor", { logCursor: cursor }),
+    true,
+  );
+});
+
 test("worker process manager detects startup observability markers from logs", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-startup-marker-"));
   const manager = new WorkerProcessManager({
