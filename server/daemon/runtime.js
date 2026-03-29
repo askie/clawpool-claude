@@ -355,6 +355,14 @@ export class DaemonRuntime {
       }, this.workerRuntimeHealthCheckMs);
       this.workerRuntimeHealthCheckTimer.unref?.();
     }
+    this.pendingEventFlushTimer = null;
+    const pendingEventFlushMs = 5000;
+    if (pendingEventFlushMs > 0) {
+      this.pendingEventFlushTimer = setInterval(() => {
+        void this.flushStalePendingEvents();
+      }, pendingEventFlushMs);
+      this.pendingEventFlushTimer.unref?.();
+    }
   }
 
   trace(fields, level = "info") {
@@ -362,6 +370,63 @@ export class DaemonRuntime {
       component: "daemon.runtime",
       ...fields,
     }, { level });
+  }
+
+  async handleWorkerProcessExit({ workerID, aibotSessionID, exitCode, exitSignal }) {
+    const sessionID = normalizeString(aibotSessionID);
+    if (!sessionID) return;
+
+    const queue = this.sessionQueues.ensure(sessionID);
+    queue.run(async () => {
+      const binding = this.bindingRegistry.getByAibotSessionID(sessionID);
+      if (!binding || normalizeString(binding.worker_id) !== normalizeString(workerID)) {
+        return;
+      }
+      if (binding.worker_status === "stopped" || binding.worker_status === "failed") {
+        return;
+      }
+
+      let signal = normalizeString(exitSignal) || "wrapper_exited";
+
+      const hasAuthError = await this.workerProcessManager?.hasAuthLoginRequiredError?.(workerID);
+      if (hasAuthError) {
+        const runtime = this.workerProcessManager?.getWorkerRuntime?.(workerID);
+        signal = runtime?.resume_session
+          ? "auth_login_required_resume"
+          : "auth_login_required";
+        this.workerProcessManager?.markWorkerRuntimeStopped?.(workerID, {
+          exitCode: exitCode ?? 0,
+          exitSignal: signal,
+        });
+      }
+
+      this.trace({
+        stage: "worker_process_exit_callback",
+        session_id: sessionID,
+        worker_id: workerID,
+        exit_code: exitCode,
+        exit_signal: signal,
+      }, "error");
+
+      await this.bindingRegistry.markWorkerResponseFailed(sessionID, {
+        observedAt: Date.now(),
+        reason: signal,
+        failureCode: signal,
+      });
+      const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
+        updatedAt: Date.now(),
+        lastStoppedAt: Date.now(),
+      });
+      await this.requeuePendingEventsForWorker(sessionID, workerID);
+      await this.handleWorkerStatusUpdate(binding, nextBinding);
+    }).catch((err) => {
+      this.trace({
+        stage: "worker_process_exit_callback_error",
+        session_id: sessionID,
+        worker_id: workerID,
+        error: String(err?.message ?? err),
+      }, "error");
+    });
   }
 
   getWorkerPingProbeRecord(eventID) {
@@ -745,6 +810,10 @@ export class DaemonRuntime {
       clearInterval(this.workerRuntimeHealthCheckTimer);
       this.workerRuntimeHealthCheckTimer = null;
     }
+    if (this.pendingEventFlushTimer) {
+      clearInterval(this.pendingEventFlushTimer);
+      this.pendingEventFlushTimer = null;
+    }
     this.workerControlProbeFailures.clear();
     for (const eventID of this.workerPingProbeRecords.keys()) {
       this.clearWorkerPingProbeRecord(eventID);
@@ -976,7 +1045,7 @@ export class DaemonRuntime {
     }
 
     if (binding.worker_status === "starting" || binding.worker_status === "connected") {
-      const current = await this.waitForWorkerBridgeState(binding.aibot_session_id);
+      const current = await this.waitForWorkerBridgeState(binding.aibot_session_id, { timeoutMs: 5000, intervalMs: 100 });
       if (canDeliverToWorker(current)) {
         this.trace({
           stage: "worker_reused_after_wait",
@@ -1643,6 +1712,34 @@ export class DaemonRuntime {
     return this.pendingEventOrchestrator.flushPendingSessionEvents(sessionID, binding);
   }
 
+  async flushStalePendingEvents() {
+    const bindings = this.bindingRegistry?.listBindings?.() ?? [];
+    for (const binding of bindings) {
+      const sessionID = normalizeString(binding?.aibot_session_id);
+      if (!sessionID) continue;
+      if (!canDeliverToWorker(binding)) continue;
+
+      const pendingEvents = this.listPendingEventsForSession(sessionID);
+      const hasPending = pendingEvents.some(
+        (r) => normalizeString(r.delivery_state) === "pending",
+      );
+      if (!hasPending) continue;
+
+      const queue = this.sessionQueues.ensure(sessionID);
+      queue.run(() => {
+        const freshBinding = this.bindingRegistry.getByAibotSessionID(sessionID);
+        if (!freshBinding || !canDeliverToWorker(freshBinding)) return;
+        return this.flushPendingSessionEvents(sessionID, freshBinding);
+      }).catch((err) => {
+        this.trace({
+          stage: "stale_pending_flush_error",
+          session_id: sessionID,
+          error: String(err?.message ?? err),
+        }, "error");
+      });
+    }
+  }
+
   async failPendingEvent(record, {
     notifyText = true,
     noticeText = buildInterruptedEventNotice(),
@@ -1861,11 +1958,14 @@ export class DaemonRuntime {
 
   async reconcileWorkerProcess(binding) {
     const sessionID = normalizeString(binding?.aibot_session_id);
-    const workerID = normalizeString(binding?.worker_id);
-    const workerStatus = normalizeString(binding?.worker_status);
+    if (!sessionID) return false;
+
+    // Re-read the latest binding state to avoid acting on a stale snapshot.
+    const freshBinding = this.bindingRegistry?.getByAibotSessionID?.(sessionID) ?? binding;
+    const workerID = normalizeString(freshBinding?.worker_id);
+    const workerStatus = normalizeString(freshBinding?.worker_status);
     if (
-      !sessionID
-      || !workerID
+      !workerID
       || !["starting", "connected", "ready"].includes(workerStatus)
     ) {
       return false;
@@ -1901,50 +2001,16 @@ export class DaemonRuntime {
         resume_session: Boolean(authRuntime?.resume_session),
       }, "error");
 
-      // Attempt automatic re-login before stopping the worker.
-      if (typeof this.workerProcessManager?.runClaudeAuthLogin === "function") {
-        this.trace({
-          stage: "worker_auth_auto_login_started",
-          session_id: sessionID,
-          worker_id: workerID,
-        }, "error");
-        const loginResult = await this.workerProcessManager.runClaudeAuthLogin();
-        if (loginResult.ok) {
-          this.trace({
-            stage: "worker_auth_auto_login_succeeded",
-            session_id: sessionID,
-            worker_id: workerID,
-          }, "error");
-          // Login refreshed — stop the stale worker and let the next
-          // reconcile / event cycle spawn a fresh one that will pick up
-          // the new credentials.
-          await this.workerProcessManager?.stopWorker?.(workerID);
-          await this.bindingRegistry.markWorkerResponseFailed(sessionID, {
-            observedAt: Date.now(),
-            reason: "auth_auto_login_refreshed",
-            failureCode: "auth_auto_login_refreshed",
-          });
-          const nextBinding = await this.bindingRegistry.markWorkerStopped(sessionID, {
-            updatedAt: Date.now(),
-            lastStoppedAt: Date.now(),
-          });
-          this.workerProcessManager?.markWorkerRuntimeStopped?.(workerID, {
-            exitCode: 0,
-            exitSignal: "auth_auto_login_refreshed",
-          });
-          // Re-queue any pending events so they are delivered once the
-          // fresh worker is ready.
-          await this.requeuePendingEventsForWorker(sessionID, workerID);
-          await this.handleWorkerStatusUpdate(binding, nextBinding);
-          return true;
-        }
-        this.trace({
-          stage: "worker_auth_auto_login_failed",
-          session_id: sessionID,
-          worker_id: workerID,
-          reason: loginResult.reason,
-        }, "error");
-      }
+      // Auth error detected — stop the stale worker immediately.
+      // The next reconcile / event cycle will spawn a fresh worker
+      // that picks up the current credentials from disk.
+      // (Skipping non-interactive `claude auth login` which always
+      // times out because it requires browser-based OAuth.)
+      this.trace({
+        stage: "worker_auth_stopping_stale",
+        session_id: sessionID,
+        worker_id: workerID,
+      }, "error");
 
       await this.workerProcessManager?.stopWorker?.(workerID);
       await this.bindingRegistry.markWorkerResponseFailed(sessionID, {
@@ -1961,7 +2027,8 @@ export class DaemonRuntime {
         exitCode: 0,
         exitSignal: authExitSignal,
       });
-      await this.handleWorkerStatusUpdate(binding, nextBinding);
+      await this.requeuePendingEventsForWorker(sessionID, workerID);
+      await this.handleWorkerStatusUpdate(freshBinding, nextBinding);
       return true;
     }
 

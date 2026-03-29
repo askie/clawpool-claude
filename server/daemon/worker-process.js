@@ -1,5 +1,5 @@
 import { chmod, mkdir, open, readdir, readFile, writeFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { randomUUID } from "node:crypto";
@@ -367,7 +367,6 @@ async function launchClaudeInHiddenPty({
       reject(error);
     };
     child.once("error", onError);
-    child.unref();
     waitForPidFile(pidPath)
       .then((nextPID) => {
         if (settled) {
@@ -391,6 +390,7 @@ async function launchClaudeInHiddenPty({
     wrapperPID: Number(child.pid || 0),
     expectPath,
     pidPath,
+    child,
   };
 }
 
@@ -450,6 +450,7 @@ export class WorkerProcessManager {
     this.waitForProcessExit = typeof waitForProcessExit === "function"
       ? waitForProcessExit
       : defaultWaitForProcessExit;
+    this.onWorkerExit = null;
     this.runtimes = new Map();
     this.spawnQueues = new Map();
   }
@@ -537,6 +538,25 @@ export class WorkerProcessManager {
         await writeFile(entry.pidPath, "", "utf8").catch(() => {});
       }
     }
+
+    // Fallback: find and kill orphaned claude workers by command pattern.
+    // PID files may be empty if the previous expect process failed to write them.
+    if (terminatedPIDs.length === 0 && normalizedSessionIDs.length > 0) {
+      try {
+        const output = execSync(
+          "pgrep -f 'claude.*--plugin-dir.*clawpool-claude' 2>/dev/null || true",
+          { encoding: "utf8", timeout: 5000 },
+        );
+        const orphanPIDs = output.trim().split("\n").map(Number).filter((n) => n > 0);
+        for (const pid of orphanPIDs) {
+          await this.terminateProcessTree(pid, { platform: process.platform });
+          terminatedPIDs.push(pid);
+        }
+      } catch {
+        // pgrep not available or no matches
+      }
+    }
+
     return terminatedPIDs;
   }
 
@@ -612,6 +632,7 @@ export class WorkerProcessManager {
       });
       const stdoutHandle = await open(stdoutLogPath, "w");
       const stderrHandle = await open(stderrLogPath, "w");
+      let deferFDClose = false;
       try {
         await this.cleanupStaleManagedProcesses([normalizedSessionID]);
 
@@ -645,6 +666,34 @@ export class WorkerProcessManager {
           });
           pid = hiddenPty.pid;
           pidPath = normalizeString(hiddenPty.pidPath);
+          if (hiddenPty.child) {
+            child = hiddenPty.child;
+            const exitWorkerID = normalizedWorkerID;
+            const exitSessionID = normalizedSessionID;
+            child.on("exit", (code, signal) => {
+              const rt = this.runtimes.get(exitWorkerID);
+              if (rt) {
+                Promise.allSettled([
+                  rt.stdoutHandle?.close?.(),
+                  rt.stderrHandle?.close?.(),
+                ]).catch(() => {});
+                rt.stdoutHandle = null;
+                rt.stderrHandle = null;
+              }
+              this.markWorkerRuntimeStopped(exitWorkerID, {
+                exitCode: code ?? 0,
+                exitSignal: signal || "wrapper_exited",
+              });
+              if (typeof this.onWorkerExit === "function") {
+                this.onWorkerExit({
+                  workerID: exitWorkerID,
+                  aibotSessionID: exitSessionID,
+                  exitCode: code ?? 0,
+                  exitSignal: signal || "wrapper_exited",
+                });
+              }
+            });
+          }
         } else {
           child = this.spawnImpl(
             claudeCommand,
@@ -673,6 +722,8 @@ export class WorkerProcessManager {
           throw new Error("failed to determine spawned Claude pid");
         }
 
+        const isHiddenPty = !visibleTerminal && process.platform === "darwin";
+        deferFDClose = isHiddenPty;
         const runtime = {
           worker_id: normalizedWorkerID,
           aibot_session_id: normalizedSessionID,
@@ -688,15 +739,20 @@ export class WorkerProcessManager {
           status: "starting",
           resume_session: resumeSession,
           visible_terminal: Boolean(visibleTerminal),
+          wrapperChild: isHiddenPty ? child : null,
+          stdoutHandle: isHiddenPty ? stdoutHandle : null,
+          stderrHandle: isHiddenPty ? stderrHandle : null,
         };
         this.runtimes.set(normalizedWorkerID, runtime);
 
         return { ...runtime };
       } finally {
-        await Promise.allSettled([
-          stdoutHandle.close(),
-          stderrHandle.close(),
-        ]);
+        if (!deferFDClose) {
+          await Promise.allSettled([
+            stdoutHandle.close().catch(() => {}),
+            stderrHandle.close().catch(() => {}),
+          ]);
+        }
       }
     });
   }
@@ -737,6 +793,13 @@ export class WorkerProcessManager {
     if (runtime.pid_path) {
       await writeFile(runtime.pid_path, "", "utf8").catch(() => {});
     }
+    if (runtime.wrapperChild) {
+      runtime.wrapperChild.unref();
+    }
+    await Promise.allSettled([
+      runtime.stdoutHandle?.close?.(),
+      runtime.stderrHandle?.close?.(),
+    ]);
     this.markWorkerRuntimeStopped(normalizedWorkerID, {
       exitSignal,
     });

@@ -11,10 +11,12 @@ async function parseJSONResponse(response) {
 }
 
 export class WorkerControlClient {
-  constructor({ controlURL, token, fetchImpl = globalThis.fetch } = {}) {
+  constructor({ controlURL, token, fetchImpl = globalThis.fetch, pingTimeoutMs = 5000, deliverTimeoutMs = 10000 } = {}) {
     this.controlURL = normalizeString(controlURL).replace(/\/+$/u, "");
     this.token = normalizeString(token);
     this.fetchImpl = fetchImpl;
+    this.pingTimeoutMs = pingTimeoutMs;
+    this.deliverTimeoutMs = deliverTimeoutMs;
   }
 
   isConfigured() {
@@ -32,6 +34,7 @@ export class WorkerControlClient {
         authorization: `Bearer ${this.token}`,
       },
       body: JSON.stringify({ payload: rawPayload }),
+      signal: AbortSignal.timeout(this.deliverTimeoutMs),
     });
     const json = await parseJSONResponse(response);
     if (!response.ok) {
@@ -51,6 +54,7 @@ export class WorkerControlClient {
         authorization: `Bearer ${this.token}`,
       },
       body: JSON.stringify({ payload: rawPayload }),
+      signal: AbortSignal.timeout(this.deliverTimeoutMs),
     });
     const json = await parseJSONResponse(response);
     if (!response.ok) {
@@ -70,6 +74,7 @@ export class WorkerControlClient {
         authorization: `Bearer ${this.token}`,
       },
       body: JSON.stringify({ payload: rawPayload }),
+      signal: AbortSignal.timeout(this.deliverTimeoutMs),
     });
     const json = await parseJSONResponse(response);
     if (!response.ok) {
@@ -89,6 +94,7 @@ export class WorkerControlClient {
         authorization: `Bearer ${this.token}`,
       },
       body: JSON.stringify({}),
+      signal: AbortSignal.timeout(this.pingTimeoutMs),
     });
     const json = await parseJSONResponse(response);
     if (!response.ok) {

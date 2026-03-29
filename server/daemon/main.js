@@ -396,6 +396,7 @@ export async function run(argv = [], env = process.env) {
       messageDeliveryStore,
       logger,
     });
+    workerProcessManager.onWorkerExit = (info) => runtime.handleWorkerProcessExit(info);
     aibotClient.onEventMessage = async (payload) => {
       await runtime.handleEventQueued(payload);
     };
