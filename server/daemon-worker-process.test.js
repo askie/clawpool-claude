@@ -585,6 +585,7 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude
   assert.match(script, /if tty of t is targetTTY then/u);
   assert.match(script, /close t/u);
   assert.match(expectScript, /set timeout -1/u);
+  assert.match(expectScript, /set startup_prompt_armed 1/u);
   assert.match(expectScript, /proc emit_marker \{marker\}/u);
   assert.match(expectScript, /expect \{/u);
   assert.match(expectScript, /emit_marker startup_prompt_auto_confirm/u);
@@ -601,6 +602,8 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude
   assert.match(expectScript, /-re \{\(\?i\)I am using this for local development\}/u);
   assert.match(expectScript, /-re \{\(\?i\)\(Enter\.\*confirm\|Press\.\*Enter\|Hit\.\*Enter\|Continue\.\*Enter\)\}/u);
   assert.match(expectScript, /-re \{\(\?i\)Listening\.\*channel messages\.\*server:clawpool-claude\}/u);
+  assert.match(expectScript, /if \{\$startup_prompt_armed\} \{/u);
+  assert.match(expectScript, /set startup_prompt_armed 0/u);
   assert.match(expectScript, /-re \{\(\?i\)MCP\.\*server failed\}/u);
   assert.match(expectScript, /send -- "\\r"/u);
   assert.match(expectScript, /exp_continue/u);
@@ -674,6 +677,35 @@ test("worker process manager detects Claude auth login required failure from log
   );
 
   assert.equal(await manager.hasAuthLoginRequiredError("worker-auth-expired"), true);
+});
+
+test("worker process manager detects Claude extra usage limit prompt from logs", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-usage-limit-"));
+  const manager = new WorkerProcessManager({
+    env: {
+      ...process.env,
+      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+    },
+    packageRoot: tempDir,
+  });
+
+  manager.runtimes.set("worker-usage-limit", {
+    worker_id: "worker-usage-limit",
+    stdout_log_path: path.join(tempDir, "worker-usage-limit.out.log"),
+    stderr_log_path: path.join(tempDir, "worker-usage-limit.err.log"),
+  });
+  await writeFile(
+    path.join(tempDir, "worker-usage-limit.out.log"),
+    [
+      "You're\u001b[1Cout of extra usage · resets 10pm (Asia/Shanghai)",
+      "1. Stop and wait for limit to reset",
+      "2. Add funds to continue with extra usage",
+    ].join("\n"),
+    "utf8",
+  );
+
+  assert.equal(await manager.hasExtraUsageLimitPrompt("worker-usage-limit"), true);
 });
 
 test("worker process manager detects startup observability markers from logs", async () => {

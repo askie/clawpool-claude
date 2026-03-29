@@ -5332,6 +5332,91 @@ test("daemon runtime stops worker immediately and fails with auth message on aut
   );
 });
 
+test("daemon runtime forwards extra usage limit timeout as explicit failure", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const sent = [];
+  const bindingFile = path.join(tempDir, "binding-registry.json");
+  const deliveryFile = path.join(tempDir, "message-delivery-state.json");
+  const registry = new BindingRegistry(bindingFile);
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-usage-limit",
+    claude_session_id: "claude-usage-limit",
+    cwd: tempDir,
+    worker_id: "worker-usage-limit",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9001",
+    worker_control_token: "token-usage-limit",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const deliveryStore = new MessageDeliveryStore(deliveryFile);
+  await deliveryStore.load();
+  await deliveryStore.trackPendingEvent({
+    event_id: "evt-usage-limit",
+    session_id: "chat-usage-limit",
+    msg_id: "msg-usage-limit",
+    sender_id: "sender-usage-limit",
+    content: "hello",
+  });
+  await deliveryStore.markPendingEventDelivered("evt-usage-limit", "worker-usage-limit");
+
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: {
+      async hasExtraUsageLimitPrompt(workerID) {
+        return workerID === "worker-usage-limit";
+      },
+    },
+    aibotClient: makeAibotClient(sent),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    messageDeliveryStore: deliveryStore,
+    workerRuntimeHealthCheckMs: 0,
+  });
+
+  await runtime.forwardWorkerEventResult({
+    event_id: "evt-usage-limit",
+    aibot_session_id: "chat-usage-limit",
+    worker_id: "worker-usage-limit",
+    status: "failed",
+    code: "claude_result_timeout",
+    msg: "Claude did not call reply or complete before timeout.",
+  });
+
+  assert.equal(deliveryStore.getPendingEvent("evt-usage-limit"), null);
+  assert.equal(
+    sent.some(
+      (item) =>
+        item.kind === "text"
+        && item.payload.eventID === "evt-usage-limit"
+        && /额度已用完/u.test(item.payload.text),
+    ),
+    true,
+  );
+  assert.equal(
+    sent.find(
+      (item) => item.kind === "event_result" && item.payload.event_id === "evt-usage-limit",
+    )?.payload?.code,
+    "claude_usage_limit_reached",
+  );
+  assert.equal(
+    sent.find(
+      (item) => item.kind === "event_result" && item.payload.event_id === "evt-usage-limit",
+    )?.payload?.msg,
+    "claude usage limit reached; user action required",
+  );
+  assert.equal(
+    registry.getByAibotSessionID("chat-usage-limit")?.worker_last_failure_code,
+    "claude_usage_limit_reached",
+  );
+});
+
 test("daemon runtime blocks immediate respawn after auth stop and fails fast", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];

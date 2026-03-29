@@ -19,6 +19,11 @@ const authLoginRequiredPatterns = [
   /authentication_error/u,
   /OAuth token has expired/u,
 ];
+const extraUsageLimitPatterns = [
+  /You're out of extra usage/iu,
+  /Stop and wait for limit to reset/iu,
+  /Add funds to continue with extra usage/iu,
+];
 const startupPromptAutoConfirmPattern = /\[clawpool\]\s+startup_prompt_auto_confirm/u;
 const startupChannelListeningPatterns = [
   /\[clawpool\]\s+startup_channel_listening/u,
@@ -207,6 +212,7 @@ export async function createVisibleClaudeLaunchScript({
   const expectLines = [
     "log_user 1",
     "set timeout -1",
+    "set startup_prompt_armed 1",
     "proc emit_marker {marker} {",
     "  puts [format {[clawpool] %s} $marker]",
     "  flush stdout",
@@ -221,27 +227,34 @@ export async function createVisibleClaudeLaunchScript({
     "send -- \"\\r\"",
     "expect {",
     "  -re {(?i)(Quick.*safety.*check|trust.*folder)} {",
-    "    emit_marker startup_prompt_auto_confirm",
-    "    emit_marker startup_workspace_trust_auto_confirm",
-    "    send -- \"1\\r\"",
-    "    after 300",
+    "    if {$startup_prompt_armed} {",
+    "      emit_marker startup_prompt_auto_confirm",
+    "      emit_marker startup_workspace_trust_auto_confirm",
+    "      send -- \"1\\r\"",
+    "      after 300",
+    "    }",
     "    exp_continue",
     "  }",
     "  -re {(?i)I am using this for local development} {",
-    "    emit_marker startup_prompt_auto_confirm",
-    "    emit_marker startup_development_channels_auto_confirm",
-    "    send -- \"1\\r\"",
-    "    after 300",
+    "    if {$startup_prompt_armed} {",
+    "      emit_marker startup_prompt_auto_confirm",
+    "      emit_marker startup_development_channels_auto_confirm",
+    "      send -- \"1\\r\"",
+    "      after 300",
+    "    }",
     "    exp_continue",
     "  }",
     "  -re {(?i)(Enter.*confirm|Press.*Enter|Hit.*Enter|Continue.*Enter)} {",
-    "    emit_marker startup_prompt_auto_confirm",
-    "    send -- \"\\r\"",
-    "    after 300",
+    "    if {$startup_prompt_armed} {",
+    "      emit_marker startup_prompt_auto_confirm",
+    "      send -- \"\\r\"",
+    "      after 300",
+    "    }",
     "    exp_continue",
     "  }",
     "  -re {(?i)Listening.*channel messages.*server:clawpool-claude} {",
     "    emit_marker startup_channel_listening",
+    "    set startup_prompt_armed 0",
     "    exp_continue",
     "  }",
     "  -re {(?i)MCP.*server failed} {",
@@ -841,6 +854,10 @@ export class WorkerProcessManager {
 
   async hasAuthLoginRequiredError(workerID) {
     return this.hasLogPatternMatch(workerID, authLoginRequiredPatterns);
+  }
+
+  async hasExtraUsageLimitPrompt(workerID) {
+    return this.hasLogPatternMatch(workerID, extraUsageLimitPatterns);
   }
 
   async hasStartupPromptAutoConfirm(workerID) {

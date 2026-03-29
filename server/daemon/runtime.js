@@ -99,8 +99,21 @@ function buildAuthLoginRequiredEventNotice() {
   return "Claude 登录已失效，请在电脑上执行 claude auth login 后重试。";
 }
 
+function buildUsageLimitReachedEventNotice() {
+  return "Claude 当前额度已用完，没法继续回复。请先在 Claude 里处理额度提示，然后把这条消息再发一次。";
+}
+
 function buildWorkerStartupFailedNotice() {
   return "Claude 启动未完成，消息未发送。请执行 clawpool-claude restart 后重试。";
+}
+
+function buildUsageLimitFailureOptions() {
+  return {
+    noticeText: buildUsageLimitReachedEventNotice(),
+    replySource: "daemon_worker_usage_limit_reached",
+    resultCode: "claude_usage_limit_reached",
+    resultMessage: "claude usage limit reached; user action required",
+  };
 }
 
 function buildMissingBindingCardOptions() {
@@ -178,6 +191,7 @@ const defaultAuthFailureCooldownMs = 60 * 1000;
 const defaultWorkerPingProbeRetentionMs = 60 * 1000;
 const workerResponseFailureCodes = new Set([
   "claude_result_timeout",
+  "claude_usage_limit_reached",
   "channel_notification_failed",
 ]);
 
@@ -1798,7 +1812,13 @@ export class DaemonRuntime {
       normalizedWorkerID,
     );
     if (!hasAuthLoginRequiredError) {
-      return null;
+      const hasExtraUsageLimitPrompt = await this.workerProcessManager?.hasExtraUsageLimitPrompt?.(
+        normalizedWorkerID,
+      );
+      if (!hasExtraUsageLimitPrompt) {
+        return null;
+      }
+      return buildUsageLimitFailureOptions();
     }
     return {
       noticeText: buildAuthLoginRequiredEventNotice(),
@@ -1806,6 +1826,83 @@ export class DaemonRuntime {
       resultCode: "claude_auth_login_required",
       resultMessage: "claude authentication expired; run claude auth login",
     };
+  }
+
+  resolveWorkerIDForEventResult(payload) {
+    const explicitWorkerID = normalizeString(payload?.worker_id);
+    if (explicitWorkerID) {
+      return explicitWorkerID;
+    }
+    const sessionID = this.resolveObservedSessionID(payload);
+    const binding = sessionID
+      ? this.bindingRegistry.getByAibotSessionID(sessionID)
+      : null;
+    return normalizeString(binding?.worker_id);
+  }
+
+  async resolveWorkerEventResultFailureOptions(payload) {
+    const status = normalizeString(payload?.status);
+    const code = normalizeString(payload?.code);
+    if (status !== "failed" || code !== "claude_result_timeout") {
+      return null;
+    }
+    const workerID = this.resolveWorkerIDForEventResult(payload);
+    if (!workerID) {
+      return null;
+    }
+    const hasExtraUsageLimitPrompt = await this.workerProcessManager?.hasExtraUsageLimitPrompt?.(
+      workerID,
+    );
+    if (!hasExtraUsageLimitPrompt) {
+      return null;
+    }
+    return buildUsageLimitFailureOptions();
+  }
+
+  buildForwardedWorkerEventResult(payload, failureOptions = null) {
+    const nextPayload = { ...payload };
+    if (!failureOptions) {
+      return nextPayload;
+    }
+    return {
+      ...nextPayload,
+      code: failureOptions.resultCode,
+      msg: failureOptions.resultMessage,
+    };
+  }
+
+  async notifyWorkerEventResultFailure(payload, failureOptions = null) {
+    if (!failureOptions?.noticeText) {
+      return null;
+    }
+    const eventID = normalizeString(payload?.event_id);
+    const record = this.getPendingEvent(eventID);
+    if (!record?.eventID || !record?.sessionID) {
+      return null;
+    }
+    try {
+      return await this.aibotClient.sendText({
+        eventID: record.eventID,
+        sessionID: record.sessionID,
+        text: failureOptions.noticeText,
+        quotedMessageID: record.msgID,
+        extra: {
+          reply_source: failureOptions.replySource,
+        },
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async forwardWorkerEventResult(payload) {
+    const failureOptions = await this.resolveWorkerEventResultFailureOptions(payload);
+    const nextPayload = this.buildForwardedWorkerEventResult(payload, failureOptions);
+    await this.recordWorkerEventResultObserved(nextPayload);
+    await this.notifyWorkerEventResultFailure(nextPayload, failureOptions);
+    this.aibotClient.sendEventResult(nextPayload);
+    await this.handleEventCompleted(nextPayload?.event_id);
+    return nextPayload;
   }
 
   async requeuePendingEventsForWorker(sessionID, workerID) {

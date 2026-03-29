@@ -351,6 +351,10 @@ export async function run(argv = [], env = process.env) {
       if (probeResult?.handled) {
         return { ok: true };
       }
+      if (runtime?.forwardWorkerEventResult) {
+        await runtime.forwardWorkerEventResult(payload);
+        return { ok: true };
+      }
       await runtime?.recordWorkerEventResultObserved?.(payload);
       aibotClient.sendEventResult(payload);
       await runtime?.handleEventCompleted?.(payload?.event_id);
