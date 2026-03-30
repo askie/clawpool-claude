@@ -72,16 +72,26 @@ export class WorkerEventLifecycleManager {
       this.logger.info(`result timeout finalized event=${eventID} status=${result.status}`);
     } catch (error) {
       this.logger.error(`result timeout send failed event=${eventID}: ${String(error)}`);
-      const deadlineAt = this.resultTimeouts.arm(eventID, {
-        timeoutMs: this.retryTimeoutMs,
+      this.armResultTimeout(eventID, this.retryTimeoutMs, {
+        timeoutKind: "timeout_retry",
       });
-      this.eventState.setResultDeadline(eventID, { deadlineAt });
     }
   }
 
-  armResultTimeout(eventID, timeoutMs = this.defaultTimeoutMs) {
-    const deadlineAt = this.resultTimeouts.arm(eventID, { timeoutMs });
+  armResultTimeout(eventID, timeoutMs = this.defaultTimeoutMs, {
+    timeoutKind = "default",
+  } = {}) {
+    const normalizedTimeoutMs = normalizePositiveInt(timeoutMs, this.defaultTimeoutMs);
+    const deadlineAt = this.resultTimeouts.arm(eventID, { timeoutMs: normalizedTimeoutMs });
     this.eventState.setResultDeadline(eventID, { deadlineAt });
+    this.logger.trace?.({
+      component: "worker.interaction",
+      stage: "local_result_timeout_armed",
+      event_id: normalizeString(eventID),
+      timeout_ms: normalizedTimeoutMs,
+      deadline_at: deadlineAt,
+      timeout_kind: normalizeString(timeoutKind) || "default",
+    });
     return deadlineAt;
   }
 
@@ -184,8 +194,9 @@ export class WorkerEventLifecycleManager {
       });
     } catch (error) {
       this.logger.error(`sendTerminalResult send failed event=${eventID}, will retry: ${String(error)}`);
-      const deadlineAt = this.resultTimeouts.arm(eventID, { timeoutMs: this.retryTimeoutMs });
-      this.eventState.setResultDeadline(eventID, { deadlineAt });
+      this.armResultTimeout(eventID, this.retryTimeoutMs, {
+        timeoutKind: "terminal_result_retry",
+      });
       this.stopComposingKeepalive(eventID, event);
       return null;
     }
@@ -227,9 +238,9 @@ export class WorkerEventLifecycleManager {
 
   armRestoredEventTimeout(entry, { now = Date.now() } = {}) {
     const timeoutMs = this.resolveRestoreTimeoutMs(entry, now);
-    const deadlineAt = this.resultTimeouts.arm(entry.event_id, { timeoutMs });
-    this.eventState.setResultDeadline(entry.event_id, { deadlineAt });
-    return deadlineAt;
+    return this.armResultTimeout(entry.event_id, timeoutMs, {
+      timeoutKind: entry.result_intent ? "restore_retry" : "restore",
+    });
   }
 
   async shutdown() {

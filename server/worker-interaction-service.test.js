@@ -7,11 +7,14 @@ import { EventState } from "./event-state.js";
 import { saveEventEntry } from "./event-state-persistence.js";
 import { WorkerInteractionService } from "./worker/interaction-service.js";
 
-function createLogger() {
+function createLogger(traceCalls = null) {
   return {
     info() {},
     error() {},
     debug() {},
+    trace(fields) {
+      traceCalls?.push(fields);
+    },
   };
 }
 
@@ -24,6 +27,7 @@ function createService({
   resultRetryTimeoutMs = undefined,
   composingHeartbeatMs = undefined,
   composingTTLMS = undefined,
+  logger = null,
 } = {}) {
   const eventState = new EventState();
   const service = new WorkerInteractionService({
@@ -86,7 +90,7 @@ function createService({
     resultRetryTimeoutMs,
     composingHeartbeatMs,
     composingTTLMS,
-    logger: createLogger(),
+    logger: logger ?? createLogger(),
   });
   return {
     service,
@@ -358,13 +362,15 @@ test("worker inbound handling sends structured pairing card for blocked direct s
   await service.shutdown();
 });
 
-test("worker inbound handling falls back with claude_result_timeout when Claude does not call tools", async () => {
+test("worker inbound handling leaves ordinary Claude work open without a local hard timeout", async () => {
   const sentResults = [];
+  const traceCalls = [];
   const { service, eventState } = createService({
     resultTimeoutMs: 40,
     resultRetryTimeoutMs: 20,
     composingHeartbeatMs: 10,
     composingTTLMS: 30,
+    logger: createLogger(traceCalls),
     bridge: {
       async sendEventResult(payload) {
         sentResults.push(payload);
@@ -389,31 +395,34 @@ test("worker inbound handling falls back with claude_result_timeout when Claude 
     content: "hello",
   });
 
-  const completed = await waitForCondition(
-    () => sentResults.some((payload) => payload.event_id === "evt-timeout-1"),
-    { timeoutMs: 1_000, intervalMs: 20 },
-  );
-  assert.equal(completed, true);
+  await new Promise((resolve) => setTimeout(resolve, 120));
+
+  assert.equal(sentResults.length, 0);
+  const stored = eventState.get("evt-timeout-1");
+  assert.equal(stored?.completed, null);
+  assert.equal(stored?.result_deadline_at, 0);
   assert.deepEqual(
-    sentResults.find((payload) => payload.event_id === "evt-timeout-1"),
+    traceCalls.find((entry) => entry.stage === "event_waiting_for_claude_result"),
     {
+      component: "worker.interaction",
+      stage: "event_waiting_for_claude_result",
       event_id: "evt-timeout-1",
-      status: "failed",
-      code: "claude_result_timeout",
-      msg: "Claude did not call reply or complete before timeout.",
-      updated_at: sentResults.find((payload) => payload.event_id === "evt-timeout-1").updated_at,
+      session_id: "chat-timeout-1",
+      local_result_timeout_armed: false,
+      result_timeout_owner: "daemon",
     },
   );
-  const stored = eventState.get("evt-timeout-1");
-  assert.equal(stored?.completed?.status, "failed");
-  assert.equal(stored?.completed?.code, "claude_result_timeout");
 
   await service.shutdown();
 });
 
-test("restoreEventState rearms timeout for unresolved events without persisted deadline", async () => {
+test("restoreEventState does not create a new local timeout for unresolved ordinary events", async () => {
   const eventStatesDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-restore-timeout-"));
-  const { service, eventState } = createService({ eventStatesDir });
+  const traceCalls = [];
+  const { service, eventState } = createService({
+    eventStatesDir,
+    logger: createLogger(traceCalls),
+  });
   await writePendingEventState(eventStatesDir, {
     eventID: "evt-restore-no-deadline",
     resultIntent: null,
@@ -425,7 +434,18 @@ test("restoreEventState rearms timeout for unresolved events without persisted d
   const restored = eventState.get("evt-restore-no-deadline");
   assert.ok(restored);
   assert.equal(restored.completed, null);
-  assert.ok(Number(restored.result_deadline_at) > Date.now());
+  assert.equal(restored.result_deadline_at, 0);
+  assert.deepEqual(
+    traceCalls.find((entry) => entry.stage === "event_restored_waiting_for_claude_result"),
+    {
+      component: "worker.interaction",
+      stage: "event_restored_waiting_for_claude_result",
+      event_id: "evt-restore-no-deadline",
+      session_id: "chat-1",
+      local_result_timeout_armed: false,
+      result_timeout_owner: "daemon",
+    },
+  );
 
   await service.shutdown();
 });

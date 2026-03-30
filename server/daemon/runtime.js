@@ -182,6 +182,41 @@ function listHookSignalRecords(pingPayload) {
   });
 }
 
+function buildPingActivityTraceFields(pingPayload = {}) {
+  return {
+    reported_mcp_ready: pingPayload?.mcp_ready === true
+      ? true
+      : pingPayload?.mcp_ready === false
+        ? false
+        : "",
+    reported_mcp_last_activity_at: normalizeNonNegativeInt(pingPayload?.mcp_last_activity_at, 0),
+    reported_hook_last_activity_at: normalizeNonNegativeInt(pingPayload?.hook_last_activity_at, 0),
+    reported_hook_event_name: normalizeString(pingPayload?.hook_latest_event?.hook_event_name),
+  };
+}
+
+function buildMcpHealthTraceFields(mcpHealth = {}) {
+  return {
+    mcp_health_reason: normalizeString(mcpHealth?.reason),
+    mcp_health_idle_ms: normalizeNonNegativeInt(mcpHealth?.idleMs, 0),
+    inflight_event_count: normalizeNonNegativeInt(mcpHealth?.inFlightCount, 0),
+    latest_event_activity_at: normalizeNonNegativeInt(mcpHealth?.latestInteractionAt, 0),
+    effective_mcp_activity_at: normalizeNonNegativeInt(mcpHealth?.activityAt, 0),
+  };
+}
+
+function buildMcpResultTimeoutTraceFields(details = {}) {
+  return {
+    delivery_state: normalizeString(details?.deliveryState),
+    record_updated_at: normalizeNonNegativeInt(details?.updatedAt, 0),
+    record_last_composing_at: normalizeNonNegativeInt(details?.lastComposingAt, 0),
+    record_interaction_at: normalizeNonNegativeInt(details?.recordInteractionAt, 0),
+    latest_mcp_activity_at: normalizeNonNegativeInt(details?.latestMcpActivityAt, 0),
+    effective_activity_at: normalizeNonNegativeInt(details?.effectiveActivityAt, 0),
+    idle_ms: normalizeNonNegativeInt(details?.idleMs, 0),
+  };
+}
+
 const defaultDeliveredInFlightMaxAgeMs = 60 * 1000;
 const defaultWorkerControlProbeFailureThreshold = 3;
 const defaultMcpInteractionIdleMs = 15 * 60 * 1000;
@@ -618,6 +653,7 @@ export class DaemonRuntime {
       cleanupTimer: null,
       timeoutRecovering: false,
       binding: probingBinding,
+      lastControlPingReason: "",
     };
     const probeResult = new Promise((resolve) => {
       record.resolve = resolve;
@@ -637,6 +673,23 @@ export class DaemonRuntime {
       timeout_ms: this.workerPingProbeTimeoutMs,
     });
 
+    const controlPingBinding = await this.tryWorkerPingProbeControlPing(record, client, {
+      successStage: "worker_ping_probe_control_ping_succeeded",
+      successReason: "worker_ping_probe_control_ping_ok",
+    });
+    if (canDeliverToWorker(controlPingBinding)) {
+      return controlPingBinding;
+    }
+
+    this.trace({
+      stage: "worker_ping_probe_falling_back_to_internal_probe",
+      session_id: sessionID,
+      worker_id: record.workerID,
+      claude_session_id: record.claudeSessionID,
+      event_id: record.eventID,
+      fallback_reason: normalizeString(record.lastControlPingReason) || "control_ping_unavailable",
+    }, "debug");
+
     try {
       await client.deliverEvent(probePayload);
     } catch (error) {
@@ -651,16 +704,37 @@ export class DaemonRuntime {
     return probeResult;
   }
 
-  async recoverWorkerPingProbeTimeout(record, client) {
+  async tryWorkerPingProbeControlPing(record, client, {
+    successStage = "",
+    successReason = "worker_ping_probe_control_ping_ok",
+  } = {}) {
+    const traceContext = {
+      session_id: record?.sessionID,
+      worker_id: record?.workerID,
+      claude_session_id: record?.claudeSessionID,
+      event_id: record?.eventID,
+    };
     if (record?.settled) {
-      return null;
+      return this.bindingRegistry.getByAibotSessionID(record?.sessionID);
     }
     if (!client?.isConfigured?.() || typeof client.ping !== "function") {
+      record.lastControlPingReason = "control_ping_unavailable";
+      this.trace({
+        stage: "worker_ping_probe_control_ping_skipped",
+        ...traceContext,
+        reason: record.lastControlPingReason,
+      }, "debug");
       return null;
     }
 
     const currentBinding = this.bindingRegistry.getByAibotSessionID(record?.sessionID);
     if (!currentBinding || !hasReadyWorkerBridge(currentBinding)) {
+      record.lastControlPingReason = "binding_unavailable";
+      this.trace({
+        stage: "worker_ping_probe_control_ping_skipped",
+        ...traceContext,
+        reason: record.lastControlPingReason,
+      }, "debug");
       return null;
     }
 
@@ -669,6 +743,14 @@ export class DaemonRuntime {
     const currentWorkerID = normalizeString(currentBinding?.worker_id);
     const currentClaudeSessionID = normalizeString(currentBinding?.claude_session_id);
     if (expectedWorkerID && currentWorkerID && expectedWorkerID !== currentWorkerID) {
+      record.lastControlPingReason = "worker_id_mismatch";
+      this.trace({
+        stage: "worker_ping_probe_control_ping_skipped",
+        ...traceContext,
+        reason: record.lastControlPingReason,
+        expected_worker_id: expectedWorkerID,
+        current_worker_id: currentWorkerID,
+      }, "debug");
       return null;
     }
     if (
@@ -676,6 +758,14 @@ export class DaemonRuntime {
       && currentClaudeSessionID
       && expectedClaudeSessionID !== currentClaudeSessionID
     ) {
+      record.lastControlPingReason = "claude_session_mismatch";
+      this.trace({
+        stage: "worker_ping_probe_control_ping_skipped",
+        ...traceContext,
+        reason: record.lastControlPingReason,
+        expected_claude_session_id: expectedClaudeSessionID,
+        current_claude_session_id: currentClaudeSessionID,
+      }, "debug");
       return null;
     }
 
@@ -683,14 +773,13 @@ export class DaemonRuntime {
     try {
       pingPayload = await client.ping();
     } catch (error) {
+      record.lastControlPingReason = "control_ping_failed";
       this.trace({
-        stage: "worker_ping_probe_timeout_control_ping_failed",
-        session_id: record?.sessionID,
-        worker_id: currentWorkerID || expectedWorkerID,
-        claude_session_id: currentClaudeSessionID || expectedClaudeSessionID,
-        event_id: record?.eventID,
+        stage: "worker_ping_probe_control_ping_failed",
+        ...traceContext,
+        reason: record.lastControlPingReason,
         error: error instanceof Error ? error.message : String(error),
-      }, "error");
+      });
       return null;
     }
     if (record?.settled) {
@@ -700,32 +789,61 @@ export class DaemonRuntime {
     const runtime = this.workerProcessManager?.getWorkerRuntime?.(currentWorkerID);
     const identityHealth = this.inspectWorkerIdentityHealth(currentBinding, runtime, pingPayload);
     if (!identityHealth.ok) {
+      record.lastControlPingReason = normalizeString(identityHealth.reason) || "identity_unhealthy";
       this.trace({
-        stage: "worker_ping_probe_timeout_control_ping_identity_mismatch",
-        session_id: record?.sessionID,
-        worker_id: currentWorkerID || expectedWorkerID,
-        claude_session_id: currentClaudeSessionID || expectedClaudeSessionID,
-        event_id: record?.eventID,
-        reason: identityHealth.reason,
-      }, "error");
+        stage: "worker_ping_probe_control_ping_unhealthy",
+        ...traceContext,
+        reason: record.lastControlPingReason,
+        expected_pid: normalizeNonNegativeInt(identityHealth.expectedPid, 0),
+        reported_pid: normalizeNonNegativeInt(identityHealth.reportedPid, 0),
+        expected_worker_id: normalizeString(identityHealth.expectedWorkerID),
+        reported_worker_id: normalizeString(identityHealth.reportedWorkerID),
+        expected_session_id: normalizeString(identityHealth.expectedSessionID),
+        reported_session_id: normalizeString(identityHealth.reportedSessionID),
+        expected_claude_session_id: normalizeString(identityHealth.expectedClaudeSessionID),
+        reported_claude_session_id: normalizeString(identityHealth.reportedClaudeSessionID),
+        ...buildPingActivityTraceFields(pingPayload),
+      });
+      return null;
+    }
+
+    const mcpHealth = this.inspectMcpInteractionHealth(currentBinding, pingPayload);
+    if (!mcpHealth.ok) {
+      record.lastControlPingReason = normalizeString(mcpHealth.reason) || "mcp_unhealthy";
+      this.trace({
+        stage: "worker_ping_probe_control_ping_unhealthy",
+        ...traceContext,
+        reason: record.lastControlPingReason,
+        ...buildMcpHealthTraceFields(mcpHealth),
+        ...buildPingActivityTraceFields(pingPayload),
+      });
       return null;
     }
 
     await this.recordWorkerHookSignalsObserved(currentBinding, pingPayload);
-    this.trace({
-      stage: "worker_ping_probe_timeout_recovered",
-      session_id: record?.sessionID,
-      worker_id: currentWorkerID || expectedWorkerID,
-      claude_session_id: currentClaudeSessionID || expectedClaudeSessionID,
-      event_id: record?.eventID,
-    });
+    if (successStage) {
+      this.trace({
+        stage: successStage,
+        session_id: record?.sessionID,
+        worker_id: currentWorkerID || expectedWorkerID,
+        claude_session_id: currentClaudeSessionID || expectedClaudeSessionID,
+        event_id: record?.eventID,
+      });
+    }
     return this.updateWorkerPingProbeOutcome(record, {
       state: "healthy",
-      reason: "worker_ping_probe_timeout_control_ping_ok",
+      reason: successReason,
       payload: {
         status: "responded",
-        code: "worker_ping_probe_timeout_control_ping_ok",
+        code: successReason,
       },
+    });
+  }
+
+  async recoverWorkerPingProbeTimeout(record, client) {
+    return this.tryWorkerPingProbeControlPing(record, client, {
+      successStage: "worker_ping_probe_timeout_recovered",
+      successReason: "worker_ping_probe_timeout_control_ping_ok",
     });
   }
 
@@ -1250,7 +1368,7 @@ export class DaemonRuntime {
     this.workerControlProbeFailures.delete(normalizedWorkerID);
   }
 
-  markWorkerControlProbeFailure(workerID, error) {
+  markWorkerControlProbeFailure(workerID, error, extraFields = {}) {
     const normalizedWorkerID = normalizeString(workerID);
     if (!normalizedWorkerID) {
       return 0;
@@ -1260,6 +1378,7 @@ export class DaemonRuntime {
     this.trace({
       stage: "worker_control_probe_failed",
       worker_id: normalizedWorkerID,
+      ...extraFields,
       failures: nextFailures,
       threshold: this.workerControlProbeFailureThreshold,
       error: error instanceof Error ? error.message : String(error),
@@ -1289,6 +1408,16 @@ export class DaemonRuntime {
     { latestMcpActivityAt = 0 } = {},
   ) {
     return this.workerHealthInspector.listTimedOutMcpResultRecords(sessionID, now, {
+      latestMcpActivityAt,
+    });
+  }
+
+  describeMcpResultTimeoutRecord(
+    record,
+    now = Date.now(),
+    { latestMcpActivityAt = 0 } = {},
+  ) {
+    return this.workerHealthInspector.describeMcpResultTimeoutRecord(record, now, {
       latestMcpActivityAt,
     });
   }
@@ -1453,11 +1582,16 @@ export class DaemonRuntime {
     if (!workerID) {
       return { ok: true };
     }
+    const probeTraceFields = {
+      session_id: normalizeString(binding?.aibot_session_id),
+      claude_session_id: normalizeString(binding?.claude_session_id),
+      expected_pid: resolveExpectedWorkerPid(binding, runtime),
+    };
     let client = null;
     try {
       client = this.workerControlClientFactory(binding);
     } catch (error) {
-      const failures = this.markWorkerControlProbeFailure(workerID, error);
+      const failures = this.markWorkerControlProbeFailure(workerID, error, probeTraceFields);
       return { ok: false, failures };
     }
     if (!client?.isConfigured?.()) {
@@ -1484,9 +1618,25 @@ export class DaemonRuntime {
         ]
           .filter((part) => part)
           .join(" ");
+        this.trace({
+          stage: "worker_control_probe_unhealthy",
+          worker_id: workerID,
+          ...probeTraceFields,
+          reason: identityHealth.reason,
+          expected_pid: normalizeNonNegativeInt(identityHealth.expectedPid, 0),
+          reported_pid: normalizeNonNegativeInt(identityHealth.reportedPid, 0),
+          expected_worker_id: normalizeString(identityHealth.expectedWorkerID),
+          reported_worker_id: normalizeString(identityHealth.reportedWorkerID),
+          expected_session_id: normalizeString(identityHealth.expectedSessionID),
+          reported_session_id: normalizeString(identityHealth.reportedSessionID),
+          expected_claude_session_id: normalizeString(identityHealth.expectedClaudeSessionID),
+          reported_claude_session_id: normalizeString(identityHealth.reportedClaudeSessionID),
+          ...buildPingActivityTraceFields(pingPayload),
+        });
         const failures = this.markWorkerControlProbeFailure(
           workerID,
           new Error(details || "worker identity mismatch"),
+          probeTraceFields,
         );
         return {
           ok: false,
@@ -1506,9 +1656,18 @@ export class DaemonRuntime {
         ]
           .filter((part) => part)
           .join(" ");
+        this.trace({
+          stage: "worker_control_probe_unhealthy",
+          worker_id: workerID,
+          ...probeTraceFields,
+          reason: mcpHealth.reason,
+          ...buildMcpHealthTraceFields(mcpHealth),
+          ...buildPingActivityTraceFields(pingPayload),
+        });
         const failures = this.markWorkerControlProbeFailure(
           workerID,
           new Error(details || "mcp interaction unhealthy"),
+          probeTraceFields,
         );
         return {
           ok: false,
@@ -1521,7 +1680,7 @@ export class DaemonRuntime {
       this.clearWorkerControlProbeFailure(workerID);
       return { ok: true, pingPayload };
     } catch (error) {
-      const failures = this.markWorkerControlProbeFailure(workerID, error);
+      const failures = this.markWorkerControlProbeFailure(workerID, error, probeTraceFields);
       return { ok: false, failures, reason: "worker_control_probe_failed" };
     }
   }
@@ -2253,14 +2412,28 @@ export class DaemonRuntime {
       return false;
     }
 
+    const mcpResultCheckAt = Date.now();
     const latestMcpActivityAt = Math.max(
       Number(probe?.pingPayload?.mcp_last_activity_at ?? 0),
       Number(probe?.pingPayload?.hook_last_activity_at ?? 0),
     );
-    const timedOutMcpResults = this.listTimedOutMcpResultRecords(sessionID, Date.now(), {
+    const timedOutMcpResults = this.listTimedOutMcpResultRecords(sessionID, mcpResultCheckAt, {
       latestMcpActivityAt,
     });
     if (timedOutMcpResults.length > 0) {
+      for (const record of timedOutMcpResults.slice(0, 5)) {
+        const details = this.describeMcpResultTimeoutRecord(record, mcpResultCheckAt, {
+          latestMcpActivityAt,
+        });
+        this.trace({
+          stage: "worker_mcp_result_timeout_event",
+          session_id: sessionID,
+          worker_id: workerID,
+          event_id: details.eventID,
+          timeout_ms: this.mcpResultTimeoutMs,
+          ...buildMcpResultTimeoutTraceFields(details),
+        }, "error");
+      }
       this.workerProcessManager?.markWorkerRuntimeStopped?.(workerID, {
         exitCode: Number(runtime?.exit_code ?? 0),
         exitSignal: "mcp_result_timeout",
@@ -2273,6 +2446,7 @@ export class DaemonRuntime {
         previous_status: workerStatus,
         timeout_ms: this.mcpResultTimeoutMs,
         latest_mcp_activity_at: Number.isFinite(latestMcpActivityAt) ? latestMcpActivityAt : 0,
+        ...buildPingActivityTraceFields(probe?.pingPayload),
         timed_out_count: timedOutMcpResults.length,
         event_ids: timedOutMcpResults.map((record) => record.eventID).slice(0, 5),
       }, "error");

@@ -19,6 +19,10 @@ function normalizeOptionalString(value) {
   return normalized || "";
 }
 
+function shouldRestoreLocalResultTimeout(entry) {
+  return Boolean(entry?.result_intent);
+}
+
 function isGroupSession(payload) {
   return (
     Number(payload.session_type ?? 0) === 2
@@ -267,7 +271,9 @@ export class WorkerInteractionService {
         session_id: event.session_id,
         probe_id: probeMeta.probeID,
       });
-      this.eventLifecycle.armResultTimeout(event.event_id, defaultWorkerPingProbeTimeoutMs);
+      this.eventLifecycle.armResultTimeout(event.event_id, defaultWorkerPingProbeTimeoutMs, {
+        timeoutKind: "internal_probe",
+      });
       try {
         await this.dispatchChannelNotification(event, { suppressComposing: true });
       } catch (error) {
@@ -301,7 +307,6 @@ export class WorkerInteractionService {
       sender_id: event.sender_id,
       policy,
     });
-    this.eventLifecycle.armResultTimeout(event.event_id);
 
     if (policy === "disabled") {
       this.logger.debug(`event disabled-policy event=${event.event_id}`);
@@ -450,6 +455,14 @@ export class WorkerInteractionService {
 
     try {
       await this.dispatchChannelNotification(event);
+      this.logger.trace?.({
+        component: "worker.interaction",
+        stage: "event_waiting_for_claude_result",
+        event_id: event.event_id,
+        session_id: event.session_id,
+        local_result_timeout_armed: false,
+        result_timeout_owner: "daemon",
+      });
     } catch (error) {
       await this.finalizeEventSafely(event.event_id, {
         status: "failed",
@@ -565,7 +578,18 @@ export class WorkerInteractionService {
       if (entry.completed || entry.stopped) {
         continue;
       }
-      this.eventLifecycle.armRestoredEventTimeout(entry, { now });
+      if (shouldRestoreLocalResultTimeout(entry)) {
+        this.eventLifecycle.armRestoredEventTimeout(entry, { now });
+      } else {
+        this.logger.trace?.({
+          component: "worker.interaction",
+          stage: "event_restored_waiting_for_claude_result",
+          event_id: entry.event_id,
+          session_id: entry.session_id,
+          local_result_timeout_armed: false,
+          result_timeout_owner: "daemon",
+        });
+      }
     }
     if (restored > 0) {
       this.logger.info(`restored ${restored} event state entries`);

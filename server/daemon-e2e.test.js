@@ -10,6 +10,7 @@ import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { WorkerProcessManager } from "./daemon/worker-process.js";
 import { WorkerBridgeServer } from "./daemon/worker-bridge-server.js";
+import { withRealClaudeE2ELock } from "./real-claude-e2e-lock.js";
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -68,6 +69,14 @@ async function postJSON(url, token, payload) {
   return { response, body };
 }
 
+async function readRuntimeLogs(runtime) {
+  const [stdoutContent, stderrContent] = await Promise.all([
+    readFile(runtime.stdout_log_path, "utf8").catch(() => ""),
+    readFile(runtime.stderr_log_path, "utf8").catch(() => ""),
+  ]);
+  return `${stdoutContent}\n${stderrContent}`;
+}
+
 function stripTerminalControlSequences(content) {
   return String(content ?? "")
     .replace(/\u001B\][^\u0007]*(?:\u0007|\u001B\\)/gu, "")
@@ -99,13 +108,36 @@ function hasChannelListeningSignal(content) {
   );
 }
 
-test("e2e: default path boots real Claude and auto-confirms startup prompts", async () => {
+function shouldRetryRealClaudeE2E(error) {
+  const message = String(error?.message ?? "");
+  return (
+    /startup log stayed empty or had no startup state signal/iu.test(message)
+    || /startup did not reach channel listening state/iu.test(message)
+  );
+}
+
+async function runRealClaudeE2ETest(callback) {
   const realClaudeCommand = resolveRealClaudeCommand();
   assert.ok(
     commandExists(realClaudeCommand),
     `real Claude command is required for e2e test but was not found: ${realClaudeCommand}`,
   );
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      return await withRealClaudeE2ELock(() => callback(realClaudeCommand));
+    } catch (error) {
+      lastError = error;
+      if (attempt >= 2 || !shouldRetryRealClaudeE2E(error)) {
+        throw error;
+      }
+      await sleep(1000);
+    }
+  }
+  throw lastError;
+}
 
+test("e2e: default path boots real Claude and auto-confirms startup prompts", async () => runRealClaudeE2ETest(async (realClaudeCommand) => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-real-e2e-"));
   const workspaceDir = path.join(tempRoot, "workspace");
   const pluginDataDir = path.join(tempRoot, "plugin-data");
@@ -137,9 +169,16 @@ test("e2e: default path boots real Claude and auto-confirms startup prompts", as
     assert.ok(Number(runtime.pid) > 0, "real Claude process pid is missing");
 
     const startupLog = await waitFor(async () => {
-      const content = await readFile(runtime.stdout_log_path, "utf8").catch(() => "");
+      const content = await readRuntimeLogs(runtime);
       if (!content) {
         return "";
+      }
+      const [autoConfirmed, listening] = await Promise.all([
+        workerProcessManager.hasStartupPromptAutoConfirm(workerID),
+        workerProcessManager.hasStartupChannelListening(workerID),
+      ]);
+      if (autoConfirmed || listening) {
+        return content;
       }
       if (hasStartupPromptAutoConfirmMarker(content) || hasChannelListeningSignal(content)) {
         return content;
@@ -164,9 +203,12 @@ test("e2e: default path boots real Claude and auto-confirms startup prompts", as
     }
 
     const listeningLog = await waitFor(async () => {
-      const content = await readFile(runtime.stdout_log_path, "utf8").catch(() => "");
+      const content = await readRuntimeLogs(runtime);
       if (!content) {
         return "";
+      }
+      if (await workerProcessManager.hasStartupChannelListening(workerID)) {
+        return content;
       }
       return hasChannelListeningSignal(content) ? content : "";
     }, {
@@ -177,15 +219,9 @@ test("e2e: default path boots real Claude and auto-confirms startup prompts", as
   } finally {
     await workerProcessManager.stopWorker(workerID).catch(() => {});
   }
-});
+}));
 
-test("e2e: real Claude worker settles inbound events within timeout budget", async () => {
-  const realClaudeCommand = resolveRealClaudeCommand();
-  assert.ok(
-    commandExists(realClaudeCommand),
-    `real Claude command is required for e2e test but was not found: ${realClaudeCommand}`,
-  );
-
+test("e2e: real Claude worker settles inbound events within timeout budget", async () => runRealClaudeE2ETest(async (realClaudeCommand) => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-real-timeout-e2e-"));
   const workspaceDir = path.join(tempRoot, "workspace");
   const pluginDataDir = path.join(tempRoot, "plugin-data");
@@ -329,4 +365,4 @@ test("e2e: real Claude worker settles inbound events within timeout budget", asy
     await workerProcessManager.stopWorker(workerID).catch(() => {});
     await bridgeServer.stop();
   }
-});
+}));

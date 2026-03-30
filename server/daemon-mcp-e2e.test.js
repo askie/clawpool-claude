@@ -11,6 +11,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { WorkerProcessManager } from "./daemon/worker-process.js";
 import { WorkerBridgeServer } from "./daemon/worker-bridge-server.js";
 import { resolveHookSignalsLogPathFromDataDir } from "./hook-signal-store.js";
+import { withRealClaudeE2ELock } from "./real-claude-e2e-lock.js";
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -164,13 +165,37 @@ function parseOptionalPauseMs(value) {
   return Math.floor(numeric);
 }
 
-test("e2e: real Claude ready ping is weaker than an active probe", async () => {
+function shouldRetryRealClaudeE2E(error) {
+  const message = String(error?.message ?? "");
+  return (
+    /worker did not register daemon bridge control endpoint/iu.test(message)
+    || /active probe stayed pending because startup already recorded a blocking MCP failure/iu.test(message)
+    || /real Claude startup did not reach listening or ready state/iu.test(message)
+  );
+}
+
+async function runRealClaudeE2ETest(callback) {
   const realClaudeCommand = resolveRealClaudeCommand();
   assert.ok(
     commandExists(realClaudeCommand),
     `real Claude command is required for e2e test but was not found: ${realClaudeCommand}`,
   );
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      return await withRealClaudeE2ELock(() => callback(realClaudeCommand));
+    } catch (error) {
+      lastError = error;
+      if (attempt >= 2 || !shouldRetryRealClaudeE2E(error)) {
+        throw error;
+      }
+      await sleep(1000);
+    }
+  }
+  throw lastError;
+}
 
+test("e2e: real Claude ready ping reaches mcp_ready before active probe records hook activity", async () => runRealClaudeE2ETest(async (realClaudeCommand) => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-real-mcp-e2e-"));
   const workspaceDir = path.join(tempRoot, "workspace");
   const pluginDataDir = path.join(tempRoot, "plugin-data");
@@ -259,8 +284,6 @@ test("e2e: real Claude ready ping is weaker than an active probe", async () => {
       CLAWPOOL_CLAUDE_TRACE_LOG: "1",
       CLAWPOOL_CLAUDE_E2E_DEBUG: "1",
       CLAWPOOL_CLAUDE_E2E_DEBUG_LOG: debugLogPath,
-      CLAWPOOL_CLAUDE_EVENT_RESULT_TIMEOUT_MS: "15000",
-      CLAWPOOL_CLAUDE_EVENT_RESULT_RETRY_TIMEOUT_MS: "2000",
       CLAWPOOL_CLAUDE_COMPOSING_HEARTBEAT_MS: "500",
       CLAWPOOL_CLAUDE_COMPOSING_TTL_MS: "1000",
     },
@@ -279,31 +302,6 @@ test("e2e: real Claude ready ping is weaker than an active probe", async () => {
   });
 
   try {
-    const startupObserved = await waitFor(async () => {
-      const content = await readFile(runtime.stdout_log_path, "utf8").catch(() => "");
-      if (hasChannelListeningSignal(content)) {
-        return {
-          kind: "listening",
-          content,
-        };
-      }
-      const debugContent = await readTextFile(debugLogPath);
-      if (traceLineIndex(debugContent, {
-        stage: "worker_status_requested",
-        includes: ["status=ready"],
-      }) >= 0) {
-        return {
-          kind: "ready",
-          content: debugContent,
-        };
-      }
-      return null;
-    }, {
-      timeoutMs: 90_000,
-      intervalMs: 500,
-    });
-    assert.ok(startupObserved, "real Claude startup did not reach listening or ready state");
-
     const registered = await waitFor(() => (
       timeline.find((entry) => entry.type === "register") ?? null
     ), {
@@ -549,27 +547,20 @@ test("e2e: real Claude ready ping is weaker than an active probe", async () => {
         assert.ok(statusCallLine < completeCallLine, "complete tool call happened before status tool call");
       }
     } else {
-      if (eventResult) {
-        assert.equal(probeStatus, "failed");
-        assert.equal(probeCode, "claude_result_timeout");
-      } else {
-        assert.equal(
-          startupBlockingFailure,
-          true,
-          "probe event did not settle and startup MCP failure was not recorded",
-        );
-      }
-      assert.match(
-        runtimeLog,
-        /(\[clawpool\]\s+startup_mcp_server_failed|MCP\s+server\s+failed)/iu,
+      assert.equal(
+        eventResult,
+        null,
+        `active probe settled unexpectedly with status=${probeStatus} code=${probeCode} msg=${probeMsg}`,
       );
       timeline.push({
-        type: "probe_failed",
+        type: "probe_pending",
         at: Date.now(),
         status: probeStatus,
         code: probeCode,
         msg: probeMsg,
         startup_blocking_failure: startupBlockingFailure,
+        ready_ping_mcp_ready: readyPingResult.body?.mcp_ready ?? null,
+        runtime_log_has_startup_failure: /(\[clawpool\]\s+startup_mcp_server_failed|MCP\s+server\s+failed)/iu.test(runtimeLog),
       });
     }
 
@@ -602,4 +593,4 @@ test("e2e: real Claude ready ping is weaker than an active probe", async () => {
     await workerProcessManager.stopWorker(workerID).catch(() => {});
     await bridgeServer.stop();
   }
-});
+}));

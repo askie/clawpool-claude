@@ -61,6 +61,21 @@ function makeWorkerProcessManager(calls) {
   };
 }
 
+function makeTraceLogger(traceCalls) {
+  return {
+    trace(fields, { level } = {}) {
+      traceCalls.push({
+        fields,
+        level: level ?? "info",
+      });
+    },
+  };
+}
+
+function findTraceEntry(traceCalls, stage) {
+  return traceCalls.find((entry) => entry.fields.stage === stage) ?? null;
+}
+
 function assertRespondedEventResult(sent, eventID) {
   assert.deepEqual(
     sent.find((item) => item.kind === "event_result" && item.payload.event_id === eventID)?.payload,
@@ -1230,12 +1245,14 @@ test("daemon runtime treats ready worker as healthy only after internal ping/pon
   });
 
   const delivered = [];
+  const traceCalls = [];
   let runtime = null;
   runtime = new DaemonRuntime({
     env: { HOME: os.homedir() },
     bindingRegistry: registry,
     workerProcessManager: makeWorkerProcessManager([]),
     aibotClient: makeAibotClient([]),
+    logger: makeTraceLogger(traceCalls),
     bridgeServer: {
       token: "bridge-token",
       getURL() {
@@ -1280,6 +1297,14 @@ test("daemon runtime treats ready worker as healthy only after internal ping/pon
   assert.equal(ensured?.worker_response_state, "healthy");
   assert.equal(ensured?.worker_response_reason, "worker_ping_pong_observed");
   assert.equal(canDeliverToWorker(ensured), true);
+  assert.equal(
+    findTraceEntry(traceCalls, "worker_ping_probe_control_ping_skipped")?.fields.reason,
+    "control_ping_unavailable",
+  );
+  assert.equal(
+    findTraceEntry(traceCalls, "worker_ping_probe_falling_back_to_internal_probe")?.fields.fallback_reason,
+    "control_ping_unavailable",
+  );
 });
 
 test("daemon runtime recovers ping probe timeout when control ping confirms worker health", async () => {
@@ -1324,12 +1349,16 @@ test("daemon runtime recovers ping probe timeout when control ping confirms work
         },
         async ping() {
           pingCalls += 1;
+          if (pingCalls === 1) {
+            throw new Error("worker not ready for control ping yet");
+          }
           return {
             ok: true,
             worker_id: "worker-probe-timeout-recover",
             aibot_session_id: "chat-probe-timeout-recover",
             claude_session_id: "claude-probe-timeout-recover",
             pid: 12345,
+            mcp_ready: true,
             ts: Date.now(),
           };
         },
@@ -1341,10 +1370,75 @@ test("daemon runtime recovers ping probe timeout when control ping confirms work
 
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].content, "ping");
-  assert.equal(pingCalls, 1);
+  assert.equal(pingCalls, 2);
   assert.equal(workerCalls.length, 0);
   assert.equal(ensured?.worker_response_state, "healthy");
   assert.equal(ensured?.worker_response_reason, "worker_ping_probe_timeout_control_ping_ok");
+  assert.equal(canDeliverToWorker(ensured), true);
+});
+
+test("daemon runtime prefers control ping before dispatching an internal Claude probe", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const workerCalls = [];
+  const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
+  await registry.load();
+  await registry.createBinding({
+    aibot_session_id: "chat-probe-control-fastpath",
+    claude_session_id: "claude-probe-control-fastpath",
+    cwd: tempDir,
+    worker_id: "worker-probe-control-fastpath",
+    worker_status: "ready",
+    worker_control_url: "http://127.0.0.1:9997",
+    worker_control_token: "token-probe-control-fastpath",
+    plugin_data_dir: path.join(tempDir, "plugin-data"),
+  });
+
+  const delivered = [];
+  let pingCalls = 0;
+  const runtime = new DaemonRuntime({
+    env: { HOME: os.homedir() },
+    bindingRegistry: registry,
+    workerProcessManager: makeWorkerProcessManager(workerCalls),
+    aibotClient: makeAibotClient([]),
+    bridgeServer: {
+      token: "bridge-token",
+      getURL() {
+        return "http://127.0.0.1:9000";
+      },
+    },
+    workerRuntimeHealthCheckMs: 0,
+    workerControlClientFactory() {
+      return {
+        isConfigured() {
+          return true;
+        },
+        async deliverEvent(payload) {
+          delivered.push(payload);
+          return { ok: true };
+        },
+        async ping() {
+          pingCalls += 1;
+          return {
+            ok: true,
+            worker_id: "worker-probe-control-fastpath",
+            aibot_session_id: "chat-probe-control-fastpath",
+            claude_session_id: "claude-probe-control-fastpath",
+            pid: 12345,
+            mcp_ready: true,
+            ts: Date.now(),
+          };
+        },
+      };
+    },
+  });
+
+  const ensured = await runtime.ensureReadyBinding("chat-probe-control-fastpath");
+
+  assert.equal(delivered.length, 0);
+  assert.equal(pingCalls, 1);
+  assert.equal(workerCalls.length, 0);
+  assert.equal(ensured?.worker_response_state, "healthy");
+  assert.equal(ensured?.worker_response_reason, "worker_ping_probe_control_ping_ok");
   assert.equal(canDeliverToWorker(ensured), true);
 });
 
@@ -1401,6 +1495,9 @@ test("daemon runtime ignores timeout event result while control ping recovery is
         },
         async ping() {
           pingCalls += 1;
+          if (pingCalls === 1) {
+            throw new Error("worker not ready for control ping yet");
+          }
           await new Promise((resolve) => setTimeout(resolve, 80));
           return {
             ok: true,
@@ -1408,6 +1505,7 @@ test("daemon runtime ignores timeout event result while control ping recovery is
             aibot_session_id: "chat-probe-timeout-race",
             claude_session_id: "claude-probe-timeout-race",
             pid: 12346,
+            mcp_ready: true,
             ts: Date.now(),
           };
         },
@@ -1419,7 +1517,7 @@ test("daemon runtime ignores timeout event result while control ping recovery is
 
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].content, "ping");
-  assert.equal(pingCalls, 1);
+  assert.equal(pingCalls, 2);
   assert.equal(workerCalls.length, 0);
   assert.equal(ensured?.worker_response_state, "healthy");
   assert.equal(ensured?.worker_response_reason, "worker_ping_probe_timeout_control_ping_ok");
@@ -4169,6 +4267,7 @@ test("daemon runtime marks worker stopped when MCP result timeout is reached", a
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
+  const traceCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
   const deliveryFile = path.join(tempDir, "message-delivery-state.json");
   const registry = new BindingRegistry(bindingFile);
@@ -4195,6 +4294,7 @@ test("daemon runtime marks worker stopped when MCP result timeout is reached", a
   });
   await deliveryStore.markPendingEventDelivered("evt-mcp-result-timeout", "worker-mcp-result-timeout");
   await sleep(10);
+  const pendingBefore = deliveryStore.getPendingEvent("evt-mcp-result-timeout");
 
   const workerProcessManager = {
     getWorkerRuntime() {
@@ -4220,6 +4320,7 @@ test("daemon runtime marks worker stopped when MCP result timeout is reached", a
     bindingRegistry: registry,
     workerProcessManager,
     aibotClient: makeAibotClient(sent),
+    logger: makeTraceLogger(traceCalls),
     bridgeServer: {
       token: "bridge-token",
       getURL() {
@@ -4263,6 +4364,19 @@ test("daemon runtime marks worker stopped when MCP result timeout is reached", a
   assert.equal(workerCalls.length, 1);
   assert.equal(workerCalls[0].exitSignal, "mcp_result_timeout");
   assert.equal(deliveryStore.getPendingEvent("evt-mcp-result-timeout"), null);
+  const timeoutTrace = findTraceEntry(traceCalls, "worker_mcp_result_timeout_event");
+  assert.ok(timeoutTrace);
+  assert.equal(timeoutTrace.fields.session_id, "chat-mcp-result-timeout");
+  assert.equal(timeoutTrace.fields.worker_id, "worker-mcp-result-timeout");
+  assert.equal(timeoutTrace.fields.event_id, "evt-mcp-result-timeout");
+  assert.equal(timeoutTrace.fields.timeout_ms, 1);
+  assert.equal(timeoutTrace.fields.delivery_state, "delivered");
+  assert.equal(timeoutTrace.fields.record_updated_at, pendingBefore?.updated_at);
+  assert.equal(timeoutTrace.fields.record_last_composing_at, 0);
+  assert.equal(timeoutTrace.fields.record_interaction_at, pendingBefore?.updated_at);
+  assert.equal(timeoutTrace.fields.latest_mcp_activity_at, 0);
+  assert.equal(timeoutTrace.fields.effective_activity_at, pendingBefore?.updated_at);
+  assert.ok(Number(timeoutTrace.fields.idle_ms) > 0);
   assert.deepEqual(
     sent.find(
       (item) => item.kind === "event_result" && item.payload.event_id === "evt-mcp-result-timeout",
