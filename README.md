@@ -1,4 +1,4 @@
-# @dhfpub/grix-claude
+# @dhf-claude/grix
 
 This integration connects Claude to Grix ([https://grix.dhf.pub/](https://grix.dhf.pub/)) so you can manage Claude from the website, with mobile PWA support.
 
@@ -7,7 +7,7 @@ This integration connects Claude to Grix ([https://grix.dhf.pub/](https://grix.d
 ### 1. Install globally
 
 ```bash
-npm install -g @dhfpub/grix-claude
+npm install -g @dhf-claude/grix
 ```
 
 ### 2. Install the background service (first time)
