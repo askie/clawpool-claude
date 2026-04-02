@@ -1,5 +1,5 @@
 {
-  "name": "@dhfpub/grix-claude",
+  "name": "@dhf-claude/grix",
   "version": "0.1.8",
   "description": "Claude Code channel plugin for Aibot Grix",
   "type": "module",
