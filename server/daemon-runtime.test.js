@@ -97,8 +97,8 @@ function assertOpenWorkspaceCard(payload, {
     payload: {
       summary_text: summaryText,
       detail_text: detailText,
-      command_prefix: "/clawpool open",
-      command_hint: "/clawpool open <working-directory>",
+      command_prefix: "/grix open",
+      command_hint: "/grix open <working-directory>",
       initial_cwd: "",
     },
   });
@@ -120,7 +120,7 @@ async function markBindingHealthy(registry, sessionID, reason = "test_ready_work
 }
 
 test("daemon runtime open creates a fixed binding and spawns worker", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
@@ -156,7 +156,7 @@ test("daemon runtime open creates a fixed binding and spawns worker", async () =
 });
 
 test("daemon runtime restores persisted binding and does not require open again", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const bindingFile = path.join(tempDir, "binding-registry.json");
   const initialRegistry = new BindingRegistry(bindingFile);
   await initialRegistry.load();
@@ -242,8 +242,8 @@ test("daemon runtime restores persisted binding and does not require open again"
 });
 
 test("daemon runtime rejects rebinding an existing aibot session to another cwd", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
-  const otherDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
+  const otherDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
@@ -282,7 +282,7 @@ test("daemon runtime rejects rebinding an existing aibot session to another cwd"
 });
 
 test("daemon runtime stop marks binding stopped", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
@@ -323,7 +323,7 @@ test("daemon runtime stop marks binding stopped", async () => {
 });
 
 test("daemon runtime missing binding replies without leaving the event pending", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
@@ -358,7 +358,7 @@ test("daemon runtime missing binding replies without leaving the event pending",
 });
 
 test("daemon runtime missing binding control commands send only the open workspace card", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
@@ -401,7 +401,7 @@ test("daemon runtime missing binding control commands send only the open workspa
 });
 
 test("daemon runtime invalid control command replies without timing out", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
@@ -436,7 +436,7 @@ test("daemon runtime invalid control command replies without timing out", async 
 });
 
 test("daemon runtime open command with missing directory replies with open workspace card", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const missingDir = path.join(tempDir, "missing-dir");
   const sent = [];
   const workerCalls = [];
@@ -460,7 +460,7 @@ test("daemon runtime open command with missing directory replies with open works
     event_id: "evt-open-missing-dir",
     session_id: "chat-open-missing-dir",
     msg_id: "msg-open-missing-dir",
-    content: `/clawpool open ${missingDir}`,
+    content: `/grix open ${missingDir}`,
   });
 
   assert.equal(workerCalls.length, 0);
@@ -472,7 +472,7 @@ test("daemon runtime open command with missing directory replies with open works
 });
 
 test("daemon runtime delivers normal message to ready worker control", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];
@@ -531,7 +531,7 @@ test("daemon runtime delivers normal message to ready worker control", async () 
 });
 
 test("daemon runtime queues a second session event until the first one completes", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];
@@ -600,7 +600,7 @@ test("daemon runtime queues a second session event until the first one completes
 });
 
 test("daemon runtime skips recovered dispatch when event is completed during startup wait", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const delivered = [];
   const workerCalls = [];
@@ -680,7 +680,7 @@ test("daemon runtime skips recovered dispatch when event is completed during sta
 });
 
 test("daemon runtime does not flush a queued event while another session event is still in flight", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];
@@ -752,7 +752,7 @@ test("daemon runtime does not flush a queued event while another session event i
 });
 
 test("daemon runtime can release queued events when delivered in-flight blocking is disabled", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];
@@ -817,7 +817,7 @@ test("daemon runtime can release queued events when delivered in-flight blocking
 });
 
 test("daemon runtime retries one time when flushing a queued event fails transiently", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];
@@ -889,7 +889,7 @@ test("daemon runtime retries one time when flushing a queued event fails transie
 });
 
 test("daemon runtime resumes the bound Claude session when restarting a stopped worker", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];
@@ -971,7 +971,7 @@ test("daemon runtime resumes the bound Claude session when restarting a stopped 
 });
 
 test("daemon runtime respawns when binding is stopped even if local runtime is stale", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];
@@ -1051,7 +1051,7 @@ test("daemon runtime respawns when binding is stopped even if local runtime is s
 });
 
 test("daemon runtime coalesces concurrent ensureWorker for one session", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const workerCalls = [];
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
   await registry.load();
@@ -1105,7 +1105,7 @@ test("daemon runtime coalesces concurrent ensureWorker for one session", async (
 });
 
 test("daemon runtime waits for ready before delivering to a connected worker bridge", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];
@@ -1171,7 +1171,7 @@ test("daemon runtime waits for ready before delivering to a connected worker bri
 });
 
 test("daemon runtime does not reuse a ready worker after a real response failure", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const workerCalls = [];
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
   await registry.load();
@@ -1230,7 +1230,7 @@ test("daemon runtime does not reuse a ready worker after a real response failure
 });
 
 test("daemon runtime treats ready worker as healthy only after internal ping/pong succeeds", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
   await registry.load();
   await registry.createBinding({
@@ -1308,7 +1308,7 @@ test("daemon runtime treats ready worker as healthy only after internal ping/pon
 });
 
 test("daemon runtime recovers ping probe timeout when control ping confirms worker health", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const workerCalls = [];
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
   await registry.load();
@@ -1378,7 +1378,7 @@ test("daemon runtime recovers ping probe timeout when control ping confirms work
 });
 
 test("daemon runtime prefers control ping before dispatching an internal Claude probe", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const workerCalls = [];
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
   await registry.load();
@@ -1443,7 +1443,7 @@ test("daemon runtime prefers control ping before dispatching an internal Claude 
 });
 
 test("daemon runtime ignores timeout event result while control ping recovery is in progress", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const workerCalls = [];
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
   await registry.load();
@@ -1525,7 +1525,7 @@ test("daemon runtime ignores timeout event result while control ping recovery is
 });
 
 test("daemon runtime sends user event only after internal ping/pong probe succeeds", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
   await registry.load();
@@ -1595,7 +1595,7 @@ test("daemon runtime sends user event only after internal ping/pong probe succee
 });
 
 test("daemon runtime records real worker responses and ignores stale worker results", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
   await registry.load();
   await registry.createBinding({
@@ -1666,7 +1666,7 @@ test("daemon runtime records real worker responses and ignores stale worker resu
 });
 
 test("daemon runtime fails fast when worker startup stays unready", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
@@ -1733,7 +1733,7 @@ test("daemon runtime fails fast when worker startup stays unready", async () => 
 });
 
 test("daemon runtime fails fast when startup log reports MCP server failed", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
@@ -1798,7 +1798,7 @@ test("daemon runtime fails fast when startup log reports MCP server failed", asy
 });
 
 test("daemon runtime only treats MCP startup failure as blocking when worker manager reports blocking failure", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const registry = new BindingRegistry(path.join(tempDir, "binding-registry.json"));
   await registry.load();
@@ -1848,7 +1848,7 @@ test("daemon runtime only treats MCP startup failure as blocking when worker man
 });
 
 test("daemon runtime avoids redelivering the first event when ready recovery already flushed it", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];
@@ -1934,7 +1934,7 @@ test("daemon runtime avoids redelivering the first event when ready recovery alr
 });
 
 test("daemon runtime flushes the first pending event after worker bridge becomes ready", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];
@@ -2033,7 +2033,7 @@ test("daemon runtime flushes the first pending event after worker bridge becomes
 });
 
 test("daemon runtime falls back to a fresh Claude session when resume target is missing", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];
@@ -2142,7 +2142,7 @@ test("daemon runtime falls back to a fresh Claude session when resume target is 
 });
 
 test("daemon runtime skips resume and starts fresh when Claude session file is missing", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];
@@ -2232,7 +2232,7 @@ test("daemon runtime skips resume and starts fresh when Claude session file is m
 });
 
 test("daemon runtime delivers to a ready worker even when local runtime snapshot is stale", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];
@@ -2320,7 +2320,7 @@ test("daemon runtime delivers to a ready worker even when local runtime snapshot
 });
 
 test("daemon runtime forwards stop and revoke to ready worker control", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const deliveredStops = [];
@@ -2403,7 +2403,7 @@ test("daemon runtime forwards stop and revoke to ready worker control", async ()
 });
 
 test("daemon runtime acknowledges revoke immediately and skips duplicate forwards", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const deliveredRevokes = [];
@@ -2473,7 +2473,7 @@ test("daemon runtime acknowledges revoke immediately and skips duplicate forward
 });
 
 test("daemon runtime skips duplicate revoke forwards for the same message with a new event id", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const deliveredRevokes = [];
@@ -2543,7 +2543,7 @@ test("daemon runtime skips duplicate revoke forwards for the same message with a
 });
 
 test("daemon runtime skips duplicate revoke forwards after runtime restart", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const deliveredRevokes = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -2654,7 +2654,7 @@ test("daemon runtime skips duplicate revoke forwards after runtime restart", asy
 });
 
 test("daemon runtime recovers stale worker control before forwarding stop", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const deliveredStops = [];
@@ -2758,7 +2758,7 @@ test("daemon runtime recovers stale worker control before forwarding stop", asyn
 });
 
 test("daemon runtime can forward stop and revoke by remembered event route", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const deliveredStops = [];
@@ -2839,7 +2839,7 @@ test("daemon runtime can forward stop and revoke by remembered event route", asy
 });
 
 test("daemon runtime keeps remembered event routes across runtime restart", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const deliveredStops = [];
@@ -2954,7 +2954,7 @@ test("daemon runtime keeps remembered event routes across runtime restart", asyn
 });
 
 test("daemon runtime keeps pending events across runtime restart and flushes after worker is ready", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];
@@ -3079,7 +3079,7 @@ test("daemon runtime keeps pending events across runtime restart and flushes aft
 });
 
 test("daemon runtime recoverPersistedDeliveryState respawns and flushes pending events", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];
@@ -3171,7 +3171,7 @@ test("daemon runtime recoverPersistedDeliveryState respawns and flushes pending 
 });
 
 test("daemon runtime recoverPersistedDeliveryState fails pending event when worker recovery throws", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -3247,7 +3247,7 @@ test("daemon runtime recoverPersistedDeliveryState fails pending event when work
 });
 
 test("daemon runtime fails an unfinished event when worker stops mid-processing", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];
@@ -3324,7 +3324,7 @@ test("daemon runtime fails an unfinished event when worker stops mid-processing"
 });
 
 test("daemon runtime fails persisted in-flight events after restart recovery", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const firstSent = [];
   const secondSent = [];
   const workerCalls = [];
@@ -3424,7 +3424,7 @@ test("daemon runtime fails persisted in-flight events after restart recovery", a
 });
 
 test("daemon runtime reconciles an exited worker and fails delivered pending events", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -3509,7 +3509,7 @@ test("daemon runtime reconciles an exited worker and fails delivered pending eve
 });
 
 test("daemon runtime marks worker stopped after repeated worker control probe failures", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -3617,7 +3617,7 @@ test("daemon runtime marks worker stopped after repeated worker control probe fa
 });
 
 test("daemon runtime returns auth login required message when worker logs show 401", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -3720,7 +3720,7 @@ test("daemon runtime returns auth login required message when worker logs show 4
 });
 
 test("daemon runtime retries with fresh Claude session after resume auth failure", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -3855,7 +3855,7 @@ test("daemon runtime retries with fresh Claude session after resume auth failure
 });
 
 test("daemon runtime coalesces concurrent resume auth recovery attempts", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -3965,7 +3965,7 @@ test("daemon runtime coalesces concurrent resume auth recovery attempts", async 
 });
 
 test("daemon runtime prefers persisted worker pid over stale runtime pid during control probe", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
   const deliveryFile = path.join(tempDir, "message-delivery-state.json");
@@ -4052,7 +4052,7 @@ test("daemon runtime prefers persisted worker pid over stale runtime pid during 
 });
 
 test("daemon runtime marks worker stopped when worker control ping pid mismatches runtime pid", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
   const deliveryFile = path.join(tempDir, "message-delivery-state.json");
@@ -4147,7 +4147,7 @@ test("daemon runtime marks worker stopped when worker control ping pid mismatche
 });
 
 test("daemon runtime gives in-flight MCP activity a grace window before declaring stale", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -4264,7 +4264,7 @@ test("daemon runtime gives in-flight MCP activity a grace window before declarin
 });
 
 test("daemon runtime marks worker stopped when MCP result timeout is reached", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const traceCalls = [];
@@ -4391,7 +4391,7 @@ test("daemon runtime marks worker stopped when MCP result timeout is reached", a
 });
 
 test("daemon runtime keeps worker alive when ping reports fresh MCP activity", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -4491,7 +4491,7 @@ test("daemon runtime keeps worker alive when ping reports fresh MCP activity", a
 });
 
 test("daemon runtime does not force MCP timeout on fresh hook activity from worker ping", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -4616,7 +4616,7 @@ test("daemon runtime does not force MCP timeout on fresh hook activity from work
 });
 
 test("daemon runtime does not force MCP timeout on transient worker control probe failure", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -4709,7 +4709,7 @@ test("daemon runtime does not force MCP timeout on transient worker control prob
 });
 
 test("daemon runtime does not treat composing heartbeat as MCP result progress", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -4827,7 +4827,7 @@ test("daemon runtime does not treat composing heartbeat as MCP result progress",
 });
 
 test("daemon runtime rejects composing heartbeat with mismatched worker identity", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -4942,7 +4942,7 @@ test("daemon runtime rejects composing heartbeat with mismatched worker identity
 });
 
 test("daemon runtime rejects composing heartbeat with mismatched worker pid", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -5058,7 +5058,7 @@ test("daemon runtime rejects composing heartbeat with mismatched worker pid", as
 });
 
 test("daemon runtime accepts composing heartbeat when only launch wrapper pid differs", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
   const deliveryFile = path.join(tempDir, "message-delivery-state.json");
@@ -5155,7 +5155,7 @@ test("daemon runtime accepts composing heartbeat when only launch wrapper pid di
 });
 
 test("daemon runtime uses composing heartbeat for worker health and in-flight serialization", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -5268,7 +5268,7 @@ test("daemon runtime uses composing heartbeat for worker health and in-flight se
 });
 
 test("daemon runtime fails pending events when worker stops before becoming ready", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -5339,7 +5339,7 @@ test("daemon runtime fails pending events when worker stops before becoming read
 });
 
 test("daemon runtime stops worker immediately and fails with auth message on auth error", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -5447,7 +5447,7 @@ test("daemon runtime stops worker immediately and fails with auth message on aut
 });
 
 test("daemon runtime forwards extra usage limit timeout as explicit failure", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
   const deliveryFile = path.join(tempDir, "message-delivery-state.json");
@@ -5532,7 +5532,7 @@ test("daemon runtime forwards extra usage limit timeout as explicit failure", as
 });
 
 test("daemon runtime checks usage limit from event log cursor when available", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
   const deliveryFile = path.join(tempDir, "message-delivery-state.json");
@@ -5620,7 +5620,7 @@ test("daemon runtime checks usage limit from event log cursor when available", a
 });
 
 test("daemon runtime blocks immediate respawn after auth stop and fails fast", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const bindingFile = path.join(tempDir, "binding-registry.json");
@@ -5709,7 +5709,7 @@ test("daemon runtime blocks immediate respawn after auth stop and fails fast", a
 });
 
 test("daemon runtime retries worker spawn after auth cooldown expires", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-runtime-"));
   const sent = [];
   const workerCalls = [];
   const delivered = [];

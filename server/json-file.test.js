@@ -9,7 +9,7 @@ test("writeJSONFileAtomic writes private file mode when supported", async () => 
   if (process.platform === "win32") {
     return;
   }
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-json-mode-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-json-mode-"));
   const filePath = path.join(tempDir, "config.json");
   await writeJSONFileAtomic(filePath, {
     value: "secret",
@@ -21,7 +21,7 @@ test("writeJSONFileAtomic writes private file mode when supported", async () => 
 });
 
 test("writeJSONFileAtomic tolerates concurrent writes to the same target", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-json-concurrent-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-json-concurrent-"));
   const filePath = path.join(tempDir, "state.json");
 
   await Promise.all([

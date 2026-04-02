@@ -1,11 +1,11 @@
 ---
-name: clawpool:status
-description: Show Clawpool configuration, connection state, access policy, and startup hints.
+name: grix:status
+description: Show Grix configuration, connection state, access policy, and startup hints.
 user-invocable: true
 allowed-tools:
-  - mcp__clawpool-claude__status
+  - mcp__grix-claude__status
 ---
 
-# /clawpool:status
+# /grix:status
 
 Call the `status` tool exactly once and return the result directly.

@@ -3,4 +3,4 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
-exec node "$SCRIPT_DIR/bin/clawpool-claude.js" "$@"
+exec node "$SCRIPT_DIR/bin/grix-claude.js" "$@"

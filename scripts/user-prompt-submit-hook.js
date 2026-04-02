@@ -2,10 +2,10 @@ import process from "node:process";
 import { ChannelContextStore } from "../server/channel-context-store.js";
 import { HookSignalStore } from "../server/hook-signal-store.js";
 import { resolveSessionContextsDir } from "../server/paths.js";
-import { extractLatestClawpoolChannelTag } from "../server/transcript-channel-context.js";
+import { extractLatestGrixChannelTag } from "../server/transcript-channel-context.js";
 
 function logDebug(message) {
-  if (process.env.CLAWPOOL_CLAUDE_E2E_DEBUG !== "1") {
+  if (process.env.GRIX_CLAUDE_E2E_DEBUG !== "1") {
     return;
   }
   process.stderr.write(`[user-prompt-submit-hook] ${message}\n`);
@@ -29,7 +29,7 @@ async function main() {
 
   await hookSignalStore.recordHookEvent(input);
 
-  const context = extractLatestClawpoolChannelTag(input.prompt);
+  const context = extractLatestGrixChannelTag(input.prompt);
   if (!context?.chat_id) {
     logDebug(`no channel tag session=${String(input.session_id ?? "")}`);
     return;

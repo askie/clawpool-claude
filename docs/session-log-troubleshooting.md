@@ -11,7 +11,7 @@
 每个 AIBot 会话 ID 对应一份独立日志文件：
 
 ```text
-~/.claude/clawpool-claude-daemon/sessions/<aibot_session_id>/logs/daemon-session.log
+~/.claude/grix-claude-daemon/sessions/<aibot_session_id>/logs/daemon-session.log
 ```
 
 说明：
@@ -34,13 +34,13 @@
 1. 先确认服务状态：
 
 ```bash
-clawpool-claude status
+grix-claude status
 ```
 
 2. 确认会话 ID 后查看该会话日志：
 
 ```bash
-tail -f ~/.claude/clawpool-claude-daemon/sessions/<aibot_session_id>/logs/daemon-session.log
+tail -f ~/.claude/grix-claude-daemon/sessions/<aibot_session_id>/logs/daemon-session.log
 ```
 
 3. 关注下面这些关键阶段：
@@ -71,8 +71,8 @@ tail -f ~/.claude/clawpool-claude-daemon/sessions/<aibot_session_id>/logs/daemon
 除了会话日志，还建议同时看：
 
 ```text
-~/.claude/clawpool-claude-daemon/service/daemon-service.out.log
-~/.claude/clawpool-claude-daemon/service/daemon-service.err.log
+~/.claude/grix-claude-daemon/service/daemon-service.out.log
+~/.claude/grix-claude-daemon/service/daemon-service.err.log
 ```
 
 前者看服务整体运行，后者看启动错误和关键异常。

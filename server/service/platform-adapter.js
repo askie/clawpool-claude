@@ -88,7 +88,7 @@ function buildLinuxUserUnit({
     .map((item) => shellQuote(item))
     .join(" ");
   return `[Unit]
-Description=clawpool-claude daemon (${serviceID})
+Description=grix-claude daemon (${serviceID})
 After=default.target
 
 [Service]

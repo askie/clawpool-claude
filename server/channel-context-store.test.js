@@ -6,7 +6,7 @@ import { mkdtemp } from "node:fs/promises";
 import { ChannelContextStore } from "./channel-context-store.js";
 
 test("channel context store persists and matches by session and transcript", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-session-context-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "grix-claude-session-context-"));
   const store = new ChannelContextStore(dir);
 
   await store.put({
@@ -40,7 +40,7 @@ test("channel context store persists and matches by session and transcript", asy
 });
 
 test("channel context store exposes mismatch and stale inspection states", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-session-context-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "grix-claude-session-context-"));
   const store = new ChannelContextStore(dir);
 
   await store.put({

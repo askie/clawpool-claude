@@ -1,13 +1,21 @@
 {
-  "name": "@dhf-claude/clawpool",
+  "name": "@dhfpub/grix-claude",
   "version": "0.1.8",
-  "description": "Claude Code channel plugin for Aibot ClawPool",
+  "description": "Claude Code channel plugin for Aibot Grix",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/askie/clawpool-claude.git"
+  },
+  "bugs": {
+    "url": "https://github.com/askie/clawpool-claude/issues"
+  },
+  "homepage": "https://github.com/askie/clawpool-claude#readme",
   "publishConfig": {
     "access": "public"
   },
   "bin": {
-    "clawpool-claude": "bin/clawpool-claude.js"
+    "grix-claude": "bin/grix-claude.js"
   },
   "files": [
     "bin",
@@ -23,7 +31,7 @@
     "prepublishOnly": "npm run build",
     "clean": "node -e \"const fs=require('node:fs'); fs.rmSync('dist', { recursive: true, force: true });\"",
     "build:worker": "esbuild server/main.js --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js",
-    "build:daemon": "esbuild bin/clawpool-claude.js --bundle --platform=node --format=esm --target=node20 --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=dist/daemon.js",
+    "build:daemon": "esbuild bin/grix-claude.js --bundle --platform=node --format=esm --target=node20 --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=dist/daemon.js",
     "build": "npm run clean && npm run build:worker && npm run build:daemon",
     "dev": "node ./scripts/dev-build.js",
     "daemon": "node ./dist/daemon.js --show-claude",

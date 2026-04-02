@@ -16,7 +16,7 @@ const buildTargets = [
     outfile: "dist/index.js",
   },
   {
-    entryPoints: ["bin/clawpool-claude.js"],
+    entryPoints: ["bin/grix-claude.js"],
     outfile: "dist/daemon.js",
     banner: {
       js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",

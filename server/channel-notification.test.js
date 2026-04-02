@@ -23,7 +23,7 @@ test("buildChannelNotificationParams preserves stored inbound meta", () => {
     attachments_json: "[{\"media_url\":\"https://cdn.example.com/a.png\"}]",
     attachment_count: "1",
     biz_card_json: "{\"name\":\"card\"}",
-    channel_data_json: "{\"source\":\"clawpool-claude\"}",
+    channel_data_json: "{\"source\":\"grix-claude\"}",
     content: "hello",
   });
 

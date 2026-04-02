@@ -25,10 +25,10 @@ export class DaemonBridgeRuntime {
   } = {}) {
     this.env = env;
     this.logger = logger;
-    this.daemonBridgeURL = normalizeOptionalString(env.CLAWPOOL_CLAUDE_DAEMON_BRIDGE_URL);
-    this.daemonBridgeToken = normalizeOptionalString(env.CLAWPOOL_CLAUDE_DAEMON_BRIDGE_TOKEN);
+    this.daemonBridgeURL = normalizeOptionalString(env.GRIX_CLAUDE_DAEMON_BRIDGE_URL);
+    this.daemonBridgeToken = normalizeOptionalString(env.GRIX_CLAUDE_DAEMON_BRIDGE_TOKEN);
     this.daemonModeEnabled = (
-      env.CLAWPOOL_CLAUDE_DAEMON_MODE === "1"
+      env.GRIX_CLAUDE_DAEMON_MODE === "1"
       && this.daemonBridgeURL
       && this.daemonBridgeToken
     );
@@ -92,9 +92,9 @@ export class DaemonBridgeRuntime {
               ts: Date.now(),
               mcp_ready: this.workerReadyReported,
               mcp_last_activity_at: this.lastMcpActivityAt,
-              worker_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_WORKER_ID),
-              aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
-              claude_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_SESSION_ID),
+              worker_id: normalizeOptionalString(this.env.GRIX_CLAUDE_WORKER_ID),
+              aibot_session_id: normalizeOptionalString(this.env.GRIX_CLAUDE_AIBOT_SESSION_ID),
+              claude_session_id: normalizeOptionalString(this.env.GRIX_CLAUDE_SESSION_ID),
               pid: process.pid,
               hook_last_activity_at: Number(hookSignalState.latest_event?.event_at ?? 0),
               hook_latest_event: hookSignalState.latest_event,
@@ -112,7 +112,7 @@ export class DaemonBridgeRuntime {
       authed: this.daemonModeEnabled,
       last_error: this.daemonModeEnabled
         ? ""
-        : "worker must be started by clawpool-claude daemon",
+        : "worker must be started by grix-claude daemon",
     };
     this.connectedStatusPromise = null;
     this.dispatchSessionActivity = createSessionActivityDispatcher(async ({
@@ -125,9 +125,9 @@ export class DaemonBridgeRuntime {
     }) => {
       this.requireDaemonBridge();
       const response = await this.workerBridgeClient.setSessionComposing({
-        worker_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_WORKER_ID),
-        aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
-        claude_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_SESSION_ID),
+        worker_id: normalizeOptionalString(this.env.GRIX_CLAUDE_WORKER_ID),
+        aibot_session_id: normalizeOptionalString(this.env.GRIX_CLAUDE_AIBOT_SESSION_ID),
+        claude_session_id: normalizeOptionalString(this.env.GRIX_CLAUDE_SESSION_ID),
         pid: process.pid,
         session_id: sessionID,
         kind,
@@ -150,7 +150,7 @@ export class DaemonBridgeRuntime {
 
   requireDaemonBridge() {
     if (!this.isDaemonBridgeActive()) {
-      throw new Error("clawpool-claude worker must be started by clawpool-claude daemon");
+      throw new Error("grix-claude worker must be started by grix-claude daemon");
     }
   }
 
@@ -162,13 +162,13 @@ export class DaemonBridgeRuntime {
 
   buildStatusHints() {
     const hints = [
-      "This worker is managed by clawpool-claude daemon.",
+      "This worker is managed by grix-claude daemon.",
       "Use the daemon CLI to change ws_url, agent_id, or api_key.",
-      "Send open <目录> from ClawPool to let daemon start or recover a Claude session.",
+      "Send open <目录> from Grix to let daemon start or recover a Claude session.",
     ];
 
     if (!this.isDaemonBridgeActive()) {
-      hints.unshift("This worker must be started by clawpool-claude daemon.");
+      hints.unshift("This worker must be started by grix-claude daemon.");
     }
 
     return hints;
@@ -184,9 +184,9 @@ export class DaemonBridgeRuntime {
 
   buildWorkerIdentityPayload() {
     return {
-      worker_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_WORKER_ID),
-      aibot_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
-      claude_session_id: normalizeOptionalString(this.env.CLAWPOOL_CLAUDE_SESSION_ID),
+      worker_id: normalizeOptionalString(this.env.GRIX_CLAUDE_WORKER_ID),
+      aibot_session_id: normalizeOptionalString(this.env.GRIX_CLAUDE_AIBOT_SESSION_ID),
+      claude_session_id: normalizeOptionalString(this.env.GRIX_CLAUDE_SESSION_ID),
       pid: process.pid,
     };
   }
@@ -361,8 +361,8 @@ export class DaemonBridgeRuntime {
     this.logger?.trace?.({
       component: "worker.bridge",
       stage: "worker_register_requested",
-      aibot_session_id: this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID,
-      worker_id: this.env.CLAWPOOL_CLAUDE_WORKER_ID,
+      aibot_session_id: this.env.GRIX_CLAUDE_AIBOT_SESSION_ID,
+      worker_id: this.env.GRIX_CLAUDE_WORKER_ID,
       pid,
     });
     const response = await this.workerBridgeClient.registerWorker({
@@ -387,8 +387,8 @@ export class DaemonBridgeRuntime {
       this.logger?.trace?.({
         component: "worker.bridge",
         stage: "worker_status_requested",
-        aibot_session_id: this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID,
-        worker_id: this.env.CLAWPOOL_CLAUDE_WORKER_ID,
+        aibot_session_id: this.env.GRIX_CLAUDE_AIBOT_SESSION_ID,
+        worker_id: this.env.GRIX_CLAUDE_WORKER_ID,
         status: "connected",
       });
       const response = await this.workerBridgeClient.sendStatusUpdate({
@@ -422,8 +422,8 @@ export class DaemonBridgeRuntime {
       this.logger?.trace?.({
         component: "worker.bridge",
         stage: "worker_status_requested",
-        aibot_session_id: this.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID,
-        worker_id: this.env.CLAWPOOL_CLAUDE_WORKER_ID,
+        aibot_session_id: this.env.GRIX_CLAUDE_AIBOT_SESSION_ID,
+        worker_id: this.env.GRIX_CLAUDE_WORKER_ID,
         status: "ready",
       });
       await this.workerBridgeClient.sendStatusUpdate({

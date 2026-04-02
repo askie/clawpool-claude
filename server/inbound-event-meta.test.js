@@ -29,7 +29,7 @@ test("normalize inbound event payload preserves structured message metadata", ()
         },
       },
       channel_data: {
-        "clawpool-claude": {
+        "grix-claude": {
           execStatus: {
             status: "running",
           },
@@ -50,7 +50,7 @@ test("normalize inbound event payload preserves structured message metadata", ()
   ]);
   assert.equal(JSON.parse(normalized.biz_card_json).type, "exec_status");
   assert.equal(
-    JSON.parse(normalized.channel_data_json)["clawpool-claude"].execStatus.status,
+    JSON.parse(normalized.channel_data_json)["grix-claude"].execStatus.status,
     "running",
   );
 });

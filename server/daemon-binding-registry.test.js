@@ -6,7 +6,7 @@ import { mkdtemp } from "node:fs/promises";
 import { BindingRegistry } from "./daemon/binding-registry.js";
 
 test("binding registry creates and updates fixed bindings", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-binding-registry-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "grix-claude-binding-registry-"));
   const registry = new BindingRegistry(path.join(dir, "binding-registry.json"));
   await registry.load();
 
@@ -70,7 +70,7 @@ test("binding registry creates and updates fixed bindings", async () => {
 });
 
 test("binding registry rejects duplicate aibot session bindings", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-binding-registry-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "grix-claude-binding-registry-"));
   const registry = new BindingRegistry(path.join(dir, "binding-registry.json"));
   await registry.load();
 
@@ -93,7 +93,7 @@ test("binding registry rejects duplicate aibot session bindings", async () => {
 });
 
 test("binding registry can rotate Claude session id for a fixed binding", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-binding-registry-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "grix-claude-binding-registry-"));
   const registry = new BindingRegistry(path.join(dir, "binding-registry.json"));
   await registry.load();
 
@@ -115,7 +115,7 @@ test("binding registry can rotate Claude session id for a fixed binding", async 
 });
 
 test("binding registry resets transient worker states on daemon startup", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-binding-registry-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "grix-claude-binding-registry-"));
   const registry = new BindingRegistry(path.join(dir, "binding-registry.json"));
   await registry.load();
 

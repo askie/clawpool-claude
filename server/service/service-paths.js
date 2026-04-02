@@ -16,9 +16,9 @@ function buildServiceHash(dataDir) {
 export function buildServiceID(dataDir, platform = process.platform) {
   const suffix = buildServiceHash(dataDir);
   if (platform === "win32") {
-    return `ClawpoolClaudeDaemon-${suffix}`;
+    return `GrixClaudeDaemon-${suffix}`;
   }
-  return `com.dhfpub.clawpool-claude.daemon.${suffix}`;
+  return `com.dhfpub.grix-claude.daemon.${suffix}`;
 }
 
 export function resolveServiceInstallRecordPath(dataDir) {

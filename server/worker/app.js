@@ -43,9 +43,9 @@ function parsePositiveInt(value, fallbackValue) {
 
 function buildInstructions() {
   return [
-    'Messages arrive as <channel source="clawpool-claude" chat_id="..." event_id="..." message_id="..." user_id="...">text</channel>.',
+    'Messages arrive as <channel source="grix-claude" chat_id="..." event_id="..." message_id="..." user_id="...">text</channel>.',
     "When present, channel metadata includes msg_type plus JSON strings in attachments_json, biz_card_json, channel_data_json, and extra_json. Use those structured fields directly instead of guessing attachment or card semantics from text.",
-    'If channel_data_json marks {"clawpool-claude":{"internal_probe":{"kind":"ping_pong"}}}, reply with exactly pong and nothing else.',
+    'If channel_data_json marks {"grix-claude":{"internal_probe":{"kind":"ping_pong"}}}, reply with exactly pong and nothing else.',
     "If you want to send a visible reply back to the same chat, call the reply tool with chat_id, event_id, and text. You may also pass reply_to when you want to quote a specific message_id.",
     "The reply tool also accepts files as absolute local paths. Files are uploaded through the Agent API media presign endpoint before they are sent back to the chat.",
     "If you need to remove a previously sent message, call delete_message with chat_id and message_id.",
@@ -79,7 +79,7 @@ export function createWorkerApp({ env = process.env } = {}) {
   });
   const mcp = new Server(
     {
-      name: "clawpool-claude",
+      name: "grix-claude",
       version: "0.1.0",
     },
     {
@@ -125,7 +125,7 @@ export function createWorkerApp({ env = process.env } = {}) {
       interactionService?.finalizeEventSafely?.(eventID, result, context) ?? false
     ),
     logger,
-    aibotSessionID: normalizeOptionalString(env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID),
+    aibotSessionID: normalizeOptionalString(env.GRIX_CLAUDE_AIBOT_SESSION_ID),
   });
 
   interactionService = new WorkerInteractionService({
@@ -137,10 +137,10 @@ export function createWorkerApp({ env = process.env } = {}) {
     bridge,
     permissionRelayService,
     elicitationRelayService,
-    resultTimeoutMs: parsePositiveInt(env.CLAWPOOL_CLAUDE_EVENT_RESULT_TIMEOUT_MS, undefined),
-    resultRetryTimeoutMs: parsePositiveInt(env.CLAWPOOL_CLAUDE_EVENT_RESULT_RETRY_TIMEOUT_MS, undefined),
-    composingHeartbeatMs: parsePositiveInt(env.CLAWPOOL_CLAUDE_COMPOSING_HEARTBEAT_MS, undefined),
-    composingTTLMS: parsePositiveInt(env.CLAWPOOL_CLAUDE_COMPOSING_TTL_MS, undefined),
+    resultTimeoutMs: parsePositiveInt(env.GRIX_CLAUDE_EVENT_RESULT_TIMEOUT_MS, undefined),
+    resultRetryTimeoutMs: parsePositiveInt(env.GRIX_CLAUDE_EVENT_RESULT_RETRY_TIMEOUT_MS, undefined),
+    composingHeartbeatMs: parsePositiveInt(env.GRIX_CLAUDE_COMPOSING_HEARTBEAT_MS, undefined),
+    composingTTLMS: parsePositiveInt(env.GRIX_CLAUDE_COMPOSING_TTL_MS, undefined),
     logger,
   });
 

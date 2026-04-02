@@ -9,14 +9,14 @@ import { resolveServiceInstallRecordPath } from "./service/service-paths.js";
 import { DaemonProcessState, inspectDaemonProcessState } from "./daemon/process-state.js";
 
 test("service manager installs linux user service with absolute paths", async () => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-linux-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "grix-service-linux-"));
   const dataDir = path.join(tempRoot, "data");
   const calls = [];
   const manager = new ServiceManager({
     platform: "linux",
     homeDir: tempRoot,
     nodePath: "/usr/local/bin/node",
-    cliPath: "/opt/clawpool/bin/clawpool-claude.js",
+    cliPath: "/opt/grix/bin/grix-claude.js",
     runCommandImpl: async (command, args, options = {}) => {
       calls.push({ command, args, options });
       return { exitCode: 0, stdout: "", stderr: "" };
@@ -30,7 +30,7 @@ test("service manager installs linux user service with absolute paths", async ()
 
   assert.equal(status.installed, true);
   assert.equal(status.service_kind, "systemd-user");
-  assert.match(unitContent, /ExecStart='\/usr\/local\/bin\/node' '\/opt\/clawpool\/bin\/clawpool-claude\.js' 'daemon' '--data-dir'/u);
+  assert.match(unitContent, /ExecStart='\/usr\/local\/bin\/node' '\/opt\/grix\/bin\/grix-claude\.js' 'daemon' '--data-dir'/u);
   assert.deepEqual(calls.map((entry) => `${entry.command} ${entry.args.join(" ")}`), [
     `systemctl --user daemon-reload`,
     `systemctl --user enable ${status.service_id}.service`,
@@ -39,7 +39,7 @@ test("service manager installs linux user service with absolute paths", async ()
 });
 
 test("service manager install uses launchd bootstrap on macOS", async () => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-macos-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "grix-service-macos-"));
   const dataDir = path.join(tempRoot, "data");
   const calls = [];
   const manager = new ServiceManager({
@@ -47,7 +47,7 @@ test("service manager install uses launchd bootstrap on macOS", async () => {
     homeDir: tempRoot,
     uid: 501,
     nodePath: "/usr/local/bin/node",
-    cliPath: "/opt/clawpool/bin/clawpool-claude.js",
+    cliPath: "/opt/grix/bin/grix-claude.js",
     runCommandImpl: async (command, args, options = {}) => {
       calls.push({ command, args, options });
       return { exitCode: 0, stdout: "", stderr: "" };
@@ -71,14 +71,14 @@ test("service manager install uses launchd bootstrap on macOS", async () => {
 });
 
 test("service manager install uses task scheduler on windows", async () => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-win-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "grix-service-win-"));
   const dataDir = path.join(tempRoot, "data");
   const calls = [];
   const manager = new ServiceManager({
     platform: "win32",
     homeDir: tempRoot,
     nodePath: "C:\\Program Files\\nodejs\\node.exe",
-    cliPath: "C:\\clawpool\\bin\\clawpool-claude.js",
+    cliPath: "C:\\grix\\bin\\grix-claude.js",
     runCommandImpl: async (command, args, options = {}) => {
       calls.push({ command, args, options });
       return { exitCode: 0, stdout: "", stderr: "" };
@@ -91,21 +91,21 @@ test("service manager install uses task scheduler on windows", async () => {
   assert.equal(status.installed, true);
   assert.equal(status.service_kind, "task-scheduler");
   assert.deepEqual(calls.map((entry) => `${entry.command} ${entry.args.join(" ")}`), [
-    `schtasks /Create /TN ${status.service_id} /SC ONLOGON /RL LIMITED /F /TR "C:\\Program Files\\nodejs\\node.exe" C:\\clawpool\\bin\\clawpool-claude.js daemon --data-dir ${path.resolve(dataDir)}`,
+    `schtasks /Create /TN ${status.service_id} /SC ONLOGON /RL LIMITED /F /TR "C:\\Program Files\\nodejs\\node.exe" C:\\grix\\bin\\grix-claude.js daemon --data-dir ${path.resolve(dataDir)}`,
     `schtasks /Run /TN ${status.service_id}`,
   ]);
 });
 
 test("service manager status reports stale install when launcher path changed", async () => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-status-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "grix-service-status-"));
   const dataDir = path.join(tempRoot, "data");
   const store = new ServiceInstallStore(resolveServiceInstallRecordPath(dataDir));
   await store.save({
     platform: "linux",
-    service_id: "com.example.clawpool",
+    service_id: "com.example.grix",
     node_path: "/old/node",
-    cli_path: "/old/bin/clawpool-claude.js",
-    definition_path: "/tmp/clawpool.service",
+    cli_path: "/old/bin/grix-claude.js",
+    definition_path: "/tmp/grix.service",
     data_dir: path.resolve(dataDir),
     installed_at: 1,
     updated_at: 1,
@@ -114,7 +114,7 @@ test("service manager status reports stale install when launcher path changed", 
     platform: "linux",
     homeDir: tempRoot,
     nodePath: "/new/node",
-    cliPath: "/new/bin/clawpool-claude.js",
+    cliPath: "/new/bin/grix-claude.js",
     runCommandImpl: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
   });
 
@@ -124,7 +124,7 @@ test("service manager status reports stale install when launcher path changed", 
 });
 
 test("service manager waitForDaemonStarted throws on timeout", async () => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-wait-timeout-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "grix-service-wait-timeout-"));
   const dataDir = path.join(tempRoot, "data");
   const manager = new ServiceManager({
     platform: "linux",
@@ -139,15 +139,15 @@ test("service manager waitForDaemonStarted throws on timeout", async () => {
 });
 
 test("service manager restart refreshes stale install descriptor before restart", async () => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-restart-stale-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "grix-service-restart-stale-"));
   const dataDir = path.join(tempRoot, "data");
   const store = new ServiceInstallStore(resolveServiceInstallRecordPath(dataDir));
   await store.save({
     platform: "darwin",
-    service_id: "com.example.clawpool",
+    service_id: "com.example.grix",
     node_path: "/old/node",
-    cli_path: "/old/bin/clawpool-claude.js",
-    definition_path: path.join(tempRoot, "Library", "LaunchAgents", "com.example.clawpool.plist"),
+    cli_path: "/old/bin/grix-claude.js",
+    definition_path: path.join(tempRoot, "Library", "LaunchAgents", "com.example.grix.plist"),
     data_dir: path.resolve(dataDir),
     installed_at: 1,
     updated_at: 1,
@@ -159,7 +159,7 @@ test("service manager restart refreshes stale install descriptor before restart"
     homeDir: tempRoot,
     uid: 501,
     nodePath: "/new/node",
-    cliPath: "/new/bin/clawpool-claude.js",
+    cliPath: "/new/bin/grix-claude.js",
     now: () => 99,
     runCommandImpl: async (command, args, options = {}) => {
       calls.push({ command, args, options });
@@ -173,28 +173,28 @@ test("service manager restart refreshes stale install descriptor before restart"
 
   assert.equal(status.install_state, "current");
   assert.equal(refreshed?.node_path, "/new/node");
-  assert.equal(refreshed?.cli_path, "/new/bin/clawpool-claude.js");
+  assert.equal(refreshed?.cli_path, "/new/bin/grix-claude.js");
   assert.equal(refreshed?.updated_at, 99);
   const commands = calls.map((entry) => `${entry.command} ${entry.args.join(" ")}`);
-  assert.equal(commands[0], `launchctl bootout gui/501/com.example.clawpool`);
+  assert.equal(commands[0], `launchctl bootout gui/501/com.example.grix`);
   assert.equal(
-    commands.some((entry) => entry === `launchctl print gui/501/com.example.clawpool`),
+    commands.some((entry) => entry === `launchctl print gui/501/com.example.grix`),
     true,
   );
   assert.equal(commands.at(-2), `launchctl bootstrap gui/501 ${refreshed.definition_path}`);
-  assert.equal(commands.at(-1), `launchctl kickstart -k gui/501/com.example.clawpool`);
+  assert.equal(commands.at(-1), `launchctl kickstart -k gui/501/com.example.grix`);
 });
 
 test("service manager start refreshes stale install descriptor before starting a stopped daemon", async () => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-start-stale-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "grix-service-start-stale-"));
   const dataDir = path.join(tempRoot, "data");
   const store = new ServiceInstallStore(resolveServiceInstallRecordPath(dataDir));
   await store.save({
     platform: "darwin",
-    service_id: "com.example.clawpool",
+    service_id: "com.example.grix",
     node_path: "/old/node",
-    cli_path: "/old/bin/clawpool-claude.js",
-    definition_path: path.join(tempRoot, "Library", "LaunchAgents", "com.example.clawpool.plist"),
+    cli_path: "/old/bin/grix-claude.js",
+    definition_path: path.join(tempRoot, "Library", "LaunchAgents", "com.example.grix.plist"),
     data_dir: path.resolve(dataDir),
     installed_at: 1,
     updated_at: 1,
@@ -206,7 +206,7 @@ test("service manager start refreshes stale install descriptor before starting a
     homeDir: tempRoot,
     uid: 501,
     nodePath: "/new/node",
-    cliPath: "/new/bin/clawpool-claude.js",
+    cliPath: "/new/bin/grix-claude.js",
     now: () => 123,
     runCommandImpl: async (command, args, options = {}) => {
       calls.push({ command, args, options });
@@ -220,24 +220,24 @@ test("service manager start refreshes stale install descriptor before starting a
 
   assert.equal(status.install_state, "current");
   assert.equal(refreshed?.node_path, "/new/node");
-  assert.equal(refreshed?.cli_path, "/new/bin/clawpool-claude.js");
+  assert.equal(refreshed?.cli_path, "/new/bin/grix-claude.js");
   assert.equal(refreshed?.updated_at, 123);
   assert.deepEqual(calls.map((entry) => `${entry.command} ${entry.args.join(" ")}`), [
     `launchctl bootstrap gui/501 ${refreshed.definition_path}`,
-    `launchctl kickstart -k gui/501/com.example.clawpool`,
+    `launchctl kickstart -k gui/501/com.example.grix`,
   ]);
 });
 
 test("service manager start surfaces launchd kickstart failures", async () => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-service-start-fail-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "grix-service-start-fail-"));
   const dataDir = path.join(tempRoot, "data");
   const store = new ServiceInstallStore(resolveServiceInstallRecordPath(dataDir));
   await store.save({
     platform: "darwin",
-    service_id: "com.example.clawpool",
+    service_id: "com.example.grix",
     node_path: "/new/node",
-    cli_path: "/new/bin/clawpool-claude.js",
-    definition_path: path.join(tempRoot, "Library", "LaunchAgents", "com.example.clawpool.plist"),
+    cli_path: "/new/bin/grix-claude.js",
+    definition_path: path.join(tempRoot, "Library", "LaunchAgents", "com.example.grix.plist"),
     data_dir: path.resolve(dataDir),
     installed_at: 1,
     updated_at: 1,
@@ -249,7 +249,7 @@ test("service manager start surfaces launchd kickstart failures", async () => {
     homeDir: tempRoot,
     uid: 501,
     nodePath: "/new/node",
-    cliPath: "/new/bin/clawpool-claude.js",
+    cliPath: "/new/bin/grix-claude.js",
     runCommandImpl: async (command, args, options = {}) => {
       calls.push({ command, args, options });
       if (args[0] === "kickstart") {
@@ -264,13 +264,13 @@ test("service manager start surfaces launchd kickstart failures", async () => {
     /launchctl start failed/u,
   );
   assert.deepEqual(calls.map((entry) => `${entry.command} ${entry.args.join(" ")}`), [
-    `launchctl bootstrap gui/501 ${path.join(tempRoot, "Library", "LaunchAgents", "com.example.clawpool.plist")}`,
-    `launchctl kickstart -k gui/501/com.example.clawpool`,
+    `launchctl bootstrap gui/501 ${path.join(tempRoot, "Library", "LaunchAgents", "com.example.grix.plist")}`,
+    `launchctl kickstart -k gui/501/com.example.grix`,
   ]);
 });
 
 test("daemon process state acquires lock and clears on release", async () => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-state-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-state-"));
   const dataDir = path.join(tempRoot, "data");
   const state = new DaemonProcessState({
     dataDir,
@@ -307,7 +307,7 @@ test("daemon process state acquires lock and clears on release", async () => {
 });
 
 test("daemon process state replaces stale lock file", async () => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-stale-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-stale-"));
   const dataDir = path.join(tempRoot, "data");
   const store = new ServiceInstallStore(resolveServiceInstallRecordPath(dataDir));
   await store.clear();

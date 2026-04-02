@@ -146,9 +146,9 @@ export class WorkerInteractionService {
       sessionID: event.session_id,
     });
     const text = [
-      "This sender is not allowlisted for the Claude Clawpool channel.",
+      "This sender is not allowlisted for the Claude Grix channel.",
       `Pairing code: ${pair.code}`,
-      "Ask the Claude Code user to run /clawpool:access pair <code> with this code to approve the sender.",
+      "Ask the Claude Code user to run /grix:access pair <code> with this code to approve the sender.",
     ].join("\n");
 
     await this.bridge.sendText({
@@ -313,10 +313,10 @@ export class WorkerInteractionService {
       try {
         await this.sendAccessStatusMessage(
           event.session_id,
-          "Claude Clawpool access is currently disabled for this channel.",
+          "Claude Grix access is currently disabled for this channel.",
           `access_disabled_${event.event_id}`,
           buildAccessStatusBizCard({
-            summary: "Claude Clawpool access is currently disabled for this channel.",
+            summary: "Claude Grix access is currently disabled for this channel.",
             status: "warning",
             referenceID: event.event_id,
           }),
@@ -362,10 +362,10 @@ export class WorkerInteractionService {
         try {
           await this.sendAccessStatusMessage(
             event.session_id,
-            `Claude Clawpool could not auto-authorize this sender: ${String(error)}.`,
+            `Claude Grix could not auto-authorize this sender: ${String(error)}.`,
             `sender_bootstrap_failed_${event.event_id}`,
             buildAccessStatusBizCard({
-              summary: `Claude Clawpool could not auto-authorize this sender: ${String(error)}.`,
+              summary: `Claude Grix could not auto-authorize this sender: ${String(error)}.`,
               status: "error",
               referenceID: event.event_id,
             }),
@@ -397,10 +397,10 @@ export class WorkerInteractionService {
         try {
           await this.sendAccessStatusMessage(
             event.session_id,
-            "This sender is not allowlisted for the Claude Clawpool channel.",
+            "This sender is not allowlisted for the Claude Grix channel.",
             `sender_blocked_${event.event_id}`,
             buildAccessStatusBizCard({
-              summary: "This sender is not allowlisted for the Claude Clawpool channel.",
+              summary: "This sender is not allowlisted for the Claude Grix channel.",
               status: "warning",
               referenceID: event.event_id,
             }),

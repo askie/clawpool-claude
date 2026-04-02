@@ -5,15 +5,15 @@ function normalizeString(value) {
 function buildUsageText() {
   return [
     "usage:",
-    "/clawpool-approval <request_id> allow",
-    "/clawpool-approval <request_id> allow-rule <index>",
-    "/clawpool-approval <request_id> deny [reason]",
+    "/grix-approval <request_id> allow",
+    "/grix-approval <request_id> allow-rule <index>",
+    "/grix-approval <request_id> deny [reason]",
   ].join("\n");
 }
 
 export function parseApprovalDecisionCommand(content) {
   const body = normalizeString(content);
-  if (!body.toLowerCase().startsWith("/clawpool-approval")) {
+  if (!body.toLowerCase().startsWith("/grix-approval")) {
     return {
       matched: false,
     };

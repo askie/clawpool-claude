@@ -2,7 +2,7 @@ import process from "node:process";
 
 function usage() {
   return `用法:
-  clawpool-claude worker
+  grix-claude worker
 
 说明:
   worker 由 daemon 管理，用于承载固定目录和固定 Claude 会话。

@@ -76,7 +76,7 @@ function stripTerminalControlSequences(content) {
 
 function hasChannelListeningSignal(content) {
   const normalized = stripTerminalControlSequences(content);
-  return /Listening for channel messages from: server:clawpool-claude/iu.test(normalized);
+  return /Listening for channel messages from: server:grix-claude/iu.test(normalized);
 }
 
 function parsePositiveInt(value, fallbackValue) {
@@ -94,11 +94,11 @@ async function main() {
     `real Claude command is required but was not found: ${realClaudeCommand}`,
   );
 
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-visible-ping-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-visible-ping-"));
   const workspaceDir = path.join(tempRoot, "workspace");
   const pluginDataDir = path.join(tempRoot, "plugin-data");
   const debugLogPath = path.join(tempRoot, "worker-debug.log");
-  const pauseMs = parsePositiveInt(process.env.CLAWPOOL_CLAUDE_VISIBLE_PING_PAUSE_MS, 20_000);
+  const pauseMs = parsePositiveInt(process.env.GRIX_CLAUDE_VISIBLE_PING_PAUSE_MS, 20_000);
   await mkdir(workspaceDir, { recursive: true });
   await mkdir(pluginDataDir, { recursive: true });
 
@@ -157,16 +157,16 @@ async function main() {
   const workerProcessManager = new WorkerProcessManager({
     env: {
       ...process.env,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempRoot,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "1",
-      CLAWPOOL_CLAUDE_TRACE_LOG: "1",
-      CLAWPOOL_CLAUDE_E2E_DEBUG: "1",
-      CLAWPOOL_CLAUDE_E2E_DEBUG_LOG: debugLogPath,
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempRoot,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "1",
+      GRIX_CLAUDE_TRACE_LOG: "1",
+      GRIX_CLAUDE_E2E_DEBUG: "1",
+      GRIX_CLAUDE_E2E_DEBUG_LOG: debugLogPath,
       CLAUDE_BIN: realClaudeCommand,
-      CLAWPOOL_CLAUDE_EVENT_RESULT_TIMEOUT_MS: "15000",
-      CLAWPOOL_CLAUDE_EVENT_RESULT_RETRY_TIMEOUT_MS: "2000",
-      CLAWPOOL_CLAUDE_COMPOSING_HEARTBEAT_MS: "500",
-      CLAWPOOL_CLAUDE_COMPOSING_TTL_MS: "1000",
+      GRIX_CLAUDE_EVENT_RESULT_TIMEOUT_MS: "15000",
+      GRIX_CLAUDE_EVENT_RESULT_RETRY_TIMEOUT_MS: "2000",
+      GRIX_CLAUDE_COMPOSING_HEARTBEAT_MS: "500",
+      GRIX_CLAUDE_COMPOSING_TTL_MS: "1000",
     },
     packageRoot: process.cwd(),
     async ensureUserMcpServer() {},

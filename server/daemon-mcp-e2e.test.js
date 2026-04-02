@@ -85,10 +85,10 @@ function normalizeRuntimeLog(content) {
 
 function hasChannelListeningSignal(content) {
   const raw = String(content ?? "");
-  if (/\[clawpool\]\s+startup_channel_listening/u.test(raw)) {
+  if (/\[grix\]\s+startup_channel_listening/u.test(raw)) {
     return true;
   }
-  return /Listening for channel messages from: server:clawpool-claude/iu.test(
+  return /Listening for channel messages from: server:grix-claude/iu.test(
     normalizeRuntimeLog(content),
   );
 }
@@ -150,7 +150,7 @@ function listHookEventNames(payload = {}) {
 }
 
 function emitDiagnostic(label, payload) {
-  if (process.env.CLAWPOOL_CLAUDE_E2E_DEBUG !== "1") {
+  if (process.env.GRIX_CLAUDE_E2E_DEBUG !== "1") {
     return;
   }
   const body = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
@@ -196,13 +196,13 @@ async function runRealClaudeE2ETest(callback) {
 }
 
 test("e2e: real Claude ready ping reaches mcp_ready before active probe records hook activity", async () => runRealClaudeE2ETest(async (realClaudeCommand) => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-real-mcp-e2e-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-real-mcp-e2e-"));
   const workspaceDir = path.join(tempRoot, "workspace");
   const pluginDataDir = path.join(tempRoot, "plugin-data");
   const debugLogPath = path.join(tempRoot, "worker-debug.log");
   const hookSignalLogPath = resolveHookSignalsLogPathFromDataDir(pluginDataDir);
   const hookSignalStatePath = path.join(pluginDataDir, "hook-signals.json");
-  const pauseMs = parseOptionalPauseMs(process.env.CLAWPOOL_CLAUDE_E2E_PAUSE_MS);
+  const pauseMs = parseOptionalPauseMs(process.env.GRIX_CLAUDE_E2E_PAUSE_MS);
   await mkdir(workspaceDir, { recursive: true });
   await mkdir(pluginDataDir, { recursive: true });
 
@@ -276,16 +276,16 @@ test("e2e: real Claude ready ping reaches mcp_ready before active probe records 
   const workerProcessManager = new WorkerProcessManager({
     env: {
       ...process.env,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempRoot,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: process.env.CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW === "1"
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempRoot,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: process.env.GRIX_CLAUDE_SHOW_CLAUDE_WINDOW === "1"
         ? "1"
         : "0",
       CLAUDE_BIN: realClaudeCommand,
-      CLAWPOOL_CLAUDE_TRACE_LOG: "1",
-      CLAWPOOL_CLAUDE_E2E_DEBUG: "1",
-      CLAWPOOL_CLAUDE_E2E_DEBUG_LOG: debugLogPath,
-      CLAWPOOL_CLAUDE_COMPOSING_HEARTBEAT_MS: "500",
-      CLAWPOOL_CLAUDE_COMPOSING_TTL_MS: "1000",
+      GRIX_CLAUDE_TRACE_LOG: "1",
+      GRIX_CLAUDE_E2E_DEBUG: "1",
+      GRIX_CLAUDE_E2E_DEBUG_LOG: debugLogPath,
+      GRIX_CLAUDE_COMPOSING_HEARTBEAT_MS: "500",
+      GRIX_CLAUDE_COMPOSING_TTL_MS: "1000",
     },
     packageRoot: process.cwd(),
     async ensureUserMcpServer() {},
@@ -560,7 +560,7 @@ test("e2e: real Claude ready ping reaches mcp_ready before active probe records 
         msg: probeMsg,
         startup_blocking_failure: startupBlockingFailure,
         ready_ping_mcp_ready: readyPingResult.body?.mcp_ready ?? null,
-        runtime_log_has_startup_failure: /(\[clawpool\]\s+startup_mcp_server_failed|MCP\s+server\s+failed)/iu.test(runtimeLog),
+        runtime_log_has_startup_failure: /(\[grix\]\s+startup_mcp_server_failed|MCP\s+server\s+failed)/iu.test(runtimeLog),
       });
     }
 

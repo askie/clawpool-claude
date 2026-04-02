@@ -20,7 +20,7 @@ export function parseControlCommand(text) {
   }
 
   let startIndex = 0;
-  if (tokens[0] === "/clawpool" || tokens[0] === "clawpool") {
+  if (tokens[0] === "/grix" || tokens[0] === "grix") {
     startIndex = 1;
   }
 

@@ -42,7 +42,7 @@ function makeEntry(overrides = {}) {
 }
 
 test("saveEventEntry and loadEventEntries roundtrip", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "clawpool-claude-test-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "grix-claude-test-"));
   const entry = makeEntry();
 
   await saveEventEntry(dir, entry);
@@ -59,13 +59,13 @@ test("saveEventEntry and loadEventEntries roundtrip", async () => {
 });
 
 test("loadEventEntries returns empty array for missing dir", async () => {
-  const dir = path.join(tmpdir(), `clawpool-claude-test-nonexistent-${Date.now()}`);
+  const dir = path.join(tmpdir(), `grix-claude-test-nonexistent-${Date.now()}`);
   const loaded = await loadEventEntries(dir, 30 * 60 * 1000);
   assert.equal(loaded.length, 0);
 });
 
 test("loadEventEntries filters out expired entries", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "clawpool-claude-test-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "grix-claude-test-"));
   const completedTTLms = 5 * 60 * 1000;
   const expiredLastSeen = Date.now() - completedTTLms - 1000;
 
@@ -82,7 +82,7 @@ test("loadEventEntries filters out expired entries", async () => {
 });
 
 test("loadEventEntries keeps unresolved entries within pending ttl", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "clawpool-claude-test-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "grix-claude-test-"));
   const completedTTLms = 5 * 60 * 1000;
   const pendingTTLms = 48 * 60 * 60 * 1000;
   const staleForCompleted = Date.now() - completedTTLms - 1000;
@@ -101,7 +101,7 @@ test("loadEventEntries keeps unresolved entries within pending ttl", async () =>
 });
 
 test("loadEventEntries skips corrupt JSON files", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "clawpool-claude-test-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "grix-claude-test-"));
   await writeFile(path.join(dir, "corrupt.json"), "not json{{{{", "utf8");
 
   const good = makeEntry({ event_id: "evt-good" });
@@ -113,7 +113,7 @@ test("loadEventEntries skips corrupt JSON files", async () => {
 });
 
 test("loadEventEntries skips files with wrong schema_version", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "clawpool-claude-test-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "grix-claude-test-"));
   const filePath = path.join(dir, "old.json");
   await writeFile(filePath, JSON.stringify({ schema_version: 99, event_id: "x", session_id: "y", msg_id: "z" }), "utf8");
 
@@ -122,7 +122,7 @@ test("loadEventEntries skips files with wrong schema_version", async () => {
 });
 
 test("loadEventEntries loads completed entries", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "clawpool-claude-test-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "grix-claude-test-"));
   const now = Date.now();
   const entry = makeEntry({
     event_id: "evt-done",
@@ -137,7 +137,7 @@ test("loadEventEntries loads completed entries", async () => {
 });
 
 test("saveEventEntry overwrites previous entry for same event_id", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "clawpool-claude-test-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "grix-claude-test-"));
   const now = Date.now();
 
   await saveEventEntry(dir, makeEntry({ acked: false }));

@@ -84,7 +84,7 @@ test("buildAuthPayload pins claude client_type", () => {
     {
       agent_id: "9001",
       api_key: "test-api-key",
-      client: "claude-clawpool-claude-channel",
+      client: "claude-grix-claude-channel",
       client_type: "claude",
     },
   );

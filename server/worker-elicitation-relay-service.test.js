@@ -94,7 +94,7 @@ test("worker elicitation relay service records answers", async () => {
     session_id: "chat-elicitation-1",
     msg_id: "msg-elicitation-1",
     sender_id: "sender-elicitation-1",
-    content: "/clawpool-question req-elicitation-1 production",
+    content: "/grix-question req-elicitation-1 production",
   });
 
   assert.deepEqual(handled, {

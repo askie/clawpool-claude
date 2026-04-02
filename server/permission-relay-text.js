@@ -29,7 +29,7 @@ export function buildPermissionRelayRequestText(request) {
   const requestID = normalizeString(request?.request_id);
   const commandText = buildPermissionRelayCommandText(request);
   const lines = [
-    "Claude needs permission to continue this ClawPool turn.",
+    "Claude needs permission to continue this Grix turn.",
     `Request ID: ${requestID}`,
     commandText,
     `Reply "yes ${requestID}" to allow once, or "no ${requestID}" to deny.`,

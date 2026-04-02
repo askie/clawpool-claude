@@ -6,7 +6,7 @@ import { mkdtemp } from "node:fs/promises";
 import { ElicitationStore } from "./elicitation-store.js";
 
 test("elicitation store creates resolves and summarizes requests", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-elicitation-store-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "grix-claude-elicitation-store-"));
   const store = new ElicitationStore({
     requestsDir: path.join(dir, "requests"),
   });

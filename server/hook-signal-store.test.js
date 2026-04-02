@@ -37,7 +37,7 @@ test("buildHookSignalEvent derives safe hook summaries", () => {
 });
 
 test("hook signal store records latest event and recent ring", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-hook-signal-store-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "grix-hook-signal-store-"));
   const store = new HookSignalStore(path.join(dir, "hook-signals.json"));
 
   await store.recordHookEvent({

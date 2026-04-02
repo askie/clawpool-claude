@@ -22,8 +22,8 @@ test("cli main prints the running command and redacts api key", async () => {
       "/tmp/demo dir",
     ], {});
     const content = outputs.join("");
-    assert.match(content, /运行命令:\s+clawpool-claude --help --api-key '\*\*\*\*\*\*' --data-dir '\/tmp\/demo dir'/u);
-    assert.match(content, /实际入口:\s+.*clawpool-claude\.js --help --api-key '\*\*\*\*\*\*' --data-dir '\/tmp\/demo dir'/u);
+    assert.match(content, /运行命令:\s+grix-claude --help --api-key '\*\*\*\*\*\*' --data-dir '\/tmp\/demo dir'/u);
+    assert.match(content, /实际入口:\s+.*grix-claude\.js --help --api-key '\*\*\*\*\*\*' --data-dir '\/tmp\/demo dir'/u);
     assert.doesNotMatch(content, /secret-value/u);
   } finally {
     process.stdout.write = originalStdoutWrite;
@@ -32,7 +32,7 @@ test("cli main prints the running command and redacts api key", async () => {
 
 test("cli run routes daemon subcommand", async () => {
   const outputs = [];
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-route-cli-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-route-cli-"));
   const originalStdoutWrite = process.stdout.write;
   process.stdout.write = (chunk) => {
     outputs.push(String(chunk));
@@ -72,7 +72,7 @@ test("cli run routes worker subcommand", async () => {
 
 test("default cli path persists daemon config without starting daemon when --no-launch is used", async () => {
   const outputs = [];
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-default-cli-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-default-cli-"));
   const originalStdoutWrite = process.stdout.write;
   process.stdout.write = (chunk) => {
     outputs.push(String(chunk));
@@ -107,16 +107,16 @@ test("default cli path persists daemon config without starting daemon when --no-
 
 test("default cli path does not leak host process env into daemon config writes", async () => {
   const outputs = [];
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-env-cli-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-env-cli-"));
   const originalStdoutWrite = process.stdout.write;
-  const originalAgentID = process.env.CLAWPOOL_CLAUDE_AGENT_ID;
-  const originalAPIKey = process.env.CLAWPOOL_CLAUDE_API_KEY;
+  const originalAgentID = process.env.GRIX_CLAUDE_AGENT_ID;
+  const originalAPIKey = process.env.GRIX_CLAUDE_API_KEY;
   process.stdout.write = (chunk) => {
     outputs.push(String(chunk));
     return true;
   };
-  process.env.CLAWPOOL_CLAUDE_AGENT_ID = "stale-agent";
-  process.env.CLAWPOOL_CLAUDE_API_KEY = "stale-key";
+  process.env.GRIX_CLAUDE_AGENT_ID = "stale-agent";
+  process.env.GRIX_CLAUDE_API_KEY = "stale-key";
 
   try {
     const exitCode = await run([
@@ -141,21 +141,21 @@ test("default cli path does not leak host process env into daemon config writes"
   } finally {
     process.stdout.write = originalStdoutWrite;
     if (originalAgentID === undefined) {
-      delete process.env.CLAWPOOL_CLAUDE_AGENT_ID;
+      delete process.env.GRIX_CLAUDE_AGENT_ID;
     } else {
-      process.env.CLAWPOOL_CLAUDE_AGENT_ID = originalAgentID;
+      process.env.GRIX_CLAUDE_AGENT_ID = originalAgentID;
     }
     if (originalAPIKey === undefined) {
-      delete process.env.CLAWPOOL_CLAUDE_API_KEY;
+      delete process.env.GRIX_CLAUDE_API_KEY;
     } else {
-      process.env.CLAWPOOL_CLAUDE_API_KEY = originalAPIKey;
+      process.env.GRIX_CLAUDE_API_KEY = originalAPIKey;
     }
   }
 });
 
 test("default cli path can enable visible Claude debug mode", async () => {
   const outputs = [];
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-show-claude-cli-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-show-claude-cli-"));
   const originalStdoutWrite = process.stdout.write;
   process.stdout.write = (chunk) => {
     outputs.push(String(chunk));
@@ -182,9 +182,9 @@ test("default cli path can enable visible Claude debug mode", async () => {
   }
 });
 
-test("default cli path accepts CLAWPOOL_CLAUDE_ENDPOINT env for daemon config", async () => {
+test("default cli path accepts GRIX_CLAUDE_ENDPOINT env for daemon config", async () => {
   const outputs = [];
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-endpoint-env-cli-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-endpoint-env-cli-"));
   const originalStdoutWrite = process.stdout.write;
   process.stdout.write = (chunk) => {
     outputs.push(String(chunk));
@@ -197,9 +197,9 @@ test("default cli path accepts CLAWPOOL_CLAUDE_ENDPOINT env for daemon config", 
       "--data-dir",
       tempDir,
     ], {
-      CLAWPOOL_CLAUDE_ENDPOINT: "ws://127.0.0.1:27189/v1/agent-api/ws?agent_id=2035251418226495488",
-      CLAWPOOL_CLAUDE_AGENT_ID: "2035251418226495488",
-      CLAWPOOL_CLAUDE_API_KEY: "ak_2035251418226495488_Gyav9cyaOHbAUP7qrOJ4JHv13FR0XgwB",
+      GRIX_CLAUDE_ENDPOINT: "ws://127.0.0.1:27189/v1/agent-api/ws?agent_id=2035251418226495488",
+      GRIX_CLAUDE_AGENT_ID: "2035251418226495488",
+      GRIX_CLAUDE_API_KEY: "ak_2035251418226495488_Gyav9cyaOHbAUP7qrOJ4JHv13FR0XgwB",
     });
     assert.equal(exitCode, 0);
     assert.match(outputs.join(""), /Agent ID: 2035251418226495488/u);
@@ -211,7 +211,7 @@ test("default cli path accepts CLAWPOOL_CLAUDE_ENDPOINT env for daemon config", 
 
 test("cli daemon subcommand persists daemon config when options are provided", async () => {
   const outputs = [];
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-cli-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-cli-"));
   const originalStdoutWrite = process.stdout.write;
   process.stdout.write = (chunk) => {
     outputs.push(String(chunk));
@@ -250,7 +250,7 @@ test("cli daemon subcommand persists daemon config when options are provided", a
 
 test("cli install subcommand prepares config and delegates to service manager", async () => {
   const outputs = [];
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-install-cli-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-install-cli-"));
   const originalStdoutWrite = process.stdout.write;
   const calls = [];
   process.stdout.write = (chunk) => {
@@ -297,7 +297,7 @@ test("cli install subcommand prepares config and delegates to service manager", 
 
 test("cli status subcommand prints service manager status", async () => {
   const outputs = [];
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-status-cli-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-status-cli-"));
   const originalStdoutWrite = process.stdout.write;
   process.stdout.write = (chunk) => {
     outputs.push(String(chunk));
@@ -330,7 +330,7 @@ test("cli status subcommand prints service manager status", async () => {
 
 test("cli start subcommand persists environment config before starting service", async () => {
   const outputs = [];
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-start-env-cli-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-start-env-cli-"));
   const originalStdoutWrite = process.stdout.write;
   const calls = [];
   process.stdout.write = (chunk) => {
@@ -344,9 +344,9 @@ test("cli start subcommand persists environment config before starting service",
       "--data-dir",
       tempDir,
     ], {
-      CLAWPOOL_CLAUDE_ENDPOINT: "ws://127.0.0.1:9020/ws",
-      CLAWPOOL_CLAUDE_AGENT_ID: "agent-start-env",
-      CLAWPOOL_CLAUDE_API_KEY: "key-start-env",
+      GRIX_CLAUDE_ENDPOINT: "ws://127.0.0.1:9020/ws",
+      GRIX_CLAUDE_AGENT_ID: "agent-start-env",
+      GRIX_CLAUDE_API_KEY: "key-start-env",
     }, {
       serviceManager: {
         start: async ({ dataDir }) => {

@@ -23,7 +23,7 @@ function normalizeString(value) {
 }
 
 function logDebug(message) {
-  if (process.env.CLAWPOOL_CLAUDE_E2E_DEBUG !== "1") {
+  if (process.env.GRIX_CLAUDE_E2E_DEBUG !== "1") {
     return;
   }
   process.stderr.write(`[elicitation-hook] ${message}\n`);

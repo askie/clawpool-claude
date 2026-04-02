@@ -9,8 +9,8 @@ import {
 import { buildElicitationFooterText } from "./elicitation-text.js";
 import { buildMessageCardEnvelope } from "./message-card-envelope.js";
 
-const claudeHostLabel = "Claude Clawpool";
-const pairingCommandHint = "/clawpool:access pair <code>";
+const claudeHostLabel = "Claude Grix";
+const pairingCommandHint = "/grix:access pair <code>";
 
 function normalizeString(value) {
   return String(value ?? "").trim();

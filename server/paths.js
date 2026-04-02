@@ -3,7 +3,7 @@ import { mkdir as mkdirAsync } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-const defaultPluginID = "clawpool-claude";
+const defaultPluginID = "grix-claude";
 
 function sanitizePluginID(pluginID) {
   return String(pluginID ?? defaultPluginID)
@@ -27,11 +27,11 @@ export async function ensurePluginDataDir(pluginID = defaultPluginID) {
 }
 
 export function resolveConfigPath(pluginID = defaultPluginID) {
-  return path.join(resolvePluginDataDir(pluginID), "clawpool-claude-config.json");
+  return path.join(resolvePluginDataDir(pluginID), "grix-claude-config.json");
 }
 
 export function resolveAccessPath(pluginID = defaultPluginID) {
-  return path.join(resolvePluginDataDir(pluginID), "clawpool-claude-access.json");
+  return path.join(resolvePluginDataDir(pluginID), "grix-claude-access.json");
 }
 
 export function resolveApprovalRequestsDir(pluginID = defaultPluginID) {

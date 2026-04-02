@@ -28,7 +28,7 @@ test("resolveClaudeSessionPath points to Claude project session jsonl", () => {
 });
 
 test("claudeSessionExists checks the real Claude session file location", async () => {
-  const homeDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-home-"));
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), "grix-claude-home-"));
   const cwd = "/tmp/real/project";
   const claudeSessionID = "session-real";
   const sessionPath = resolveClaudeSessionPath({

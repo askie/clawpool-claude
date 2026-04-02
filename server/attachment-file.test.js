@@ -15,7 +15,7 @@ test("attachment file infers content type and attachment type", () => {
 });
 
 test("attachment file validates absolute local file path", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-attachment-file-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "grix-claude-attachment-file-"));
   const filePath = path.join(dir, "demo.png");
   await writeFile(filePath, Buffer.from("png"), "utf8");
 

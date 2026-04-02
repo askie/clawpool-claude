@@ -99,9 +99,9 @@ export class WorkerElicitationRelayService {
     if (request.channel_context.chat_id !== event.session_id) {
       await this.sendCommandReply(
         event,
-        "This input request belongs to a different ClawPool chat.",
+        "This input request belongs to a different Grix chat.",
         buildQuestionStatusBizCard({
-          summary: "This input request belongs to a different ClawPool chat.",
+          summary: "This input request belongs to a different Grix chat.",
           referenceID: parsed.request_id,
           status: "warning",
         }),

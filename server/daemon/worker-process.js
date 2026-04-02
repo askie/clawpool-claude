@@ -26,16 +26,16 @@ const extraUsageLimitPatterns = [
 ];
 const defaultUsageLimitTailScanBytes = 128 * 1024;
 const defaultUsageLimitCursorScanBytes = 512 * 1024;
-const startupPromptAutoConfirmPattern = /\[clawpool\]\s+startup_prompt_auto_confirm/u;
+const startupPromptAutoConfirmPattern = /\[grix\]\s+startup_prompt_auto_confirm/u;
 const startupChannelListeningPatterns = [
-  /\[clawpool\]\s+startup_channel_listening/u,
-  /Listening\s+for\s+channel\s+messages\s+from:\s*server:clawpool-claude/u,
+  /\[grix\]\s+startup_channel_listening/u,
+  /Listening\s+for\s+channel\s+messages\s+from:\s*server:grix-claude/u,
 ];
 const startupMcpServerFailedPatterns = [
-  /\[clawpool\]\s+startup_mcp_server_failed/u,
+  /\[grix\]\s+startup_mcp_server_failed/u,
   /MCP\s+server\s+failed/u,
 ];
-const startupMcpServerFailedMarkerPattern = /\[clawpool\]\s+startup_mcp_server_failed/u;
+const startupMcpServerFailedMarkerPattern = /\[grix\]\s+startup_mcp_server_failed/u;
 
 function stripTerminalControlSequences(content) {
   return String(content ?? "")
@@ -162,12 +162,12 @@ function buildShellEnvArgs(env) {
 }
 
 function shouldShowClaudeWindow(env = process.env) {
-  return env.CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW === "1";
+  return env.GRIX_CLAUDE_SHOW_CLAUDE_WINDOW === "1";
 }
 
 function buildWorkerSessionName(aibotSessionID) {
   const normalized = normalizeString(aibotSessionID).replace(/[^a-zA-Z0-9._-]+/g, "-");
-  return normalized ? `clawpool-${normalized}` : "clawpool-worker";
+  return normalized ? `grix-${normalized}` : "grix-worker";
 }
 
 function resolveWorkerLogPaths({ logsDir, workerID }) {
@@ -191,20 +191,20 @@ export function buildWorkerEnvironment({
   const env = {
     ...baseEnv,
     CLAUDE_PLUGIN_DATA: normalizeString(pluginDataDir),
-    CLAWPOOL_CLAUDE_AIBOT_SESSION_ID: normalizeString(aibotSessionID),
-    CLAWPOOL_CLAUDE_SESSION_ID: normalizeString(claudeSessionID),
-    CLAWPOOL_CLAUDE_DAEMON_MODE: "1",
-    CLAWPOOL_CLAUDE_WORKER_ID: normalizeString(workerID),
-    CLAWPOOL_CLAUDE_DAEMON_BRIDGE_URL: normalizeString(bridgeURL),
-    CLAWPOOL_CLAUDE_DAEMON_BRIDGE_TOKEN: normalizeString(bridgeToken),
+    GRIX_CLAUDE_AIBOT_SESSION_ID: normalizeString(aibotSessionID),
+    GRIX_CLAUDE_SESSION_ID: normalizeString(claudeSessionID),
+    GRIX_CLAUDE_DAEMON_MODE: "1",
+    GRIX_CLAUDE_WORKER_ID: normalizeString(workerID),
+    GRIX_CLAUDE_DAEMON_BRIDGE_URL: normalizeString(bridgeURL),
+    GRIX_CLAUDE_DAEMON_BRIDGE_TOKEN: normalizeString(bridgeToken),
   };
 
   if (connectionConfig) {
-    env.CLAWPOOL_CLAUDE_WS_URL = normalizeString(connectionConfig.wsURL);
-    env.CLAWPOOL_CLAUDE_AGENT_ID = normalizeString(connectionConfig.agentID);
-    env.CLAWPOOL_CLAUDE_API_KEY = normalizeString(connectionConfig.apiKey);
+    env.GRIX_CLAUDE_WS_URL = normalizeString(connectionConfig.wsURL);
+    env.GRIX_CLAUDE_AGENT_ID = normalizeString(connectionConfig.agentID);
+    env.GRIX_CLAUDE_API_KEY = normalizeString(connectionConfig.apiKey);
     if (Number.isFinite(Number(connectionConfig.outboundTextChunkLimit))) {
-      env.CLAWPOOL_CLAUDE_OUTBOUND_TEXT_CHUNK_LIMIT = String(
+      env.GRIX_CLAUDE_OUTBOUND_TEXT_CHUNK_LIMIT = String(
         Math.floor(Number(connectionConfig.outboundTextChunkLimit)),
       );
     }
@@ -241,7 +241,7 @@ export function buildWorkerClaudeArgs({
   }
   args.push(
     "--dangerously-load-development-channels",
-    "server:clawpool-claude",
+    "server:grix-claude",
   );
   return args;
 }
@@ -269,7 +269,7 @@ export async function createVisibleClaudeLaunchScript({
     "set timeout -1",
     "set startup_prompt_armed 1",
     "proc emit_marker {marker} {",
-    "  puts [format {[clawpool] %s} $marker]",
+    "  puts [format {[grix] %s} $marker]",
     "  flush stdout",
     "}",
     ...(captureOutputInExpectLog ? [`log_file -a {${tclEscape(stdoutLogPath)}}`] : []),
@@ -307,7 +307,7 @@ export async function createVisibleClaudeLaunchScript({
     "    }",
     "    exp_continue",
     "  }",
-    "  -re {(?i)Listening.*channel messages.*server:clawpool-claude} {",
+    "  -re {(?i)Listening.*channel messages.*server:grix-claude} {",
     "    emit_marker startup_channel_listening",
     "    set startup_prompt_armed 0",
     "    exp_continue",
@@ -324,7 +324,7 @@ export async function createVisibleClaudeLaunchScript({
     "#!/bin/zsh",
     "set -e",
     `cd ${shellEscape(cwd)}`,
-    `printf '\\e]1;clawpool-claude ${normalizedWorkerID}\\a'`,
+    `printf '\\e]1;grix-claude ${normalizedWorkerID}\\a'`,
     `/usr/bin/env ${buildShellEnvArgs(env).join(" ")} /usr/bin/expect ${shellEscape(expectPath)}`,
     ...buildVisibleTerminalCleanupLines(),
     "",
@@ -612,7 +612,7 @@ export class WorkerProcessManager {
     if (terminatedPIDs.length === 0 && normalizedSessionIDs.length > 0) {
       try {
         const output = execSync(
-          "pgrep -f 'claude.*--plugin-dir.*clawpool-claude' 2>/dev/null || true",
+          "pgrep -f 'claude.*--plugin-dir.*grix-claude' 2>/dev/null || true",
           { encoding: "utf8", timeout: 5000 },
         );
         const orphanPIDs = output.trim().split("\n").map(Number).filter((n) => n > 0);

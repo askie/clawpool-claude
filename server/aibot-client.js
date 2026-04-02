@@ -6,15 +6,15 @@ function normalizeString(value) {
   return String(value ?? "").trim();
 }
 
-const verboseDebugEnabled = process.env.CLAWPOOL_CLAUDE_E2E_DEBUG === "1";
-const verboseDebugLogPath = normalizeString(process.env.CLAWPOOL_CLAUDE_E2E_DEBUG_LOG);
+const verboseDebugEnabled = process.env.GRIX_CLAUDE_E2E_DEBUG === "1";
+const verboseDebugLogPath = normalizeString(process.env.GRIX_CLAUDE_E2E_DEBUG_LOG);
 
 function logDebug(message) {
   if (!verboseDebugEnabled) {
     return;
   }
   if (verboseDebugLogPath) {
-    appendFileSync(verboseDebugLogPath, `[clawpool-claude:aibot] ${message}\n`);
+    appendFileSync(verboseDebugLogPath, `[grix-claude:aibot] ${message}\n`);
   }
 }
 
@@ -38,7 +38,7 @@ export function buildAuthPayload(config) {
   return {
     agent_id: config.agentID,
     api_key: config.apiKey,
-    client: "claude-clawpool-claude-channel",
+    client: "claude-grix-claude-channel",
     client_type: "claude",
   };
 }
@@ -122,13 +122,13 @@ export class AibotClient {
 
   ensureReady() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.status.authed) {
-      throw new Error("clawpool-claude websocket is not ready");
+      throw new Error("grix-claude websocket is not ready");
     }
   }
 
   ensureSocketOpen() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error("clawpool-claude websocket is not open");
+      throw new Error("grix-claude websocket is not open");
     }
   }
 
@@ -241,7 +241,7 @@ export class AibotClient {
       if (this.ws === socket) {
         this.ws = null;
       }
-      this.rejectPending(new Error("clawpool-claude websocket closed"));
+      this.rejectPending(new Error("grix-claude websocket closed"));
       this.setStatus({
         connecting: false,
         connected: false,
@@ -271,7 +271,7 @@ export class AibotClient {
     if (suppressReconnect) {
       this.suppressReconnectSocket = socket;
     }
-    this.rejectPending(new Error("clawpool-claude websocket restarted"));
+    this.rejectPending(new Error("grix-claude websocket restarted"));
     let didClose = socket.readyState === WebSocket.CLOSED;
     await new Promise((resolve) => {
       if (didClose) {

@@ -6,10 +6,10 @@ import test from "node:test";
 import { SessionLogWriter } from "./daemon/session-log-writer.js";
 
 test("session log writer writes trace lines into per-session file", async () => {
-  const dataDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-session-log-"));
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "grix-session-log-"));
   const writer = new SessionLogWriter({
     env: {
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: dataDir,
+      GRIX_CLAUDE_DAEMON_DATA_DIR: dataDir,
     },
   });
 
@@ -32,10 +32,10 @@ test("session log writer writes trace lines into per-session file", async () => 
 });
 
 test("session log writer serializes concurrent writes for the same session", async () => {
-  const dataDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-session-log-"));
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "grix-session-log-"));
   const writer = new SessionLogWriter({
     env: {
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: dataDir,
+      GRIX_CLAUDE_DAEMON_DATA_DIR: dataDir,
     },
   });
 
@@ -54,10 +54,10 @@ test("session log writer serializes concurrent writes for the same session", asy
 });
 
 test("session log writer resolves session id from aibot_session_id and sanitizes path", async () => {
-  const dataDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-session-log-"));
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "grix-session-log-"));
   const writer = new SessionLogWriter({
     env: {
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: dataDir,
+      GRIX_CLAUDE_DAEMON_DATA_DIR: dataDir,
     },
   });
 
@@ -77,10 +77,10 @@ test("session log writer resolves session id from aibot_session_id and sanitizes
 });
 
 test("session log writer skips trace without session id", async () => {
-  const dataDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-session-log-"));
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "grix-session-log-"));
   const writer = new SessionLogWriter({
     env: {
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: dataDir,
+      GRIX_CLAUDE_DAEMON_DATA_DIR: dataDir,
     },
   });
 

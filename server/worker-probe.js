@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
-const probeChannelNamespace = "clawpool-claude";
-const probeSenderID = "__clawpool_claude_probe__";
+const probeChannelNamespace = "grix-claude";
+const probeSenderID = "__grix_claude_probe__";
 const probeKind = "ping_pong";
 
 export const defaultWorkerPingProbeTimeoutMs = 15 * 1000;

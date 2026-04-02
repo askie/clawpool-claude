@@ -26,8 +26,8 @@ test("formatTraceLine renders searchable key value pairs", () => {
 });
 
 test("isTraceLoggingEnabled accepts explicit trace switch and debug switch", () => {
-  assert.equal(isTraceLoggingEnabled({ CLAWPOOL_CLAUDE_TRACE_LOG: "1" }), true);
-  assert.equal(isTraceLoggingEnabled({ CLAWPOOL_CLAUDE_E2E_DEBUG: "1" }), true);
+  assert.equal(isTraceLoggingEnabled({ GRIX_CLAUDE_TRACE_LOG: "1" }), true);
+  assert.equal(isTraceLoggingEnabled({ GRIX_CLAUDE_E2E_DEBUG: "1" }), true);
   assert.equal(isTraceLoggingEnabled({}), false);
 });
 

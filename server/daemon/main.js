@@ -22,7 +22,7 @@ const workerReadySettleDelayMs = 3000;
 
 function usage() {
   return `用法:
-  clawpool-claude daemon [options]
+  grix-claude daemon [options]
 
 说明:
   常驻 daemon。负责对接 aibot、维护固定绑定，并调度 Claude worker。
@@ -139,8 +139,8 @@ export async function run(argv = [], env = process.env) {
 
   const runtimeEnv = {
     ...env,
-    ...(options.dataDir ? { CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: options.dataDir } : {}),
-    ...(options.showClaude ? { CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "1" } : {}),
+    ...(options.dataDir ? { GRIX_CLAUDE_DAEMON_DATA_DIR: options.dataDir } : {}),
+    ...(options.showClaude ? { GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "1" } : {}),
   };
   const sessionLogWriter = new SessionLogWriter({ env: runtimeEnv });
   const logger = createProcessLogger({
@@ -411,7 +411,7 @@ export async function run(argv = [], env = process.env) {
       await runtime.handleRevokeEvent(payload);
     };
 
-    print("clawpool-claude daemon 已启动。");
+    print("grix-claude daemon 已启动。");
     print(`数据目录: ${dataDir}`);
     print(`Bridge: ${bridgeServer.getURL()}`);
     print(`已配置: ${configStore.isConfigured() ? "yes" : "no"}`);

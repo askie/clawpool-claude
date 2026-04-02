@@ -11,12 +11,12 @@ import { WorkerBridgeServer } from "./daemon/worker-bridge-server.js";
 test("daemon bridge runtime ping includes worker identity and pid", async () => {
   const bridge = new DaemonBridgeRuntime({
     env: {
-      CLAWPOOL_CLAUDE_DAEMON_MODE: "1",
-      CLAWPOOL_CLAUDE_DAEMON_BRIDGE_URL: "http://127.0.0.1:19999",
-      CLAWPOOL_CLAUDE_DAEMON_BRIDGE_TOKEN: "bridge-token",
-      CLAWPOOL_CLAUDE_WORKER_ID: "worker-ping",
-      CLAWPOOL_CLAUDE_AIBOT_SESSION_ID: "chat-ping",
-      CLAWPOOL_CLAUDE_SESSION_ID: "claude-ping",
+      GRIX_CLAUDE_DAEMON_MODE: "1",
+      GRIX_CLAUDE_DAEMON_BRIDGE_URL: "http://127.0.0.1:19999",
+      GRIX_CLAUDE_DAEMON_BRIDGE_TOKEN: "bridge-token",
+      GRIX_CLAUDE_WORKER_ID: "worker-ping",
+      GRIX_CLAUDE_AIBOT_SESSION_ID: "chat-ping",
+      GRIX_CLAUDE_SESSION_ID: "claude-ping",
     },
   });
   await bridge.startControlServer();
@@ -57,12 +57,12 @@ test("daemon bridge runtime does not treat composing heartbeat as MCP activity",
 
   const bridge = new DaemonBridgeRuntime({
     env: {
-      CLAWPOOL_CLAUDE_DAEMON_MODE: "1",
-      CLAWPOOL_CLAUDE_DAEMON_BRIDGE_URL: server.getURL(),
-      CLAWPOOL_CLAUDE_DAEMON_BRIDGE_TOKEN: "bridge-token",
-      CLAWPOOL_CLAUDE_WORKER_ID: "worker-ping",
-      CLAWPOOL_CLAUDE_AIBOT_SESSION_ID: "chat-ping",
-      CLAWPOOL_CLAUDE_SESSION_ID: "claude-ping",
+      GRIX_CLAUDE_DAEMON_MODE: "1",
+      GRIX_CLAUDE_DAEMON_BRIDGE_URL: server.getURL(),
+      GRIX_CLAUDE_DAEMON_BRIDGE_TOKEN: "bridge-token",
+      GRIX_CLAUDE_WORKER_ID: "worker-ping",
+      GRIX_CLAUDE_AIBOT_SESSION_ID: "chat-ping",
+      GRIX_CLAUDE_SESSION_ID: "claude-ping",
     },
   });
   await bridge.startControlServer();
@@ -101,7 +101,7 @@ test("daemon bridge runtime does not treat composing heartbeat as MCP activity",
 });
 
 test("daemon bridge runtime ping includes latest hook signal snapshot", async () => {
-  const pluginDataDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-hook-ping-"));
+  const pluginDataDir = await mkdtemp(path.join(os.tmpdir(), "grix-hook-ping-"));
   const hookSignalStore = new HookSignalStore(path.join(pluginDataDir, "hook-signals.json"));
   await hookSignalStore.recordHookEvent({
     hook_event_name: "PostToolUse",
@@ -113,12 +113,12 @@ test("daemon bridge runtime ping includes latest hook signal snapshot", async ()
 
   const bridge = new DaemonBridgeRuntime({
     env: {
-      CLAWPOOL_CLAUDE_DAEMON_MODE: "1",
-      CLAWPOOL_CLAUDE_DAEMON_BRIDGE_URL: "http://127.0.0.1:19999",
-      CLAWPOOL_CLAUDE_DAEMON_BRIDGE_TOKEN: "bridge-token",
-      CLAWPOOL_CLAUDE_WORKER_ID: "worker-hook",
-      CLAWPOOL_CLAUDE_AIBOT_SESSION_ID: "chat-hook",
-      CLAWPOOL_CLAUDE_SESSION_ID: "claude-hook",
+      GRIX_CLAUDE_DAEMON_MODE: "1",
+      GRIX_CLAUDE_DAEMON_BRIDGE_URL: "http://127.0.0.1:19999",
+      GRIX_CLAUDE_DAEMON_BRIDGE_TOKEN: "bridge-token",
+      GRIX_CLAUDE_WORKER_ID: "worker-hook",
+      GRIX_CLAUDE_AIBOT_SESSION_ID: "chat-hook",
+      GRIX_CLAUDE_SESSION_ID: "claude-hook",
       CLAUDE_PLUGIN_DATA: pluginDataDir,
     },
   });

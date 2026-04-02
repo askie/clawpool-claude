@@ -7,8 +7,8 @@ import { resolveAgentAPIPresignURL, uploadReplyFileToAgentMedia } from "./agent-
 
 test("agent api media resolves presign url from websocket url", () => {
   assert.equal(
-    resolveAgentAPIPresignURL("wss://clawpool-claude.example.com/v1/agent-api/ws?agent_id=9"),
-    "https://clawpool-claude.example.com/v1/agent-api/oss/presign",
+    resolveAgentAPIPresignURL("wss://grix-claude.example.com/v1/agent-api/ws?agent_id=9"),
+    "https://grix-claude.example.com/v1/agent-api/oss/presign",
   );
   assert.equal(
     resolveAgentAPIPresignURL("ws://localhost:8080/v1/agent-api/ws"),
@@ -17,7 +17,7 @@ test("agent api media resolves presign url from websocket url", () => {
 });
 
 test("agent api media uploads local file through presign", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-agent-media-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "grix-claude-agent-media-"));
   const filePath = path.join(dir, "report.pdf");
   await writeFile(filePath, Buffer.from("demo-pdf"), "utf8");
 
@@ -59,7 +59,7 @@ test("agent api media uploads local file through presign", async () => {
   };
 
   const uploaded = await uploadReplyFileToAgentMedia({
-    wsURL: "wss://clawpool-claude.example.com/v1/agent-api/ws?agent_id=9",
+    wsURL: "wss://grix-claude.example.com/v1/agent-api/ws?agent_id=9",
     apiKey: "ak_test",
     sessionID: "chat-1",
     filePath,
@@ -67,7 +67,7 @@ test("agent api media uploads local file through presign", async () => {
   });
 
   assert.equal(calls.length, 2);
-  assert.equal(calls[0].url, "https://clawpool-claude.example.com/v1/agent-api/oss/presign");
+  assert.equal(calls[0].url, "https://grix-claude.example.com/v1/agent-api/oss/presign");
   assert.equal(calls[0].method, "POST");
   assert.equal(calls[0].headers.Authorization, "Bearer ak_test");
   assert.match(String(calls[0].body), /"session_id":"chat-1"/);

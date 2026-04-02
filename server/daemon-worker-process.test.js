@@ -31,34 +31,34 @@ test("buildWorkerEnvironment passes daemon connection config to worker", () => {
 
   assert.equal(env.PATH, "/usr/bin");
   assert.equal(env.CLAUDE_PLUGIN_DATA, "/tmp/plugin-data");
-  assert.equal(env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID, "chat-1");
-  assert.equal(env.CLAWPOOL_CLAUDE_SESSION_ID, "claude-1");
-  assert.equal(env.CLAWPOOL_CLAUDE_WORKER_ID, "worker-1");
-  assert.equal(env.CLAWPOOL_CLAUDE_DAEMON_BRIDGE_URL, "http://127.0.0.1:9000");
-  assert.equal(env.CLAWPOOL_CLAUDE_DAEMON_BRIDGE_TOKEN, "bridge-token");
-  assert.equal(env.CLAWPOOL_CLAUDE_WS_URL, "ws://example.com/ws");
-  assert.equal(env.CLAWPOOL_CLAUDE_AGENT_ID, "agent-1");
-  assert.equal(env.CLAWPOOL_CLAUDE_API_KEY, "secret-key");
-  assert.equal(env.CLAWPOOL_CLAUDE_OUTBOUND_TEXT_CHUNK_LIMIT, "2048");
+  assert.equal(env.GRIX_CLAUDE_AIBOT_SESSION_ID, "chat-1");
+  assert.equal(env.GRIX_CLAUDE_SESSION_ID, "claude-1");
+  assert.equal(env.GRIX_CLAUDE_WORKER_ID, "worker-1");
+  assert.equal(env.GRIX_CLAUDE_DAEMON_BRIDGE_URL, "http://127.0.0.1:9000");
+  assert.equal(env.GRIX_CLAUDE_DAEMON_BRIDGE_TOKEN, "bridge-token");
+  assert.equal(env.GRIX_CLAUDE_WS_URL, "ws://example.com/ws");
+  assert.equal(env.GRIX_CLAUDE_AGENT_ID, "agent-1");
+  assert.equal(env.GRIX_CLAUDE_API_KEY, "secret-key");
+  assert.equal(env.GRIX_CLAUDE_OUTBOUND_TEXT_CHUNK_LIMIT, "2048");
 });
 
 test("buildWorkerClaudeArgs launches Claude with plugin-dir development channel args", () => {
   assert.deepEqual(
     buildWorkerClaudeArgs({
-      packageRoot: "/tmp/clawpool-claude-plugin",
+      packageRoot: "/tmp/grix-claude-plugin",
       aibotSessionID: "chat-1",
       claudeSessionID: "claude-1",
     }),
     [
       "--name",
-      "clawpool-chat-1",
+      "grix-chat-1",
       "--plugin-dir",
-      "/tmp/clawpool-claude-plugin",
+      "/tmp/grix-claude-plugin",
       "--dangerously-skip-permissions",
       "--session-id",
       "claude-1",
       "--dangerously-load-development-channels",
-      "server:clawpool-claude",
+      "server:grix-claude",
     ],
   );
 });
@@ -66,21 +66,21 @@ test("buildWorkerClaudeArgs launches Claude with plugin-dir development channel 
 test("buildWorkerClaudeArgs resumes an existing Claude session by id", () => {
   assert.deepEqual(
     buildWorkerClaudeArgs({
-      packageRoot: "/tmp/clawpool-claude-plugin",
+      packageRoot: "/tmp/grix-claude-plugin",
       aibotSessionID: "chat-1",
       claudeSessionID: "claude-1",
       resumeSession: true,
     }),
     [
       "--name",
-      "clawpool-chat-1",
+      "grix-chat-1",
       "--plugin-dir",
-      "/tmp/clawpool-claude-plugin",
+      "/tmp/grix-claude-plugin",
       "--dangerously-skip-permissions",
       "--resume",
       "claude-1",
       "--dangerously-load-development-channels",
-      "server:clawpool-claude",
+      "server:grix-claude",
     ],
   );
 });
@@ -89,7 +89,7 @@ test("spawnWorker feeds a startup enter key to Claude stdin", async () => {
   if (process.platform === "darwin") {
     return;
   }
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-startup-input-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-startup-input-"));
   const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
   const outputPath = path.join(tempDir, "stdin-output.txt");
   const serverDir = path.join(tempDir, "server");
@@ -112,9 +112,9 @@ process.stdin.once("data", async (chunk) => {
     env: {
       ...process.env,
       CLAUDE_BIN: fakeClaudePath,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
       TEST_OUTPUT_PATH: outputPath,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
     },
     packageRoot: tempDir,
     async ensureUserMcpServer() {},
@@ -146,7 +146,7 @@ test("spawnWorker allocates a hidden tty for Claude on macOS", async () => {
     return;
   }
 
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-hidden-tty-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-hidden-tty-"));
   const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
   const outputPath = path.join(tempDir, "tty-output.txt");
   const serverDir = path.join(tempDir, "server");
@@ -165,9 +165,9 @@ await writeFile(process.env.TEST_OUTPUT_PATH, process.stdout.isTTY ? "tty" : "no
     env: {
       ...process.env,
       CLAUDE_BIN: fakeClaudePath,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
       TEST_OUTPUT_PATH: outputPath,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
     },
     packageRoot: tempDir,
     async ensureUserMcpServer() {},
@@ -199,7 +199,7 @@ test("spawnWorker hidden tty reports expect spawn errors without crashing the da
     return;
   }
 
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-hidden-tty-error-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-hidden-tty-error-"));
   const serverDir = path.join(tempDir, "server");
   const missingCwd = path.join(tempDir, "missing-cwd");
 
@@ -210,8 +210,8 @@ test("spawnWorker hidden tty reports expect spawn errors without crashing the da
     env: {
       ...process.env,
       CLAUDE_BIN: "/usr/bin/false",
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
     },
     packageRoot: tempDir,
     async ensureUserMcpServer() {},
@@ -234,12 +234,12 @@ test("spawnWorker hidden tty does not emit a fake spawn_id error when Claude exi
     return;
   }
 
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-fast-exit-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-fast-exit-"));
   const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
   const serverDir = path.join(tempDir, "server");
   const logsDir = resolveWorkerLogsDir("chat-fast-exit", {
     ...process.env,
-    CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+    GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
   });
 
   await mkdir(serverDir, { recursive: true });
@@ -251,8 +251,8 @@ test("spawnWorker hidden tty does not emit a fake spawn_id error when Claude exi
     env: {
       ...process.env,
       CLAUDE_BIN: fakeClaudePath,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
     },
     packageRoot: tempDir,
     async ensureUserMcpServer() {},
@@ -275,7 +275,7 @@ test("spawnWorker hidden tty does not emit a fake spawn_id error when Claude exi
 });
 
 test("spawnWorker ensures the user-scoped MCP server before launching Claude", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-mcp-server-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-mcp-server-"));
   const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
   const serverDir = path.join(tempDir, "server");
   const outputPath = path.join(tempDir, "stdin-output.txt");
@@ -299,7 +299,7 @@ process.stdin.once("data", async (chunk) => {
     env: {
       ...process.env,
       CLAUDE_BIN: fakeClaudePath,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
       TEST_OUTPUT_PATH: outputPath,
     },
     packageRoot: tempDir,
@@ -320,12 +320,12 @@ process.stdin.once("data", async (chunk) => {
   assert.equal(ensured[0].claudeCommand, fakeClaudePath);
   assert.equal(ensured[0].serverCommand, process.execPath);
   assert.deepEqual(ensured[0].serverArgs, [path.join(tempDir, "server", "main.js")]);
-  assert.equal(ensured[0].env.CLAWPOOL_CLAUDE_DAEMON_MODE, "1");
-  assert.equal(ensured[0].env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID, "chat-mcp");
+  assert.equal(ensured[0].env.GRIX_CLAUDE_DAEMON_MODE, "1");
+  assert.equal(ensured[0].env.GRIX_CLAUDE_AIBOT_SESSION_ID, "chat-mcp");
 });
 
 test("worker process manager can ensure the user-scoped MCP server before any worker starts", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-mcp-server-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-mcp-server-"));
   const ensured = [];
 
   await mkdir(path.join(tempDir, "dist"), { recursive: true });
@@ -351,11 +351,11 @@ test("worker process manager can ensure the user-scoped MCP server before any wo
 });
 
 test("spawnWorker terminates stale visible terminal wrapper processes before relaunch", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-stale-visible-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-stale-visible-"));
   const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
   const logsDir = resolveWorkerLogsDir("chat-stale", {
     ...process.env,
-    CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+    GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
   });
   const stalePIDPath = path.join(logsDir, "old.pid");
   const killed = [];
@@ -371,8 +371,8 @@ test("spawnWorker terminates stale visible terminal wrapper processes before rel
     env: {
       ...process.env,
       CLAUDE_BIN: fakeClaudePath,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
     },
     packageRoot: tempDir,
     async ensureUserMcpServer() {},
@@ -396,11 +396,11 @@ test("spawnWorker terminates stale visible terminal wrapper processes before rel
 });
 
 test("spawnWorker serializes concurrent spawns in the same aibot session", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-spawn-queue-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-spawn-queue-"));
   const fakeClaudePath = path.join(tempDir, "fake-claude.mjs");
   const logsDir = resolveWorkerLogsDir("chat-spawn-queue", {
     ...process.env,
-    CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+    GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
   });
   const stalePIDPath = path.join(logsDir, "old.pid");
   const killed = [];
@@ -416,8 +416,8 @@ test("spawnWorker serializes concurrent spawns in the same aibot session", async
     env: {
       ...process.env,
       CLAUDE_BIN: fakeClaudePath,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
     },
     packageRoot: tempDir,
     async ensureUserMcpServer() {},
@@ -451,14 +451,14 @@ test("spawnWorker serializes concurrent spawns in the same aibot session", async
 });
 
 test("cleanupStaleManagedProcesses terminates stale Claude processes for bound sessions", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-cleanup-stale-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-cleanup-stale-"));
   const logsDirA = resolveWorkerLogsDir("chat-a", {
     ...process.env,
-    CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+    GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
   });
   const logsDirB = resolveWorkerLogsDir("chat-b", {
     ...process.env,
-    CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+    GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
   });
   const stalePIDPathA = path.join(logsDirA, "old-a.pid");
   const stalePIDPathB = path.join(logsDirB, "old-b.pid");
@@ -476,7 +476,7 @@ test("cleanupStaleManagedProcesses terminates stale Claude processes for bound s
   const manager = new WorkerProcessManager({
     env: {
       ...process.env,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
     },
     packageRoot: tempDir,
     async ensureUserMcpServer() {},
@@ -496,7 +496,7 @@ test("cleanupStaleManagedProcesses terminates stale Claude processes for bound s
 });
 
 test("stopWorker escalates to SIGKILL when graceful stop does not exit in time", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-stop-escalate-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-stop-escalate-"));
   const pidPath = path.join(tempDir, "worker-stop.pid");
   const signals = [];
   const waitCalls = [];
@@ -505,7 +505,7 @@ test("stopWorker escalates to SIGKILL when graceful stop does not exit in time",
   const manager = new WorkerProcessManager({
     env: {
       ...process.env,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
     },
     packageRoot: tempDir,
     async terminateProcessTree(pid, { signal = "SIGTERM" } = {}) {
@@ -542,7 +542,7 @@ test("stopWorker escalates to SIGKILL when graceful stop does not exit in time",
 });
 
 test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude pid file", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-visible-launch-script-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-visible-launch-script-"));
   const logsDir = path.join(tempDir, "logs");
   const result = await createVisibleClaudeLaunchScript({
     logsDir,
@@ -551,19 +551,19 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude
     command: "/usr/local/bin/claude",
     args: [
       "--name",
-      "clawpool-chat-visible",
+      "grix-chat-visible",
       "--plugin-dir",
-      "/tmp/clawpool-claude-plugin",
+      "/tmp/grix-claude-plugin",
       "--dangerously-skip-permissions",
       "--session-id",
       "session-1",
       "--dangerously-load-development-channels",
-      "server:clawpool-claude",
+      "server:grix-claude",
     ],
     env: {
       CLAUDE_PLUGIN_DATA: "/tmp/plugin data",
-      CLAWPOOL_CLAUDE_AIBOT_SESSION_ID: "chat-visible",
-      "npm_package_bin_clawpool-claude": "./bin/clawpool-claude.js",
+      GRIX_CLAUDE_AIBOT_SESSION_ID: "chat-visible",
+      "npm_package_bin_grix-claude": "./bin/grix-claude.js",
     },
   });
 
@@ -572,12 +572,12 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude
   assert.match(result.scriptPath, /worker-visible\.launch\.command$/u);
   assert.match(result.expectPath, /worker-visible\.launch\.expect$/u);
   assert.match(result.pidPath, /worker-visible\.pid$/u);
-  assert.match(script, /clawpool-claude worker-visible/u);
+  assert.match(script, /grix-claude worker-visible/u);
   assert.match(script, /\/usr\/bin\/env /u);
   assert.doesNotMatch(script, /exec \/usr\/bin\/env /u);
   assert.match(script, /'CLAUDE_PLUGIN_DATA=\/tmp\/plugin data'/u);
-  assert.match(script, /'CLAWPOOL_CLAUDE_AIBOT_SESSION_ID=chat-visible'/u);
-  assert.match(script, /'npm_package_bin_clawpool-claude=\.\/bin\/clawpool-claude\.js'/u);
+  assert.match(script, /'GRIX_CLAUDE_AIBOT_SESSION_ID=chat-visible'/u);
+  assert.match(script, /'npm_package_bin_grix-claude=\.\/bin\/grix-claude\.js'/u);
   assert.match(script, /\/usr\/bin\/expect '.*worker-visible\.launch\.expect'/u);
   assert.match(script, /cd '\/tmp\/demo path'/u);
   assert.match(script, /current_tty=\$\(tty 2>\/dev\/null \|\| true\)/u);
@@ -601,19 +601,19 @@ test("createVisibleClaudeLaunchScript writes terminal launch wrapper with Claude
   assert.match(expectScript, /-re \{\(\?i\)\(Quick\.\*safety\.\*check\|trust\.\*folder\)\}/u);
   assert.match(expectScript, /-re \{\(\?i\)I am using this for local development\}/u);
   assert.match(expectScript, /-re \{\(\?i\)\(Enter\.\*confirm\|Press\.\*Enter\|Hit\.\*Enter\|Continue\.\*Enter\)\}/u);
-  assert.match(expectScript, /-re \{\(\?i\)Listening\.\*channel messages\.\*server:clawpool-claude\}/u);
+  assert.match(expectScript, /-re \{\(\?i\)Listening\.\*channel messages\.\*server:grix-claude\}/u);
   assert.match(expectScript, /if \{\$startup_prompt_armed\} \{/u);
   assert.match(expectScript, /set startup_prompt_armed 0/u);
   assert.match(expectScript, /-re \{\(\?i\)MCP\.\*server failed\}/u);
   assert.match(expectScript, /send -- "\\r"/u);
   assert.match(expectScript, /exp_continue/u);
   assert.match(expectScript, /eof \{\}/u);
-  assert.match(expectScript, /set claude_command \[list \{\/usr\/local\/bin\/claude\} \{--name\} \{clawpool-chat-visible\} \{--plugin-dir\} \{\/tmp\/clawpool-claude-plugin\} \{--dangerously-skip-permissions\} \{--session-id\} \{session-1\} \{--dangerously-load-development-channels\} \{server:clawpool-claude\}\]/u);
+  assert.match(expectScript, /set claude_command \[list \{\/usr\/local\/bin\/claude\} \{--name\} \{grix-chat-visible\} \{--plugin-dir\} \{\/tmp\/grix-claude-plugin\} \{--dangerously-skip-permissions\} \{--session-id\} \{session-1\} \{--dangerously-load-development-channels\} \{server:grix-claude\}\]/u);
   assert.equal(await readFile(result.pidPath, "utf8"), "");
 });
 
 test("createVisibleClaudeLaunchScript can skip expect log capture for hidden tty launches", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-hidden-launch-script-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-hidden-launch-script-"));
   const logsDir = path.join(tempDir, "logs");
   const result = await createVisibleClaudeLaunchScript({
     logsDir,
@@ -630,12 +630,12 @@ test("createVisibleClaudeLaunchScript can skip expect log capture for hidden tty
 });
 
 test("worker process manager detects missing Claude session resume failure from logs", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-resume-error-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-resume-error-"));
   const manager = new WorkerProcessManager({
     env: {
       ...process.env,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
     },
     packageRoot: tempDir,
   });
@@ -655,12 +655,12 @@ test("worker process manager detects missing Claude session resume failure from 
 });
 
 test("worker process manager detects Claude auth login required failure from logs", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-auth-error-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-auth-error-"));
   const manager = new WorkerProcessManager({
     env: {
       ...process.env,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
     },
     packageRoot: tempDir,
   });
@@ -680,12 +680,12 @@ test("worker process manager detects Claude auth login required failure from log
 });
 
 test("worker process manager detects Claude extra usage limit prompt from logs", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-usage-limit-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-usage-limit-"));
   const manager = new WorkerProcessManager({
     env: {
       ...process.env,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
     },
     packageRoot: tempDir,
   });
@@ -709,12 +709,12 @@ test("worker process manager detects Claude extra usage limit prompt from logs",
 });
 
 test("worker process manager usage limit detection ignores stale prompts outside recent tail", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-usage-limit-tail-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-usage-limit-tail-"));
   const manager = new WorkerProcessManager({
     env: {
       ...process.env,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
     },
     packageRoot: tempDir,
   });
@@ -746,12 +746,12 @@ test("worker process manager usage limit detection ignores stale prompts outside
 });
 
 test("worker process manager usage limit detection can start at a log cursor", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-usage-limit-cursor-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-usage-limit-cursor-"));
   const manager = new WorkerProcessManager({
     env: {
       ...process.env,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
     },
     packageRoot: tempDir,
   });
@@ -799,12 +799,12 @@ test("worker process manager usage limit detection can start at a log cursor", a
 });
 
 test("worker process manager detects startup observability markers from logs", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-startup-marker-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-startup-marker-"));
   const manager = new WorkerProcessManager({
     env: {
       ...process.env,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
     },
     packageRoot: tempDir,
   });
@@ -817,9 +817,9 @@ test("worker process manager detects startup observability markers from logs", a
   await writeFile(
     path.join(tempDir, "worker-startup-marker.out.log"),
     [
-      "[clawpool] startup_prompt_auto_confirm",
-      "[clawpool] startup_channel_listening",
-      "[clawpool] startup_mcp_server_failed",
+      "[grix] startup_prompt_auto_confirm",
+      "[grix] startup_channel_listening",
+      "[grix] startup_mcp_server_failed",
     ].join("\n"),
     "utf8",
   );
@@ -831,12 +831,12 @@ test("worker process manager detects startup observability markers from logs", a
 });
 
 test("worker process manager treats generic MCP failure text as non-blocking when channel is listening", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-startup-generic-mcp-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-startup-generic-mcp-"));
   const manager = new WorkerProcessManager({
     env: {
       ...process.env,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
     },
     packageRoot: tempDir,
   });
@@ -849,7 +849,7 @@ test("worker process manager treats generic MCP failure text as non-blocking whe
   await writeFile(
     path.join(tempDir, "worker-startup-generic-mcp.out.log"),
     [
-      "Listening for channel messages from: server:clawpool-claude",
+      "Listening for channel messages from: server:grix-claude",
       "1 MCP server failed · /mcp",
     ].join("\n"),
     "utf8",
@@ -860,12 +860,12 @@ test("worker process manager treats generic MCP failure text as non-blocking whe
 });
 
 test("worker process manager detects ANSI-styled MCP startup failure logs", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-startup-ansi-mcp-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-startup-ansi-mcp-"));
   const manager = new WorkerProcessManager({
     env: {
       ...process.env,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempDir,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempDir,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
     },
     packageRoot: tempDir,
   });

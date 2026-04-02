@@ -6,7 +6,7 @@ import { mkdtemp } from "node:fs/promises";
 import { AccessStore } from "./access-store.js";
 
 test("allowlist policy auto-binds the first sender when allowlist is empty", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-access-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "grix-claude-access-"));
   const store = new AccessStore(path.join(dir, "access.json"));
   await store.load();
 
@@ -22,7 +22,7 @@ test("allowlist policy auto-binds the first sender when allowlist is empty", asy
 });
 
 test("allowlist policy blocks unknown sender after the first sender was auto-bound", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-access-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "grix-claude-access-"));
   const store = new AccessStore(path.join(dir, "access.json"));
   await store.load();
 
@@ -42,7 +42,7 @@ test("allowlist policy blocks unknown sender after the first sender was auto-bou
 });
 
 test("open policy allows unknown sender", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-access-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "grix-claude-access-"));
   const store = new AccessStore(path.join(dir, "access.json"));
   await store.load();
   await store.setPolicy("open");
@@ -52,7 +52,7 @@ test("open policy allows unknown sender", async () => {
 });
 
 test("open policy can bootstrap first sender into allowlist and lock policy", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-access-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "grix-claude-access-"));
   const store = new AccessStore(path.join(dir, "access.json"));
   await store.load();
   await store.setPolicy("open");
@@ -75,7 +75,7 @@ test("open policy can bootstrap first sender into allowlist and lock policy", as
 });
 
 test("access store exposes detailed status and sender management", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-access-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "grix-claude-access-"));
   const store = new AccessStore(path.join(dir, "access.json"));
   await store.load();
 

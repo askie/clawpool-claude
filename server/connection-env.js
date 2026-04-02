@@ -27,19 +27,19 @@ function readFirstNonEmpty(values = []) {
 export function readConnectionEnv(env = process.env) {
   return {
     ws_url: readFirstNonEmpty([
-      env.CLAWPOOL_CLAUDE_WS_URL,
-      env.CLAWPOOL_CLAUDE_ENDPOINT,
+      env.GRIX_CLAUDE_WS_URL,
+      env.GRIX_CLAUDE_ENDPOINT,
     ]),
     agent_id: readFirstNonEmpty([
-      env.CLAWPOOL_CLAUDE_AGENT_ID,
+      env.GRIX_CLAUDE_AGENT_ID,
     ]),
     api_key: readFirstNonEmpty([
-      env.CLAWPOOL_CLAUDE_API_KEY,
+      env.GRIX_CLAUDE_API_KEY,
     ]),
     outbound_text_chunk_limit: normalizePositiveInt(
       readFirstNonEmpty([
-        env.CLAWPOOL_CLAUDE_OUTBOUND_TEXT_CHUNK_LIMIT,
-        env.CLAWPOOL_CLAUDE_TEXT_CHUNK_LIMIT,
+        env.GRIX_CLAUDE_OUTBOUND_TEXT_CHUNK_LIMIT,
+        env.GRIX_CLAUDE_TEXT_CHUNK_LIMIT,
       ]),
     ),
   };

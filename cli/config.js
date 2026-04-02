@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 import { DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT } from "../server/config-store.js";
 import { readConnectionEnv } from "../server/connection-env.js";
 
-const serverName = "clawpool-claude";
-const configFileName = "clawpool-claude-config.json";
+const serverName = "grix-claude";
+const configFileName = "grix-claude-config.json";
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -30,7 +30,7 @@ export function resolvePackageRoot() {
 }
 
 export function resolvePackageBinPath() {
-  return path.join(resolvePackageRoot(), "bin", "clawpool-claude.js");
+  return path.join(resolvePackageRoot(), "bin", "grix-claude.js");
 }
 
 export function resolveServerEntryPath(packageRoot = resolvePackageRoot()) {
@@ -42,7 +42,7 @@ export function resolveServerEntryPath(packageRoot = resolvePackageRoot()) {
   if (existsSync(distEntryPath)) {
     return distEntryPath;
   }
-  throw new Error(`没有找到 clawpool-claude server 入口: ${packageRoot}`);
+  throw new Error(`没有找到 grix-claude server 入口: ${packageRoot}`);
 }
 
 export function resolveDataDir(input) {
@@ -50,7 +50,7 @@ export function resolveDataDir(input) {
   if (explicitDir) {
     return explicitDir;
   }
-  const envDir = normalizeString(input.env?.CLAUDE_PLUGIN_DATA || input.env?.CLAWPOOL_CLAUDE_DATA_DIR);
+  const envDir = normalizeString(input.env?.CLAUDE_PLUGIN_DATA || input.env?.GRIX_CLAUDE_DATA_DIR);
   if (envDir) {
     return envDir;
   }

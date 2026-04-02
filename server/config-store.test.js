@@ -5,8 +5,8 @@ import path from "node:path";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { ConfigStore } from "./config-store.js";
 
-test("config store accepts CLAWPOOL_CLAUDE_ENDPOINT as daemon ws env override", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-config-store-"));
+test("config store accepts GRIX_CLAUDE_ENDPOINT as daemon ws env override", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-config-store-"));
   const configPath = path.join(tempDir, "daemon-config.json");
   await writeFile(configPath, `${JSON.stringify({
     schema_version: 1,
@@ -18,9 +18,9 @@ test("config store accepts CLAWPOOL_CLAUDE_ENDPOINT as daemon ws env override", 
 
   const store = new ConfigStore(configPath, {
     env: {
-      CLAWPOOL_CLAUDE_ENDPOINT: "ws://127.0.0.1:27189/v1/agent-api/ws?agent_id=2035251418226495488",
-      CLAWPOOL_CLAUDE_AGENT_ID: "2035251418226495488",
-      CLAWPOOL_CLAUDE_API_KEY: "ak_2035251418226495488_Gyav9cyaOHbAUP7qrOJ4JHv13FR0XgwB",
+      GRIX_CLAUDE_ENDPOINT: "ws://127.0.0.1:27189/v1/agent-api/ws?agent_id=2035251418226495488",
+      GRIX_CLAUDE_AGENT_ID: "2035251418226495488",
+      GRIX_CLAUDE_API_KEY: "ak_2035251418226495488_Gyav9cyaOHbAUP7qrOJ4JHv13FR0XgwB",
     },
   });
 

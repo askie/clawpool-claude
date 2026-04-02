@@ -1,16 +1,16 @@
-# ClawPool Claude 工作方式
+# Grix Claude 工作方式
 
-`clawpool-claude` 做三件事：
+`grix-claude` 做三件事：
 
-1. 接收 ClawPool 发来的消息
+1. 接收 Grix 发来的消息
 2. 把消息送进 Claude Code
-3. 把 Claude 的回复、审批请求、追问再发回 ClawPool
+3. 把 Claude 的回复、审批请求、追问再发回 Grix
 
 ## 系统总览图
 
 ```mermaid
 flowchart LR
-  CP["ClawPool 私聊"]
+  CP["Grix 私聊"]
   DA["Daemon"]
   BR["固定绑定和运行状态"]
   PM["Worker 进程管理"]
@@ -34,24 +34,24 @@ flowchart LR
 正式使用推荐先安装后台服务：
 
 ```bash
-clawpool-claude install --ws-url <ws_url> --agent-id <agent_id> --api-key <api_key>
+grix-claude install --ws-url <ws_url> --agent-id <agent_id> --api-key <api_key>
 ```
 
 这一步会自动：
 
 1. 保存连接配置
 2. 安装并启动本机 `daemon`
-3. 等待 ClawPool 会话发来 `open <cwd>`，再由 `daemon` 拉起或恢复 Claude 会话
+3. 等待 Grix 会话发来 `open <cwd>`，再由 `daemon` 拉起或恢复 Claude 会话
 
 后续日常只需要 `status`、`restart`、`stop`、`start`、`uninstall` 这组命令。
 
-前台直跑 `clawpool-claude` 只建议用于临时调试或本地联调。
+前台直跑 `grix-claude` 只建议用于临时调试或本地联调。
 
 ## Claude 进程管理流程图
 
 ```mermaid
 flowchart TD
-  A["收到 ClawPool 事件"] --> B{"是否 open <cwd> 命令"}
+  A["收到 Grix 事件"] --> B{"是否 open <cwd> 命令"}
 
   B -- "是" --> C{"当前会话是否已有绑定"}
   C -- "否" --> D["创建固定绑定和 Claude 会话 ID"]
@@ -77,7 +77,7 @@ flowchart TD
   O --> P
 
   P --> Q["worker 执行 Claude 交互并回传结果"]
-  Q --> R["daemon 回传 ClawPool 并清理待投递状态"]
+  Q --> R["daemon 回传 Grix 并清理待投递状态"]
 ```
 
 ## 可靠性流程图（MCP 为核心指标）
@@ -142,7 +142,7 @@ flowchart TD
 当 Claude 需要审批或补充信息时：
 
 1. 审批走 Claude 原生 channel permission relay
-2. worker 把审批请求发回对应的 ClawPool chat，并复用 AIBot 审批卡
+2. worker 把审批请求发回对应的 Grix chat，并复用 AIBot 审批卡
 3. 用户点卡片按钮，或手工回复 `yes <request_id>` / `no <request_id>`
 4. verdict 直接回送给 Claude
 
@@ -150,7 +150,7 @@ flowchart TD
 
 1. Claude 触发表单型 `Elicitation`
 2. hook 把请求落到本地数据目录，并映射成现有的提问卡片
-3. worker 把提问卡发回对应的 ClawPool chat
+3. worker 把提问卡发回对应的 Grix chat
 4. 用户直接在卡片里提交答案
 5. hook 读到结果后，再按 Claude 的 `Elicitation` 结果格式回送
 
@@ -161,7 +161,7 @@ flowchart TD
 默认 daemon 数据目录是：
 
 ```text
-~/.claude/clawpool-claude-daemon
+~/.claude/grix-claude-daemon
 ```
 
 这里会保存：
@@ -184,7 +184,7 @@ flowchart TD
 
 ## Claude 侧依赖
 
-Claude 会话里仍然会有一份对应当前会话的本地 worker。它只服务当前目录和当前 Claude 会话，不再直接连接 ClawPool。worker 入口是打包后的：
+Claude 会话里仍然会有一份对应当前会话的本地 worker。它只服务当前目录和当前 Claude 会话，不再直接连接 Grix。worker 入口是打包后的：
 
 ```text
 dist/index.js

@@ -1,18 +1,18 @@
 {
-  "name": "clawpool-daemon",
+  "name": "grix-claude-daemon",
   "version": "0.1.0",
-  "description": "Claude Code channel plugin for Aibot ClawPool over the Agent API WebSocket.",
+  "description": "Claude Code channel plugin for Aibot Grix over the Agent API WebSocket.",
   "author": {
     "name": "Aibot"
   },
-  "homepage": "https://clawpool.dhf.pub",
-  "repository": "https://github.com/askie/aibot",
+  "homepage": "https://grix.dhf.pub",
+  "repository": "https://github.com/askie/clawpool-claude",
   "license": "MIT",
   "keywords": [
     "claude-code",
     "plugin",
     "channel",
-    "clawpool",
+    "grix",
     "aibot"
   ]
 }

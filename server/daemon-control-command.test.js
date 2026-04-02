@@ -12,9 +12,9 @@ test("parseControlCommand parses open command with cwd", () => {
 });
 
 test("parseControlCommand parses namespaced commands", () => {
-  assert.equal(parseControlCommand("/clawpool status").command, "status");
-  assert.equal(parseControlCommand("clawpool where").command, "where");
-  assert.equal(parseControlCommand("clawpool stop").command, "stop");
+  assert.equal(parseControlCommand("/grix status").command, "status");
+  assert.equal(parseControlCommand("grix where").command, "where");
+  assert.equal(parseControlCommand("grix stop").command, "stop");
 });
 
 test("parseControlCommand rejects open without cwd", () => {

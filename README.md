@@ -1,18 +1,18 @@
-# @dhfpub/clawpool-claude
+# @dhfpub/grix-claude
 
-This integration connects Claude to ClawPool ([https://clawpool.dhf.pub/](https://clawpool.dhf.pub/)) so you can manage Claude from the website, with mobile PWA support.
+This integration connects Claude to Grix ([https://grix.dhf.pub/](https://grix.dhf.pub/)) so you can manage Claude from the website, with mobile PWA support.
 
 ## Quick Start
 
 ### 1. Install globally
 
 ```bash
-npm install -g @dhfpub/clawpool-claude
+npm install -g @dhfpub/grix-claude
 ```
 
 ### 2. Install the background service (first time)
 
-Get these 3 values from the ClawPool console first:
+Get these 3 values from the Grix console first:
 
 - `wsUrl`
 - `agentId`
@@ -21,7 +21,7 @@ Get these 3 values from the ClawPool console first:
 Then run:
 
 ```bash
-clawpool-claude install --ws-url <ws_url> --agent-id <agent_id> --api-key <api_key>
+grix-claude install --ws-url <ws_url> --agent-id <agent_id> --api-key <api_key>
 ```
 
 This command will automatically:
@@ -40,11 +40,11 @@ Supported background service managers:
 ## Commands you will usually use
 
 ```bash
-clawpool-claude status
-clawpool-claude restart
-clawpool-claude stop
-clawpool-claude start
-clawpool-claude uninstall
+grix-claude status
+grix-claude restart
+grix-claude stop
+grix-claude start
+grix-claude uninstall
 ```
 
 - `status` checks service and connection status
@@ -58,18 +58,18 @@ clawpool-claude uninstall
 You can run without installing a background service:
 
 ```bash
-clawpool-claude --ws-url <ws_url> --agent-id <agent_id> --api-key <api_key>
+grix-claude --ws-url <ws_url> --agent-id <agent_id> --api-key <api_key>
 ```
 
 If config is already saved locally, you can also just run:
 
 ```bash
-clawpool-claude
+grix-claude
 ```
 
 ## How to start a Claude session
 
-Send this in the related ClawPool private chat:
+Send this in the related Grix private chat:
 
 ```text
 open <your_working_directory>
@@ -80,7 +80,7 @@ open <your_working_directory>
 If you are already inside Claude, run:
 
 ```text
-/clawpool:status
+/grix:status
 ```
 
 If the worker is attached to daemon, the link is healthy.
@@ -89,16 +89,16 @@ If the worker is attached to daemon, the link is healthy.
 
 | Command | Purpose |
 | --- | --- |
-| `/clawpool:status` | Check current connection status |
-| `/clawpool:access` | Check current access control |
-| `/clawpool:access pair <code>` | Allow a new private-chat sender |
-| `/clawpool:access policy <allowlist\|open\|disabled>` | Switch access policy |
+| `/grix:status` | Check current connection status |
+| `/grix:access` | Check current access control |
+| `/grix:access pair <code>` | Allow a new private-chat sender |
+| `/grix:access policy <allowlist\|open\|disabled>` | Switch access policy |
 
 Connection parameters are now managed only through local CLI, not from inside Claude sessions.
 
 ## Approvals and questions
 
-When Claude needs your confirmation or more information, messages are sent back to ClawPool.
+When Claude needs your confirmation or more information, messages are sent back to Grix.
 
 Interactive cards are used by default:
 
@@ -110,21 +110,21 @@ Text commands are still available as fallback:
 ```text
 yes <request_id>
 no <request_id>
-/clawpool-question <request_id> your_answer
+/grix-question <request_id> your_answer
 ```
 
 - Use manual text input only for debugging, troubleshooting, or when cards are unavailable
 
 ## File sending
 
-Claude can send local files back to ClawPool. Maximum file size is 50MB, and only common image/video/document formats are supported.
+Claude can send local files back to Grix. Maximum file size is 50MB, and only common image/video/document formats are supported.
 
 ## Log troubleshooting
 
 Each AIBot session ID has an independent log file:
 
 ```text
-~/.claude/clawpool-claude-daemon/sessions/<aibot_session_id>/logs/daemon-session.log
+~/.claude/grix-claude-daemon/sessions/<aibot_session_id>/logs/daemon-session.log
 ```
 
 This log records full Claude scheduling flow for that session, including:
@@ -141,21 +141,21 @@ Full troubleshooting steps:
 ## CLI commands
 
 ```text
-clawpool-claude install [options]
-clawpool-claude start [options]
-clawpool-claude stop [options]
-clawpool-claude restart [options]
-clawpool-claude status [options]
-clawpool-claude uninstall [options]
-clawpool-claude [options]
+grix-claude install [options]
+grix-claude start [options]
+grix-claude stop [options]
+grix-claude restart [options]
+grix-claude status [options]
+grix-claude uninstall [options]
+grix-claude [options]
 ```
 
-`install` is the recommended default. The plain `clawpool-claude [options]` command is better for temporary foreground runs or debugging.
+`install` is the recommended default. The plain `grix-claude [options]` command is better for temporary foreground runs or debugging.
 
 ## Common options
 
 ```text
---ws-url <value>      ClawPool Agent API WebSocket URL
+--ws-url <value>      Grix Agent API WebSocket URL
 --agent-id <value>    Agent ID
 --api-key <value>     API Key
 --data-dir <path>     daemon data directory
@@ -196,10 +196,10 @@ Then both the daemon process and the worker loaded in Claude sessions will use t
 If you want `npm run daemon` to read connection parameters directly from environment variables, run:
 
 ```bash
-CLAWPOOL_CLAUDE_ENDPOINT='ws://127.0.0.1:27189/v1/agent-api/ws?agent_id=<agent_id>' \
-CLAWPOOL_CLAUDE_AGENT_ID='<agent_id>' \
-CLAWPOOL_CLAUDE_API_KEY='<api_key>' \
+GRIX_CLAUDE_ENDPOINT='ws://127.0.0.1:27189/v1/agent-api/ws?agent_id=<agent_id>' \
+GRIX_CLAUDE_AGENT_ID='<agent_id>' \
+GRIX_CLAUDE_API_KEY='<api_key>' \
 npm run daemon -- --no-launch
 ```
 
-`CLAWPOOL_CLAUDE_WS_URL` is still supported; if both are provided, daemon prefers environment variable values.
+`GRIX_CLAUDE_WS_URL` is still supported; if both are provided, daemon prefers environment variable values.

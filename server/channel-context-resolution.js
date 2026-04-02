@@ -1,4 +1,4 @@
-import { resolveTranscriptClawpoolChannelContext } from "./transcript-channel-context.js";
+import { resolveTranscriptGrixChannelContext } from "./transcript-channel-context.js";
 
 function buildUnresolvedResult(reason, { sessionStatus = "", transcriptStatus = "" } = {}) {
   return {
@@ -35,7 +35,7 @@ export async function resolveHookChannelContext({
     };
   }
 
-  const transcriptResolution = await resolveTranscriptClawpoolChannelContext(transcriptPath);
+  const transcriptResolution = await resolveTranscriptGrixChannelContext(transcriptPath);
   if (transcriptResolution.status === "resolved" && transcriptResolution.context?.chat_id) {
     return {
       status: "resolved",

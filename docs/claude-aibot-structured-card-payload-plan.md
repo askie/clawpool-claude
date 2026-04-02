@@ -50,8 +50,8 @@
 ```text
 yes <request_id>
 no <request_id>
-/clawpool-question <request_id> <answer>
-/clawpool open <working-directory>
+/grix-question <request_id> <answer>
+/grix open <working-directory>
 ```
 
 说明：

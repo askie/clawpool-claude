@@ -28,7 +28,7 @@ function listTraceEntries(fields) {
 }
 
 export function isTraceLoggingEnabled(env = process.env) {
-  return env.CLAWPOOL_CLAUDE_TRACE_LOG === "1" || env.CLAWPOOL_CLAUDE_E2E_DEBUG === "1";
+  return env.GRIX_CLAUDE_TRACE_LOG === "1" || env.GRIX_CLAUDE_E2E_DEBUG === "1";
 }
 
 export function formatTraceLine(fields = {}) {
@@ -53,11 +53,11 @@ export function writeTraceStderr(fields = {}, { env = process.env } = {}) {
 
 export function createProcessLogger({
   env = process.env,
-  name = "clawpool-claude",
+  name = "grix-claude",
   onTrace = null,
 } = {}) {
-  const verboseDebugEnabled = env.CLAWPOOL_CLAUDE_E2E_DEBUG === "1";
-  const verboseDebugLogPath = normalizeString(env.CLAWPOOL_CLAUDE_E2E_DEBUG_LOG);
+  const verboseDebugEnabled = env.GRIX_CLAUDE_E2E_DEBUG === "1";
+  const verboseDebugLogPath = normalizeString(env.GRIX_CLAUDE_E2E_DEBUG_LOG);
   const traceCallback = typeof onTrace === "function" ? onTrace : null;
 
   function write(prefix, message) {

@@ -2,7 +2,7 @@
 # e2e-auth-flow.sh — End-to-end test for auth error handling and process cleanup
 #
 # Prerequisites:
-#   - clawpool-claude is installed and configured
+#   - grix-claude is installed and configured
 #   - No active claude workers should be running
 #
 # What this tests:
@@ -16,7 +16,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-DATA_DIR="$HOME/.claude/clawpool-claude-daemon"
+DATA_DIR="$HOME/.claude/grix-claude-daemon"
 PASS=0
 FAIL=0
 
@@ -54,11 +54,11 @@ assert_eq_zero() {
 # ─────────────────────────────────────────────────────────
 info "Step 1: Stop daemon"
 # ─────────────────────────────────────────────────────────
-node "$PROJECT_DIR/bin/clawpool-claude.js" stop 2>&1 || true
+node "$PROJECT_DIR/bin/grix-claude.js" stop 2>&1 || true
 sleep 2
 
 # Kill any remaining claude workers
-ORPHANS=$(ps aux | grep 'clawpool.*claude --' | grep -v grep | grep -v daemon | awk '{print $2}' || true)
+ORPHANS=$(ps aux | grep 'grix.*claude --' | grep -v grep | grep -v daemon | awk '{print $2}' || true)
 if [ -n "$ORPHANS" ]; then
   info "Killing orphan PIDs: $ORPHANS"
   echo "$ORPHANS" | xargs kill -9 2>/dev/null || true
@@ -68,17 +68,17 @@ fi
 # ─────────────────────────────────────────────────────────
 info "Step 2: Clear old session logs for clean comparison"
 # ─────────────────────────────────────────────────────────
-MARKER_FILE="/tmp/clawpool-e2e-marker-$(date +%s)"
+MARKER_FILE="/tmp/grix-e2e-marker-$(date +%s)"
 touch "$MARKER_FILE"
 
 # ─────────────────────────────────────────────────────────
 info "Step 3: Start daemon"
 # ─────────────────────────────────────────────────────────
-START_OUTPUT=$(node "$PROJECT_DIR/bin/clawpool-claude.js" start 2>&1 || true)
+START_OUTPUT=$(node "$PROJECT_DIR/bin/grix-claude.js" start 2>&1 || true)
 sleep 3
 
 # Verify daemon is running
-DAEMON_PID=$(ps aux | grep 'clawpool-claude.js daemon' | grep -v grep | awk '{print $2}' | head -1)
+DAEMON_PID=$(ps aux | grep 'grix-claude.js daemon' | grep -v grep | awk '{print $2}' | head -1)
 if [ -n "$DAEMON_PID" ]; then
   green "Daemon running (PID: $DAEMON_PID)"
   PASS=$((PASS + 1))
@@ -90,15 +90,15 @@ fi
 # ─────────────────────────────────────────────────────────
 info "Step 4: Verify no orphan claude workers"
 # ─────────────────────────────────────────────────────────
-ORPHAN_COUNT=$(ps aux | grep 'clawpool.*claude --' | grep -v grep | grep -v daemon | wc -l | tr -d ' ')
+ORPHAN_COUNT=$(ps aux | grep 'grix.*claude --' | grep -v grep | grep -v daemon | wc -l | tr -d ' ')
 assert_eq_zero "No orphan claude workers" "$ORPHAN_COUNT"
 
 # ─────────────────────────────────────────────────────────
 info "Step 5: Check daemon connected"
 # ─────────────────────────────────────────────────────────
-STATUS_OUTPUT=$(node "$PROJECT_DIR/bin/clawpool-claude.js" status 2>&1)
+STATUS_OUTPUT=$(node "$PROJECT_DIR/bin/grix-claude.js" status 2>&1)
 if echo "$STATUS_OUTPUT" | grep -q "connected"; then
-  green "Daemon connected to ClawPool"
+  green "Daemon connected to Grix"
   PASS=$((PASS + 1))
 else
   red "Daemon NOT connected"
@@ -152,10 +152,10 @@ fi
 # ─────────────────────────────────────────────────────────
 info "Step 9: Restart daemon and verify cleanup"
 # ─────────────────────────────────────────────────────────
-node "$PROJECT_DIR/bin/clawpool-claude.js" restart 2>&1 || true
+node "$PROJECT_DIR/bin/grix-claude.js" restart 2>&1 || true
 sleep 3
 
-POST_RESTART_ORPHANS=$(ps aux | grep 'clawpool.*claude --' | grep -v grep | grep -v daemon | wc -l | tr -d ' ')
+POST_RESTART_ORPHANS=$(ps aux | grep 'grix.*claude --' | grep -v grep | grep -v daemon | wc -l | tr -d ' ')
 assert_eq_zero "No orphan workers after restart" "$POST_RESTART_ORPHANS"
 
 # ─────────────────────────────────────────────────────────

@@ -10,11 +10,11 @@ function sanitizeSegment(value) {
 }
 
 export function resolveDaemonDataDir(env = process.env) {
-  const explicit = normalizeString(env.CLAWPOOL_CLAUDE_DAEMON_DATA_DIR);
+  const explicit = normalizeString(env.GRIX_CLAUDE_DAEMON_DATA_DIR);
   if (explicit) {
     return explicit;
   }
-  return path.join(os.homedir(), ".claude", "clawpool-claude-daemon");
+  return path.join(os.homedir(), ".claude", "grix-claude-daemon");
 }
 
 export function resolveDaemonConfigPath(env = process.env) {

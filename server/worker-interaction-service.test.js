@@ -22,7 +22,7 @@ function createService({
   bridge = {},
   accessStore = {},
   mcp = {},
-  eventStatesDir = "/tmp/clawpool-claude-test-event-states",
+  eventStatesDir = "/tmp/grix-claude-test-event-states",
   resultTimeoutMs = undefined,
   resultRetryTimeoutMs = undefined,
   composingHeartbeatMs = undefined,
@@ -229,7 +229,7 @@ test("worker inbound handling routes internal ping probe without access flow or 
     sender_id: "sender-probe-1",
     content: "ping",
     channel_data: {
-      "clawpool-claude": {
+      "grix-claude": {
         internal_probe: {
           kind: "ping_pong",
           probe_id: "probe-1",
@@ -354,7 +354,7 @@ test("worker inbound handling sends structured pairing card for blocked direct s
   assert.equal(sentTexts[0].extra.biz_card.payload.pairing_code, "PAIR123");
   assert.equal(
     sentTexts[0].extra.biz_card.payload.command_hint,
-    "/clawpool:access pair <code>",
+    "/grix:access pair <code>",
   );
   assert.equal(sentResults.length, 1);
   assert.equal(sentResults[0].code, "pairing_required");
@@ -417,7 +417,7 @@ test("worker inbound handling leaves ordinary Claude work open without a local h
 });
 
 test("restoreEventState does not create a new local timeout for unresolved ordinary events", async () => {
-  const eventStatesDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-restore-timeout-"));
+  const eventStatesDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-restore-timeout-"));
   const traceCalls = [];
   const { service, eventState } = createService({
     eventStatesDir,
@@ -451,7 +451,7 @@ test("restoreEventState does not create a new local timeout for unresolved ordin
 });
 
 test("restoreEventState rearms retry for unresolved events with result intent but no deadline", async () => {
-  const eventStatesDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-restore-intent-"));
+  const eventStatesDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-restore-intent-"));
   const { service, eventState } = createService({ eventStatesDir });
   await writePendingEventState(eventStatesDir, {
     eventID: "evt-restore-intent-no-deadline",

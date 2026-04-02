@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 
-const realClaudeE2ELockDir = path.join(os.tmpdir(), "clawpool-real-claude-e2e.lock");
+const realClaudeE2ELockDir = path.join(os.tmpdir(), "grix-real-claude-e2e.lock");
 const ownerFileName = "owner.json";
 const defaultWaitTimeoutMs = 5 * 60 * 1000;
 const defaultPollMs = 250;

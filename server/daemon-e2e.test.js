@@ -95,15 +95,15 @@ function hasStartupPromptText(content) {
 }
 
 function hasStartupPromptAutoConfirmMarker(content) {
-  return /\[clawpool\]\s+startup_prompt_auto_confirm/u.test(String(content ?? ""));
+  return /\[grix\]\s+startup_prompt_auto_confirm/u.test(String(content ?? ""));
 }
 
 function hasChannelListeningSignal(content) {
   const raw = String(content ?? "");
-  if (/\[clawpool\]\s+startup_channel_listening/u.test(raw)) {
+  if (/\[grix\]\s+startup_channel_listening/u.test(raw)) {
     return true;
   }
-  return /Listening for channel messages from: server:clawpool-claude/iu.test(
+  return /Listening for channel messages from: server:grix-claude/iu.test(
     normalizeRuntimeLog(content),
   );
 }
@@ -138,7 +138,7 @@ async function runRealClaudeE2ETest(callback) {
 }
 
 test("e2e: default path boots real Claude and auto-confirms startup prompts", async () => runRealClaudeE2ETest(async (realClaudeCommand) => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-real-e2e-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-real-e2e-"));
   const workspaceDir = path.join(tempRoot, "workspace");
   const pluginDataDir = path.join(tempRoot, "plugin-data");
   await mkdir(workspaceDir, { recursive: true });
@@ -146,8 +146,8 @@ test("e2e: default path boots real Claude and auto-confirms startup prompts", as
   const workerProcessManager = new WorkerProcessManager({
     env: {
       ...process.env,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempRoot,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempRoot,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
       CLAUDE_BIN: realClaudeCommand,
     },
     packageRoot: process.cwd(),
@@ -222,7 +222,7 @@ test("e2e: default path boots real Claude and auto-confirms startup prompts", as
 }));
 
 test("e2e: real Claude worker settles inbound events within timeout budget", async () => runRealClaudeE2ETest(async (realClaudeCommand) => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-real-timeout-e2e-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-real-timeout-e2e-"));
   const workspaceDir = path.join(tempRoot, "workspace");
   const pluginDataDir = path.join(tempRoot, "plugin-data");
   await mkdir(workspaceDir, { recursive: true });
@@ -260,13 +260,13 @@ test("e2e: real Claude worker settles inbound events within timeout budget", asy
   const workerProcessManager = new WorkerProcessManager({
     env: {
       ...process.env,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempRoot,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempRoot,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
       CLAUDE_BIN: realClaudeCommand,
-      CLAWPOOL_CLAUDE_EVENT_RESULT_TIMEOUT_MS: "2500",
-      CLAWPOOL_CLAUDE_EVENT_RESULT_RETRY_TIMEOUT_MS: "1000",
-      CLAWPOOL_CLAUDE_COMPOSING_HEARTBEAT_MS: "500",
-      CLAWPOOL_CLAUDE_COMPOSING_TTL_MS: "1000",
+      GRIX_CLAUDE_EVENT_RESULT_TIMEOUT_MS: "2500",
+      GRIX_CLAUDE_EVENT_RESULT_RETRY_TIMEOUT_MS: "1000",
+      GRIX_CLAUDE_COMPOSING_HEARTBEAT_MS: "500",
+      GRIX_CLAUDE_COMPOSING_TTL_MS: "1000",
     },
     packageRoot: process.cwd(),
     async ensureUserMcpServer() {},

@@ -1,7 +1,7 @@
 import { buildMessageCardEnvelope } from "../message-card-envelope.js";
 
-const openCommandPrefix = "/clawpool open";
-const openCommandHint = "/clawpool open <working-directory>";
+const openCommandPrefix = "/grix open";
+const openCommandHint = "/grix open <working-directory>";
 
 function normalizeString(value) {
   return String(value ?? "").trim();

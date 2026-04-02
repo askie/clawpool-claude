@@ -6,7 +6,7 @@ import { mkdtemp } from "node:fs/promises";
 import { ApprovalStore } from "./approval-store.js";
 
 test("approval store creates resolves and summarizes requests", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-approval-store-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "grix-claude-approval-store-"));
   const store = new ApprovalStore({
     requestsDir: path.join(dir, "requests"),
     notificationsDir: path.join(dir, "notifications"),

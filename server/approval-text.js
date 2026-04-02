@@ -55,7 +55,7 @@ function formatPermissionSuggestions(requestID, suggestions) {
   const lines = ["Rule suggestions:"];
   suggestions.forEach((suggestion, index) => {
     lines.push(`${index + 1}. ${stringifyCompact(suggestion, 180)}`);
-    lines.push(`   Apply: /clawpool-approval ${requestID} allow-rule ${index + 1}`);
+    lines.push(`   Apply: /grix-approval ${requestID} allow-rule ${index + 1}`);
   });
   return lines;
 }
@@ -74,8 +74,8 @@ export function buildApprovalCardCommandText(request) {
 export function buildApprovalDecisionCommands(request) {
   const requestID = normalizeString(request.request_id);
   const decisionCommands = {
-    "allow-once": `/clawpool-approval ${requestID} allow`,
-    deny: `/clawpool-approval ${requestID} deny`,
+    "allow-once": `/grix-approval ${requestID} allow`,
+    deny: `/grix-approval ${requestID} deny`,
   };
   const allowedDecisions = ["allow-once"];
 
@@ -85,7 +85,7 @@ export function buildApprovalDecisionCommands(request) {
   suggestions.forEach((_, index) => {
     const key = `allow-rule:${index + 1}`;
     allowedDecisions.push(key);
-    decisionCommands[key] = `/clawpool-approval ${requestID} allow-rule ${index + 1}`;
+    decisionCommands[key] = `/grix-approval ${requestID} allow-rule ${index + 1}`;
   });
 
   allowedDecisions.push("deny");
@@ -98,11 +98,11 @@ export function buildApprovalDecisionCommands(request) {
 export function buildApprovalRequestText(request) {
   const requestID = normalizeString(request.request_id);
   const lines = [
-    "Claude needs permission to continue this ClawPool turn.",
+    "Claude needs permission to continue this Grix turn.",
     `Request ID: ${requestID}`,
     ...formatToolDetails(request),
-    `Approve once: /clawpool-approval ${requestID} allow`,
-    `Deny: /clawpool-approval ${requestID} deny optional reason`,
+    `Approve once: /grix-approval ${requestID} allow`,
+    `Deny: /grix-approval ${requestID} deny optional reason`,
     ...formatPermissionSuggestions(requestID, request.permission_suggestions),
   ];
   return lines.join("\n");

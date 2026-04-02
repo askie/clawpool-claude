@@ -25,7 +25,7 @@ export function buildElicitationFooterText() {
 
 export function buildElicitationRequestText(request) {
   const lines = [
-    "Claude needs more input to continue this ClawPool turn.",
+    "Claude needs more input to continue this Grix turn.",
   ];
 
   const message = normalizeString(request?.message);

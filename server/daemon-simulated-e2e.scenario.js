@@ -74,11 +74,11 @@ if (mode === "auth_fail") {
   process.exit(1);
 }
 
-const bridgeURL = String(process.env.CLAWPOOL_CLAUDE_DAEMON_BRIDGE_URL ?? "").trim();
-const bridgeToken = String(process.env.CLAWPOOL_CLAUDE_DAEMON_BRIDGE_TOKEN ?? "").trim();
-const workerID = String(process.env.CLAWPOOL_CLAUDE_WORKER_ID ?? "").trim();
-const aibotSessionID = String(process.env.CLAWPOOL_CLAUDE_AIBOT_SESSION_ID ?? "").trim();
-const claudeSessionID = String(process.env.CLAWPOOL_CLAUDE_SESSION_ID ?? "").trim();
+const bridgeURL = String(process.env.GRIX_CLAUDE_DAEMON_BRIDGE_URL ?? "").trim();
+const bridgeToken = String(process.env.GRIX_CLAUDE_DAEMON_BRIDGE_TOKEN ?? "").trim();
+const workerID = String(process.env.GRIX_CLAUDE_WORKER_ID ?? "").trim();
+const aibotSessionID = String(process.env.GRIX_CLAUDE_AIBOT_SESSION_ID ?? "").trim();
+const claudeSessionID = String(process.env.GRIX_CLAUDE_SESSION_ID ?? "").trim();
 const pluginDataDir = String(process.env.CLAUDE_PLUGIN_DATA ?? "").trim();
 
 if (!bridgeURL || !bridgeToken || !workerID || !aibotSessionID || !claudeSessionID) {
@@ -157,7 +157,7 @@ async function createHarness({
   readyDelayMs = 0,
   runtimeOptions = {},
 } = {}) {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawpool-daemon-e2e-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "grix-daemon-e2e-"));
   const workspaceDir = path.join(tempRoot, "workspace");
   await mkdir(workspaceDir, { recursive: true });
   const fakeClaudePath = await writeFakeClaudeScript(tempRoot, { mode, readyDelayMs });
@@ -174,8 +174,8 @@ async function createHarness({
   const workerProcessManager = new WorkerProcessManager({
     env: {
       ...process.env,
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempRoot,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempRoot,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
       CLAUDE_BIN: fakeClaudePath,
     },
     packageRoot: process.cwd(),
@@ -257,8 +257,8 @@ async function createHarness({
     env: {
       ...process.env,
       HOME: os.homedir(),
-      CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: tempRoot,
-      CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
+      GRIX_CLAUDE_DAEMON_DATA_DIR: tempRoot,
+      GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "0",
       CLAUDE_BIN: fakeClaudePath,
     },
     bindingRegistry,

@@ -248,7 +248,7 @@ export class WorkerPermissionRelayService {
     }
 
     if (request.channel_context.chat_id !== event.session_id) {
-      const summary = "This approval request belongs to a different ClawPool chat.";
+      const summary = "This approval request belongs to a different Grix chat.";
       await this.sendApprovalReply(event, summary, buildApprovalCommandStatusBizCard({
         summary,
         referenceID: parsed.request_id,

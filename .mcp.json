@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "clawpool-claude": {
+    "grix-claude": {
       "command": "node",
       "args": [
         "dist/index.js"

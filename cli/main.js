@@ -10,32 +10,32 @@ import { ServiceManager } from "../server/service/service-manager.js";
 
 function usage() {
   return `用法:
-  clawpool-claude [options]
-  clawpool-claude daemon [options]
-  clawpool-claude worker [options]
-  clawpool-claude install [options]
-  clawpool-claude start [options]
-  clawpool-claude stop [options]
-  clawpool-claude restart [options]
-  clawpool-claude status [options]
-  clawpool-claude uninstall [options]
+  grix-claude [options]
+  grix-claude daemon [options]
+  grix-claude worker [options]
+  grix-claude install [options]
+  grix-claude start [options]
+  grix-claude stop [options]
+  grix-claude restart [options]
+  grix-claude status [options]
+  grix-claude uninstall [options]
 
 说明:
-  默认命令会写好 daemon 配置，并启动 clawpool-claude daemon。
-  daemon 是唯一对接 ClawPool 的常驻服务，Claude 会话由 daemon 按需拉起。
+  默认命令会写好 daemon 配置，并启动 grix-claude daemon。
+  daemon 是唯一对接 Grix 的常驻服务，Claude 会话由 daemon 按需拉起。
 
   选项:
-  --ws-url <value>      ClawPool Agent API WebSocket 地址
+  --ws-url <value>      Grix Agent API WebSocket 地址
   --agent-id <value>    Agent ID
   --api-key <value>     API Key
-  --data-dir <path>     daemon 数据目录，默认 ~/.claude/clawpool-claude-daemon
+  --data-dir <path>     daemon 数据目录，默认 ~/.claude/grix-claude-daemon
   --chunk-limit <n>     单段文本长度上限，默认 1200
   --show-claude         开发调试时把 Claude 拉到可见的 Terminal 窗口
   --no-launch           只检查并写好配置，不启动 daemon
   --help, -h            显示帮助
 
 第一次运行需要传完整参数。
-后续再次运行时，如果本地已经保存过配置，可以直接执行: clawpool-claude
+后续再次运行时，如果本地已经保存过配置，可以直接执行: grix-claude
 `;
 }
 
@@ -154,7 +154,7 @@ function redactSensitiveArgs(argv) {
 }
 
 function formatRunningCommand(argv) {
-  const command = ["clawpool-claude", ...redactSensitiveArgs(argv)];
+  const command = ["grix-claude", ...redactSensitiveArgs(argv)];
   return command.map((item) => shellQuoteForDisplay(item)).join(" ");
 }
 
@@ -170,8 +170,8 @@ function createServiceManager(env = process.env) {
 function buildRuntimeEnv(options, env) {
   return {
     ...env,
-    ...(options.dataDir ? { CLAWPOOL_CLAUDE_DAEMON_DATA_DIR: options.dataDir } : {}),
-    ...(options.showClaude ? { CLAWPOOL_CLAUDE_SHOW_CLAUDE_WINDOW: "1" } : {}),
+    ...(options.dataDir ? { GRIX_CLAUDE_DAEMON_DATA_DIR: options.dataDir } : {}),
+    ...(options.showClaude ? { GRIX_CLAUDE_SHOW_CLAUDE_WINDOW: "1" } : {}),
   };
 }
 
@@ -229,7 +229,7 @@ async function runDefault(argv, env = process.env) {
   print(`API Key: ${maskApiKey(config.api_key)}`);
 
   if (options.noLaunch) {
-    print(`daemon 还没有启动。需要时直接执行 clawpool-claude 即可。`);
+    print(`daemon 还没有启动。需要时直接执行 grix-claude 即可。`);
     return 0;
   }
 

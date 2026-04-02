@@ -22,8 +22,8 @@ test("loadConfig merges stored values with cli input and environment", async () 
   const config = await loadConfig({
     dataDir: tempDir,
     env: {
-      CLAWPOOL_CLAUDE_ENDPOINT: "ws://env.example/ws",
-      CLAWPOOL_CLAUDE_API_KEY: "env-key",
+      GRIX_CLAUDE_ENDPOINT: "ws://env.example/ws",
+      GRIX_CLAUDE_API_KEY: "env-key",
     },
     args: {
       wsUrl: "wss://example.com/ws",
@@ -42,7 +42,7 @@ test("loadConfig merges stored values with cli input and environment", async () 
 });
 
 test("resolveServerEntryPath prefers source entry when source and dist both exist", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-config-source-entry-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-config-source-entry-"));
   const sourceDir = path.join(tempDir, "server");
   const distDir = path.join(tempDir, "dist");
   await mkdir(sourceDir, { recursive: true });
@@ -54,7 +54,7 @@ test("resolveServerEntryPath prefers source entry when source and dist both exis
 });
 
 test("resolveServerEntryPath falls back to dist entry when source is missing", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-config-dist-entry-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grix-config-dist-entry-"));
   const distDir = path.join(tempDir, "dist");
   await mkdir(distDir, { recursive: true });
   await writeFile(path.join(distDir, "index.js"), "export default 2;\n", "utf8");

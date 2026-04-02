@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { resolveHookSignalsLogPathFromDataDir } from "./hook-signal-store.js";
 
 test("user prompt submit hook records signal without writing Claude context output", async () => {
-  const pluginDataDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-user-prompt-hook-"));
+  const pluginDataDir = await mkdtemp(path.join(os.tmpdir(), "grix-user-prompt-hook-"));
   const scriptPath = path.join(process.cwd(), "scripts", "user-prompt-submit-hook.js");
 
   const result = spawnSync(process.execPath, [scriptPath], {
@@ -19,7 +19,7 @@ test("user prompt submit hook records signal without writing Claude context outp
     input: JSON.stringify({
       hook_event_name: "UserPromptSubmit",
       session_id: "claude-session-1",
-      prompt: "plain text without clawpool tag",
+      prompt: "plain text without grix tag",
     }),
     encoding: "utf8",
   });

@@ -6,10 +6,10 @@ import { resolvePluginDataDir } from "./paths.js";
 
 test("resolvePluginDataDir prefers CLAUDE_PLUGIN_DATA without creating project files", () => {
   const originalDataDir = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = "/tmp/clawpool-explicit-data";
+  process.env.CLAUDE_PLUGIN_DATA = "/tmp/grix-explicit-data";
 
   try {
-    assert.equal(resolvePluginDataDir(), "/tmp/clawpool-explicit-data");
+    assert.equal(resolvePluginDataDir(), "/tmp/grix-explicit-data");
   } finally {
     if (originalDataDir === undefined) {
       delete process.env.CLAUDE_PLUGIN_DATA;
@@ -26,7 +26,7 @@ test("resolvePluginDataDir falls back to a stable home directory path", () => {
   try {
     assert.equal(
       resolvePluginDataDir(),
-      path.join(os.homedir(), ".claude", "clawpool-claude"),
+      path.join(os.homedir(), ".claude", "grix-claude"),
     );
   } finally {
     if (originalDataDir !== undefined) {

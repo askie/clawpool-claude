@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-const serverName = "clawpool-claude";
+const serverName = "grix-claude";
 
 function normalizeString(value) {
   return String(value ?? "").trim();
@@ -70,7 +70,7 @@ export async function ensureUserMcpServer({
   serverArgs,
   env = process.env,
 }) {
-  const tempCwd = await mkdtemp(path.join(os.tmpdir(), "clawpool-claude-mcp-"));
+  const tempCwd = await mkdtemp(path.join(os.tmpdir(), "grix-claude-mcp-"));
 
   try {
     const current = await readUserScopedServer(env);

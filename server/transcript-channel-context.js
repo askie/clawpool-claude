@@ -17,13 +17,13 @@ function parseTagAttributes(fragment) {
   return attributes;
 }
 
-export function extractLatestClawpoolChannelTag(text) {
+export function extractLatestGrixChannelTag(text) {
   const pattern = /<channel\b([^>]*)>/gi;
   const matches = Array.from(String(text ?? "").matchAll(pattern));
   for (let index = matches.length - 1; index >= 0; index -= 1) {
     const match = matches[index];
     const attributes = parseTagAttributes(match[1] ?? "");
-    if (normalizeString(attributes.source) !== "clawpool-claude") {
+    if (normalizeString(attributes.source) !== "grix-claude") {
       continue;
     }
     return {
@@ -41,7 +41,7 @@ export function extractLatestClawpoolChannelTag(text) {
 
 function extractTagFromValue(value) {
   if (typeof value === "string") {
-    return extractLatestClawpoolChannelTag(value);
+    return extractLatestGrixChannelTag(value);
   }
   if (Array.isArray(value)) {
     for (let index = value.length - 1; index >= 0; index -= 1) {
@@ -69,7 +69,7 @@ function collectTagsFromValue(value, results) {
     const pattern = /<channel\b([^>]*)>/gi;
     for (const match of String(value).matchAll(pattern)) {
       const attributes = parseTagAttributes(match[1] ?? "");
-      if (normalizeString(attributes.source) !== "clawpool-claude") {
+      if (normalizeString(attributes.source) !== "grix-claude") {
         continue;
       }
       results.push({
@@ -115,7 +115,7 @@ function extractTagsFromLine(line) {
   }
 }
 
-async function listClawpoolChannelContexts(transcriptPath) {
+async function listGrixChannelContexts(transcriptPath) {
   const normalizedPath = normalizeString(transcriptPath);
   if (!normalizedPath) {
     return [];
@@ -136,13 +136,13 @@ async function listClawpoolChannelContexts(transcriptPath) {
   return results.filter((tag) => tag?.chat_id);
 }
 
-export async function extractLatestClawpoolChannelContext(transcriptPath) {
-  const contexts = await listClawpoolChannelContexts(transcriptPath);
+export async function extractLatestGrixChannelContext(transcriptPath) {
+  const contexts = await listGrixChannelContexts(transcriptPath);
   return contexts.length > 0 ? contexts[contexts.length - 1] : null;
 }
 
-export async function resolveTranscriptClawpoolChannelContext(transcriptPath) {
-  const contexts = await listClawpoolChannelContexts(transcriptPath);
+export async function resolveTranscriptGrixChannelContext(transcriptPath) {
+  const contexts = await listGrixChannelContexts(transcriptPath);
   if (contexts.length === 0) {
     return {
       status: "missing",

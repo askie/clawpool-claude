@@ -46,7 +46,7 @@ function toolTextResult(value) {
 const toolDefinitions = [
   {
     name: "reply",
-    description: "Send a visible message back to the chat for this clawpool-claude event.",
+    description: "Send a visible message back to the chat for this grix-claude event.",
     inputSchema: {
       type: "object",
       properties: {
@@ -79,7 +79,7 @@ const toolDefinitions = [
   },
   {
     name: "delete_message",
-    description: "Delete a previously sent message in the same clawpool-claude chat.",
+    description: "Delete a previously sent message in the same grix-claude chat.",
     inputSchema: {
       type: "object",
       properties: {
@@ -105,7 +105,7 @@ const toolDefinitions = [
   },
   {
     name: "status",
-    description: "Show clawpool-claude configuration, access policy, daemon bridge status, and startup hints.",
+    description: "Show grix-claude configuration, access policy, daemon bridge status, and startup hints.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -267,7 +267,7 @@ export class WorkerToolService {
 
     const connectionConfig = this.configStore.getConnectionConfig();
     if (!connectionConfig) {
-      throw new Error("clawpool-claude is not configured");
+      throw new Error("grix-claude is not configured");
     }
 
     const chunkLimit = resolveOutboundTextChunkLimit(

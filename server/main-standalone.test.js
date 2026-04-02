@@ -7,15 +7,15 @@ import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 
 test("worker entry stays alive without daemon bridge for MCP health checks", async () => {
-  const pluginDataDir = await mkdtemp(path.join(os.tmpdir(), "clawpool-worker-standalone-"));
+  const pluginDataDir = await mkdtemp(path.join(os.tmpdir(), "grix-worker-standalone-"));
   const child = spawn(process.execPath, [path.join(process.cwd(), "server", "main.js")], {
     cwd: process.cwd(),
     env: {
       ...process.env,
       CLAUDE_PLUGIN_DATA: pluginDataDir,
-      CLAWPOOL_CLAUDE_DAEMON_MODE: "",
-      CLAWPOOL_CLAUDE_DAEMON_BRIDGE_URL: "",
-      CLAWPOOL_CLAUDE_DAEMON_BRIDGE_TOKEN: "",
+      GRIX_CLAUDE_DAEMON_MODE: "",
+      GRIX_CLAUDE_DAEMON_BRIDGE_URL: "",
+      GRIX_CLAUDE_DAEMON_BRIDGE_TOKEN: "",
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -42,5 +42,5 @@ test("worker entry stays alive without daemon bridge for MCP health checks", asy
   });
 
   assert.doesNotMatch(stderr, /startup failed/u);
-  assert.doesNotMatch(stderr, /must be started by clawpool-claude daemon/u);
+  assert.doesNotMatch(stderr, /must be started by grix-claude daemon/u);
 });

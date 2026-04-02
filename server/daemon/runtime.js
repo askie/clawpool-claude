@@ -104,7 +104,7 @@ function buildUsageLimitReachedEventNotice() {
 }
 
 function buildWorkerStartupFailedNotice() {
-  return "Claude 启动未完成，消息未发送。请执行 clawpool-claude restart 后重试。";
+  return "Claude 启动未完成，消息未发送。请执行 grix-claude restart 后重试。";
 }
 
 function buildUsageLimitFailureOptions() {
@@ -327,35 +327,35 @@ export class DaemonRuntime {
       ? Math.max(0, Math.floor(Number(workerRuntimeHealthCheckMs)))
       : 1000;
     this.deliveredInFlightMaxAgeMs = normalizeNonNegativeInt(
-      deliveredInFlightMaxAgeMs ?? env.CLAWPOOL_CLAUDE_DELIVERED_INFLIGHT_MAX_AGE_MS,
+      deliveredInFlightMaxAgeMs ?? env.GRIX_CLAUDE_DELIVERED_INFLIGHT_MAX_AGE_MS,
       defaultDeliveredInFlightMaxAgeMs,
     );
     this.workerControlProbeFailureThreshold = normalizeNonNegativeInt(
-      workerControlProbeFailureThreshold ?? env.CLAWPOOL_CLAUDE_WORKER_CONTROL_PROBE_FAILURE_THRESHOLD,
+      workerControlProbeFailureThreshold ?? env.GRIX_CLAUDE_WORKER_CONTROL_PROBE_FAILURE_THRESHOLD,
       defaultWorkerControlProbeFailureThreshold,
     );
     this.mcpInteractionIdleMs = normalizeNonNegativeInt(
-      mcpInteractionIdleMs ?? env.CLAWPOOL_CLAUDE_MCP_INTERACTION_IDLE_MS,
+      mcpInteractionIdleMs ?? env.GRIX_CLAUDE_MCP_INTERACTION_IDLE_MS,
       defaultMcpInteractionIdleMs,
     );
     this.mcpResultTimeoutMs = normalizeNonNegativeInt(
-      mcpResultTimeoutMs ?? env.CLAWPOOL_CLAUDE_MCP_RESULT_TIMEOUT_MS,
+      mcpResultTimeoutMs ?? env.GRIX_CLAUDE_MCP_RESULT_TIMEOUT_MS,
       defaultMcpResultTimeoutMs,
     );
     this.recentRevokeRetentionMs = normalizeNonNegativeInt(
-      recentRevokeRetentionMs ?? env.CLAWPOOL_CLAUDE_RECENT_REVOKE_RETENTION_MS,
+      recentRevokeRetentionMs ?? env.GRIX_CLAUDE_RECENT_REVOKE_RETENTION_MS,
       defaultRecentRevokeRetentionMs,
     );
     this.authFailureCooldownMs = normalizeNonNegativeInt(
-      authFailureCooldownMs ?? env.CLAWPOOL_CLAUDE_AUTH_FAILURE_COOLDOWN_MS,
+      authFailureCooldownMs ?? env.GRIX_CLAUDE_AUTH_FAILURE_COOLDOWN_MS,
       defaultAuthFailureCooldownMs,
     );
     this.workerPingProbeTimeoutMs = normalizeNonNegativeInt(
-      workerPingProbeTimeoutMs ?? env.CLAWPOOL_CLAUDE_WORKER_PING_PROBE_TIMEOUT_MS,
+      workerPingProbeTimeoutMs ?? env.GRIX_CLAUDE_WORKER_PING_PROBE_TIMEOUT_MS,
       defaultWorkerPingProbeTimeoutMs,
     );
     this.workerPingProbeRetentionMs = normalizeNonNegativeInt(
-      workerPingProbeRetentionMs ?? env.CLAWPOOL_CLAUDE_WORKER_PING_PROBE_RETENTION_MS,
+      workerPingProbeRetentionMs ?? env.GRIX_CLAUDE_WORKER_PING_PROBE_RETENTION_MS,
       defaultWorkerPingProbeRetentionMs,
     );
     this.workerHealthInspector = new WorkerHealthInspector({
